@@ -13,11 +13,11 @@ export default function VillasTable() {
     async function fetchVillas() {
         try {
             setLoading(true);
-            // Supponiamo che la tabella Supabase si chiami 'villas'
+            // Supponiamo che la tabella Supabase si chiami 'invenio_properties' come da te indicato
             const { data, error } = await supabase
-                .from('villas')
+                .from('invenio_properties')
                 .select('*')
-                .limit(10); // Carichiamo solo le prime 10 per iniziare
+                .limit(25); // Carichiamo le prime 25 ville
 
             if (error) {
                 throw error;
