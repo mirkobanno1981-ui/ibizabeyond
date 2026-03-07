@@ -1,0 +1,94 @@
+{
+    "name": "Insert Photo Gdrive",
+    "nodes": [
+        {
+            "parameters": {},
+            "type": "n8n-nodes-base.executeWorkflowTrigger",
+            "typeVersion": 1.1,
+            "position": [
+                -400,
+                0
+            ],
+            "id": "trigger-01",
+            "name": "Execute Workflow Trigger"
+        },
+        {
+            "parameters": {
+                "url": "={{ $json.photo_url }}",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "file"
+                        }
+                    }
+                }
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -160,
+                0
+            ],
+            "id": "download-photo-01",
+            "name": "Download Photo",
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "name": "={{ $('Execute Workflow Trigger').item.json.photo_url.split('/').pop() }}",
+                "driveId": {
+                    "__rl": true,
+                    "value": "My Drive",
+                    "mode": "list",
+                    "cachedResultName": "My Drive"
+                },
+                "folderId": {
+                    "__rl": true,
+                    "value": "={{ $('Execute Workflow Trigger').item.json.id }}",
+                    "mode": "id"
+                },
+                "inputDataFieldName": "data",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.googleDrive",
+            "typeVersion": 3,
+            "position": [
+                80,
+                0
+            ],
+            "id": "upload-gdrive-01",
+            "name": "Upload to Google Drive",
+            "retryOnFail": true,
+            "maxTries": 3,
+            "waitBetweenTries": 5000
+        }
+    ],
+    "connections": {
+        "Execute Workflow Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Download Photo",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Download Photo": {
+            "main": [
+                [
+                    {
+                        "node": "Upload to Google Drive",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "callerPolicy": "workflowsFromSameOwner",
+        "executionOrder": "v1"
+    }
+}

@@ -1,0 +1,385 @@
+{
+    "name": "Ibiza Beyond - Complete Invenio Sync",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {}
+                    ]
+                }
+            },
+            "id": "trigger-01",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.3,
+            "position": [
+                -1200,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_list",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "api-key",
+                            "value": "R$mAx1!"
+                        },
+                        {
+                            "name": "bp_uuid",
+                            "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "fetch-villas-01",
+            "name": "Invenio - Get Villas",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -1000,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_price",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "api-key",
+                            "value": "R$mAx1!"
+                        },
+                        {
+                            "name": "bp_uuid",
+                            "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "fetch-prices-01",
+            "name": "Invenio - Get Prices",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -800,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "\nconst villasData = $('Invenio - Get Villas').first().json;\nconst villas = villasData.villas || [];\nconst properties = [];\n\nvillas.forEach(v => {\n  if (v.destination !== 'Ibiza') return;\n  properties.push({\n    json: {\n        v_uuid: v.v_uuid,\n        villa_name: v.villa_name || '',\n        description: v.description || null,\n        tagline: v.tagline || null,\n        license: v.license || null,\n        bedrooms: parseInt(v.bedrooms) || 0,\n        bathrooms: parseFloat(v.bathrooms) || 0,\n        sleeps: parseInt(v.sleeps) || 0,\n        country: v.country || null,\n        destination: v.destination || null,\n        areaname: v.areaname || null,\n        district: v.district || null,\n        gps: v.gps || null,\n        cleaning: v.cleaning || null,\n        cleaning_charge: parseFloat(v.cleaning_charge) || 0,\n        minimum_price: parseFloat(v.minimum_price) || null,\n        maximum_price: parseFloat(v.maximum_price) || null,\n        deposit: parseFloat(v.deposit) || 0,\n        check_in: v.check_in || null,\n        check_out: v.check_out || null,\n        minimum_nights: parseInt(v.minimum_nights) || 1,\n        allowed_checkin_days: v.allowed_checkin_days || null,\n        ical_url: v.ical_url || null,\n        v_id: parseInt(v.v_id) || null,\n        features: v.features || [],\n        allow_shortstays: v.allow_shortstays || null,\n        direct_client_contract: v.direct_client_contract || null,\n        dcc_commission: v.dcc_commission || null,\n        dcc_commission_vat_included: v.dcc_commission_vat_included || null,\n        connected_to_owner_ical: v.connected_to_owner_ical || null,\n        last_synced_at: new Date().toISOString()\n    }\n  });\n});\nreturn properties;\n"
+            },
+            "id": "prepare-props-01",
+            "name": "Prepare Properties Data",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                -600,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "upsert",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_properties"
+                },
+                "tableId": "invenio_properties",
+                "dataMode": "autoMapInputData"
+            },
+            "id": "native-props-01",
+            "name": "Native Upsert Properties",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                -400,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "getAll",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_photos"
+                },
+                "tableId": "invenio_photos",
+                "returnAll": true
+            },
+            "id": "get-photos-01",
+            "name": "Get Existing Photos",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                -200,
+                -200
+            ],
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "jsCode": "\nconst villasNode = $('Invenio - Get Villas').first();\nconst existingPhotos = $input.all().map(i => i.json);\n\nif (!villasNode) throw new Error(\"Could not find Villas data.\");\nconst villas = villasNode.json.villas || [];\n\n// Lookup map: v_uuid + url -> id\nconst existingMap = {};\nexistingPhotos.forEach(ep => {\n    // Check if the node actually returned rows or just a dummy empty output\n    if(ep && ep.id && ep.url) {\n        const key = `${ep.v_uuid}_${ep.url}`;\n        existingMap[key] = ep.id;\n    }\n});\n\nconst inserts = [];\nconst updates = [];\n\nvillas.forEach(v => {\n    if (v.destination !== 'Ibiza' || !v.v_uuid) return;\n    \n    const photos = v.photos || [];\n    const thumbnails = v.thumbnails || [];\n    \n    photos.forEach((url, index) => {\n        if (!url) return;\n        const key = `${v.v_uuid}_${url}`;\n        const itemPayload = {\n            v_uuid: v.v_uuid,\n            url: url,\n            thumbnail_url: thumbnails[index] || null,\n            sort_order: index\n        };\n        \n        if (existingMap[key]) {\n            itemPayload.id = existingMap[key];\n            updates.push({ json: itemPayload });\n        } else {\n            inserts.push({ json: itemPayload });\n        }\n    });\n});\n\nreturn [inserts, updates];\n"
+            },
+            "id": "compare-photos-01",
+            "name": "Compare Photos",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                0,
+                -200
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "insert",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_photos"
+                },
+                "tableId": "invenio_photos",
+                "dataMode": "autoMapInputData"
+            },
+            "id": "insert-photos-01",
+            "name": "Native Insert Photos",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                200,
+                -300
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "update",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_photos"
+                },
+                "tableId": "invenio_photos",
+                "matchColumns": "id",
+                "dataMode": "autoMapInputData"
+            },
+            "id": "update-photos-01",
+            "name": "Native Update Photos",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                200,
+                -100
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "getAll",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_seasonal_prices"
+                },
+                "tableId": "invenio_seasonal_prices",
+                "returnAll": true
+            },
+            "id": "get-prices-01",
+            "name": "Get Existing Prices",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                -200,
+                200
+            ],
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "jsCode": "\nconst villasNode = $('Invenio - Get Villas').first();\nconst invenioPricesNode = $('Invenio - Get Prices').first();\nconst existingPrices = $input.all().map(i => i.json);\n\nif (!villasNode) throw new Error(\"Could not find Villas data.\");\nif (!invenioPricesNode) throw new Error(\"Could not find Invenio Prices data.\");\n\nconst villas = villasNode.json.villas || [];\nconst rawPriceData = invenioPricesNode.json.price_data || {};\n\nconst existingMap = {};\nexistingPrices.forEach(ep => {\n    // Check if the node actually returned rows or just a dummy empty output\n    if(ep && ep.id && ep.start_date) {\n        const safeUuid = String(ep.v_uuid).trim().toLowerCase();\n        const safeDate = String(ep.start_date).trim();\n        const key = `${safeUuid}_${safeDate}`;\n        existingMap[key] = ep.id;\n    }\n});\n\nconst ibizaUuids = {};\nvillas.forEach(v => {\n    if (v.destination === 'Ibiza' && v.v_uuid) {\n        ibizaUuids[String(v.v_uuid).trim().toLowerCase()] = true;\n    }\n});\n\nconst inserts = [];\nconst updates = [];\n\nfunction processPeriod(rawUuid, p) {\n    if (!p || !p.start_date || !p.end_date) return;\n    \n    const safeUuid = String(rawUuid).trim().toLowerCase();\n    if (!ibizaUuids[safeUuid]) return;\n    \n    const safeDate = String(p.start_date).trim();\n    const key = `${safeUuid}_${safeDate}`;\n\n    const itemPayload = {\n        v_uuid: rawUuid,\n        start_date: p.start_date,\n        end_date: p.end_date,\n        amount: parseFloat(p.amount) || 0,\n        minimum_nights: parseInt(p.minimum_nights) || 1,\n        allowed_checkin_days: p.allowed_checkin_days || null\n    };\n\n    if (existingMap[key]) {\n        itemPayload.id = existingMap[key];\n        updates.push({ json: itemPayload });\n    } else {\n        inserts.push({ json: itemPayload });\n    }\n}\n\nif (typeof rawPriceData === 'object' && !Array.isArray(rawPriceData)) {\n    for (const [rawUuid, periods] of Object.entries(rawPriceData)) {\n        if (Array.isArray(periods)) {\n            periods.forEach(p => processPeriod(rawUuid, p));\n        }\n    }\n} else if (Array.isArray(rawPriceData)) {\n    rawPriceData.forEach(p => {\n        if (p.v_uuid) processPeriod(p.v_uuid, p);\n    });\n}\n\nreturn [inserts, updates];\n"
+            },
+            "id": "compare-prices-01",
+            "name": "Compare Prices",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                0,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "insert",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_seasonal_prices"
+                },
+                "tableId": "invenio_seasonal_prices",
+                "dataMode": "autoMapInputData"
+            },
+            "id": "insert-prices-01",
+            "name": "Native Insert Prices",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                200,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "update",
+                "tableDefinition": {
+                    "__rls": false,
+                    "mode": "list",
+                    "value": "invenio_seasonal_prices"
+                },
+                "tableId": "invenio_seasonal_prices",
+                "matchColumns": "id",
+                "dataMode": "autoMapInputData"
+            },
+            "id": "update-prices-01",
+            "name": "Native Update Prices",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                200,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Invenio - Get Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Invenio - Get Villas": {
+            "main": [
+                [
+                    {
+                        "node": "Invenio - Get Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Invenio - Get Prices": {
+            "main": [
+                [
+                    {
+                        "node": "Prepare Properties Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Prepare Properties Data": {
+            "main": [
+                [
+                    {
+                        "node": "Native Upsert Properties",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Native Upsert Properties": {
+            "main": [
+                [
+                    {
+                        "node": "Get Existing Photos",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Get Existing Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Existing Photos": {
+            "main": [
+                [
+                    {
+                        "node": "Compare Photos",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Compare Photos": {
+            "main": [
+                [
+                    {
+                        "node": "Native Insert Photos",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Native Update Photos",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Existing Prices": {
+            "main": [
+                [
+                    {
+                        "node": "Compare Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Compare Prices": {
+            "main": [
+                [
+                    {
+                        "node": "Native Insert Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Native Update Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner"
+    }
+}

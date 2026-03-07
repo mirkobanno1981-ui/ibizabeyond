@@ -1,0 +1,419 @@
+{
+    "name": "Invenio Price Sync to WP Rentals",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "hours",
+                            "hoursInterval": 6
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.3,
+            "position": [
+                -1200,
+                0
+            ],
+            "id": "schedule-trigger",
+            "name": "Schedule Trigger"
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "http://72.60.38.114:8080/wp-json/jwt-auth/v1/token",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "username",
+                            "value": "admin"
+                        },
+                        {
+                            "name": "password",
+                            "value": "Ibiza62447881%%"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -960,
+                0
+            ],
+            "id": "wp-auth",
+            "name": "WP - Get JWT Token"
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_list",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "api-key",
+                            "value": "R$mAx1!"
+                        },
+                        {
+                            "name": "bp_uuid",
+                            "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -720,
+                0
+            ],
+            "id": "get-villas",
+            "name": "Invenio - Get Villas"
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_price",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "api-key",
+                            "value": "R$mAx1!"
+                        },
+                        {
+                            "name": "bp_uuid",
+                            "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -480,
+                0
+            ],
+            "id": "get-prices",
+            "name": "Invenio - Get Prices"
+        },
+        {
+            "parameters": {
+                "method": "GET",
+                "url": "http://72.60.38.114:8080/wp-json/ibiza-beyond/v1/properties/all",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Authorization",
+                            "value": "=Bearer {{ $('WP - Get JWT Token').first().json.token }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                -240,
+                0
+            ],
+            "id": "get-wp-properties",
+            "name": "WP - Get All Properties"
+        },
+        {
+            "parameters": {
+                "jsCode": "// === BUILD MATCH MAP ===\n// Unisce Invenio villas+prices con WP properties tramite v_uuid\n// Usa endpoint ibiza-beyond/v1/properties/all\nconst villasRaw = $('Invenio - Get Villas').first().json;\nconst pricesRaw = $('Invenio - Get Prices').first().json;\nconst wpRaw = $('WP - Get All Properties').first().json;\nconst villas = villasRaw.villas || [];\nconst priceData = pricesRaw.price_data || {};\nconst today = new Date().toISOString().slice(0, 10);\n\n// Parse WP properties - potrebbe essere un array diretto o un oggetto con proprietà\nlet wpProperties = [];\nif (Array.isArray(wpRaw)) {\n  wpProperties = wpRaw;\n} else if (wpRaw && typeof wpRaw === 'object') {\n  // potrebbe essere { properties: [...] } o { data: [...] } o simile\n  wpProperties = wpRaw.properties || wpRaw.data || Object.values(wpRaw).find(v => Array.isArray(v)) || [];\n}\n\n// Build WP lookup: v_uuid -> {id, title}\nconst wpLookup = {};\nconst wpDebug = [];\nfor (const p of wpProperties) {\n  let uuid = null;\n  // Cerca v_uuid in diversi posti possibili\n  if (p.v_uuid) uuid = String(p.v_uuid);\n  else if (p.meta && p.meta.v_uuid) uuid = String(Array.isArray(p.meta.v_uuid) ? p.meta.v_uuid[0] : p.meta.v_uuid);\n  else if (p.custom_fields && p.custom_fields.v_uuid) uuid = String(Array.isArray(p.custom_fields.v_uuid) ? p.custom_fields.v_uuid[0] : p.custom_fields.v_uuid);\n  else if (p.acf && p.acf.v_uuid) uuid = String(p.acf.v_uuid);\n  \n  if (uuid) wpLookup[uuid] = { id: p.id || p.ID, title: p.title || p.post_title || '' };\n  if (wpDebug.length < 3) wpDebug.push({ id: p.id || p.ID, keys: Object.keys(p).slice(0, 15), title: p.title || p.post_title || 'N/A' });\n}\n\n// Match Invenio villas con WP\nconst results = [];\nfor (const villa of villas) {\n  if (villa.destination !== 'Ibiza') continue;\n  const uuid = villa.v_uuid;\n  const periods = priceData[uuid];\n  if (!Array.isArray(periods) || periods.length === 0) continue;\n  const validPrices = periods\n    .filter(p => p && p.start_date && p.end_date && p.amount && p.end_date >= today)\n    .map(p => ({ date_range: { from: p.start_date, to: p.end_date }, price: String(p.amount) }));\n  if (validPrices.length === 0) continue;\n  const wpMatch = wpLookup[uuid];\n  results.push({ json: {\n    skip: !wpMatch,\n    wp_id: wpMatch ? wpMatch.id : null,\n    villa_name: villa.villa_name || villa.name || 'Unknown',\n    v_uuid: uuid,\n    custom_price: validPrices,\n    price_count: validPrices.length,\n    reason: wpMatch ? '' : 'v_uuid non trovato su WP'\n  }});\n}\n\nif (results.length === 0) {\n  return [{ json: { error: 'Nessuna villa Ibiza con prezzi validi', total_villas: villas.length, price_keys: Object.keys(priceData).length, wp_fetched: wpProperties.length, wp_matched: Object.keys(wpLookup).length, wp_debug: wpDebug } }];\n}\nreturn results;"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                0,
+                0
+            ],
+            "id": "build-match-map",
+            "name": "Build Match Map"
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "type": "n8n-nodes-base.splitInBatches",
+            "typeVersion": 3,
+            "position": [
+                240,
+                0
+            ],
+            "id": "loop-villas",
+            "name": "Loop Villas"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "cond-not-skip",
+                            "leftValue": "={{ $json.skip }}",
+                            "rightValue": false,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "equals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [
+                480,
+                0
+            ],
+            "id": "if-found",
+            "name": "Listing Found?"
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "=http://72.60.38.114:8080/wp-json/ibiza-beyond/v1/property/{{ $json.wp_id }}/meta",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Authorization",
+                            "value": "=Bearer {{ $('WP - Get JWT Token').first().json.token }}"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ custom_price: $json.custom_price }) }}",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                720,
+                -80
+            ],
+            "id": "update-prices",
+            "name": "WP - Update Prices",
+            "onError": "continueRegularOutput",
+            "retryOnFail": true,
+            "maxTries": 2,
+            "waitBetweenTries": 3000
+        },
+        {
+            "parameters": {
+                "method": "PUT",
+                "url": "=http://72.60.38.114:8080/wp-json/wprentals/v1/property/edit/{{ $json.wp_id }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Authorization",
+                            "value": "=Bearer {{ $('WP - Get JWT Token').first().json.token }}"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ custom_price: $json.custom_price }) }}",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                720,
+                120
+            ],
+            "id": "update-prices-wprentals",
+            "name": "WP - Update Prices (WPRentals API)",
+            "onError": "continueRegularOutput",
+            "retryOnFail": true,
+            "maxTries": 2,
+            "waitBetweenTries": 3000,
+            "disabled": true
+        },
+        {
+            "parameters": {
+                "jsCode": "// === LOG RESULT ===\n// Usa i dati originali dal loop (non dalla risposta WP)\nconst villaData = $('Loop Villas').item.json;\nconst resp = $input.first().json;\nlet status = 'UPDATED';\nif (villaData.skip) status = 'SKIPPED';\nelse if (resp.error || (resp.data && resp.data.status >= 400) || resp.code) status = 'ERROR';\nreturn [{ json: {\n  status: status,\n  villa: villaData.villa_name,\n  wp_id: villaData.wp_id || 'N/A',\n  v_uuid: villaData.v_uuid,\n  prices: villaData.price_count || 0,\n  reason: villaData.reason || (status === 'ERROR' ? JSON.stringify(resp).slice(0, 200) : '')\n}}];"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                960,
+                0
+            ],
+            "id": "log-result",
+            "name": "Log Result"
+        },
+        {
+            "parameters": {
+                "jsCode": "// === SUMMARY REPORT ===\nconst items = $input.all().map(i => i.json);\nconst updated = items.filter(i => i.status === 'UPDATED');\nconst skipped = items.filter(i => i.status === 'SKIPPED');\nconst errors = items.filter(i => i.status === 'ERROR');\nreturn [{ json: {\n  summary: `Price Sync: ${updated.length} updated, ${skipped.length} skipped, ${errors.length} errors`,\n  timestamp: new Date().toISOString(),\n  total: items.length,\n  updated: updated.length,\n  skipped: skipped.length,\n  errors: errors.length,\n  details: {\n    updated_villas: updated.map(v => `${v.villa} (WP#${v.wp_id}, ${v.prices} periodi)`),\n    skipped_villas: skipped.map(v => `${v.villa}: ${v.reason}`),\n    error_villas: errors.map(v => `${v.villa}: ${v.reason}`)\n  }\n}}];"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                480,
+                -200
+            ],
+            "id": "summary-report",
+            "name": "Summary Report"
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "WP - Get JWT Token",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "WP - Get JWT Token": {
+            "main": [
+                [
+                    {
+                        "node": "Invenio - Get Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Invenio - Get Villas": {
+            "main": [
+                [
+                    {
+                        "node": "Invenio - Get Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Invenio - Get Prices": {
+            "main": [
+                [
+                    {
+                        "node": "WP - Get All Properties",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "WP - Get All Properties": {
+            "main": [
+                [
+                    {
+                        "node": "Build Match Map",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Build Match Map": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Loop Villas": {
+            "main": [
+                [
+                    {
+                        "node": "Summary Report",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Listing Found?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Listing Found?": {
+            "main": [
+                [
+                    {
+                        "node": "WP - Update Prices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Log Result",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "WP - Update Prices": {
+            "main": [
+                [
+                    {
+                        "node": "Log Result",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Log Result": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner"
+    }
+}

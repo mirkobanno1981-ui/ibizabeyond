@@ -1,0 +1,248 @@
+{
+    "name": "Ibiza Beyond - Photos Sync",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {}
+                    ]
+                }
+            },
+            "id": "e44d5cf3-60f1-4db5-baa8-8547ca59f471",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.3,
+            "position": [
+                0,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_list",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "api-key",
+                            "value": "R$mAx1!"
+                        },
+                        {
+                            "name": "bp_uuid",
+                            "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "f58d92cb-cfd6-4e5c-93df-f10f4492ef9b",
+            "name": "Invenio - Get Villas",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                224,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const villasNode = $('Invenio - Get Villas').first();\nif (!villasNode) throw new Error(\"Could not find Villas data.\");\n\nconst villas = villasNode.json.villas || [];\nlet itemsToProcess = [];\n\nvillas.forEach(v => {\n    if (v.destination !== 'Ibiza' || !v.v_uuid) return;\n    \n    const photos = v.photos || [];\n    const thumbnails = v.thumbnails || [];\n    let formattedPhotos = [];\n    \n    photos.forEach((url, i) => {\n        if (url) {\n            formattedPhotos.push({\n                v_uuid: v.v_uuid,\n                url: url,\n                thumbnail_url: thumbnails[i] || null,\n                sort_order: i\n            });\n        }\n    });\n    \n    if (formattedPhotos.length > 0) {\n        itemsToProcess.push({\n            v_uuid: v.v_uuid,\n            photos: formattedPhotos\n        });\n    }\n});\n\nreturn itemsToProcess.map(item => ({ json: item }));"
+            },
+            "id": "11abf81d-e6a6-4112-be22-4fece64f4ec8",
+            "name": "Group Photos By Villa",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                448,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "type": "n8n-nodes-base.splitInBatches",
+            "typeVersion": 3,
+            "position": [
+                672,
+                0
+            ],
+            "id": "d0e12d1b-cd13-4318-9710-1dfd9a0d8e93",
+            "name": "Loop Over Villas"
+        },
+        {
+            "parameters": {
+                "operation": "delete",
+                "tableId": "invenio_photos",
+                "filters": {
+                    "conditions": [
+                        {
+                            "keyName": "v_uuid",
+                            "condition": "eq",
+                            "keyValue": "={{ $json.v_uuid }}"
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                928,
+                0
+            ],
+            "id": "a9b7dc12-d8ce-412e-a581-22e3e56a7ae8",
+            "name": "Delete Old Photos",
+            "credentials": {
+                "supabaseApi": {
+                    "id": "O92iJpR8Lb1I3BHl",
+                    "name": "Supabase account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "amount": 1
+            },
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [
+                1152,
+                0
+            ],
+            "id": "Wait",
+            "name": "Wait Rate Limit",
+            "webhookId": "b1d2c3e4-0f33-496b-cf39-f14f4939bebe"
+        },
+        {
+            "parameters": {
+                "jsCode": "const loopItem = $('Loop Over Villas').item;\nlet photos = [];\nif (loopItem && loopItem.json && loopItem.json.photos) {\n    photos = loopItem.json.photos;\n}\nif (photos.length === 0) return [];\nreturn photos.map(p => ({ json: p }));"
+            },
+            "id": "e0e2d53b-f4ab-4221-bcad-fbc7c9a9d7de",
+            "name": "Extract Photos Array",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1376,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "tableId": "invenio_photos",
+                "dataToSend": "autoMapInputData"
+            },
+            "id": "f516dc8c-8422-4886-add4-ee8f5b452e89",
+            "name": "Insert Fresh Photos",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                1600,
+                0
+            ],
+            "credentials": {
+                "supabaseApi": {
+                    "id": "O92iJpR8Lb1I3BHl",
+                    "name": "Supabase account"
+                }
+            },
+            "onError": "continueRegularOutput"
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Invenio - Get Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Invenio - Get Villas": {
+            "main": [
+                [
+                    {
+                        "node": "Group Photos By Villa",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Group Photos By Villa": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Over Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Loop Over Villas": {
+            "main": [
+                [],
+                [
+                    {
+                        "node": "Delete Old Photos",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Delete Old Photos": {
+            "main": [
+                [
+                    {
+                        "node": "Wait Rate Limit",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait Rate Limit": {
+            "main": [
+                [
+                    {
+                        "node": "Extract Photos Array",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Extract Photos Array": {
+            "main": [
+                [
+                    {
+                        "node": "Insert Fresh Photos",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Insert Fresh Photos": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Over Villas",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "pinData": {},
+    "meta": {
+        "templateCredsSetupCompleted": true
+    }
+}
