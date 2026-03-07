@@ -65,10 +65,10 @@ export default function VillasTable() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {villas.map((villa) => (
-                            <tr key={villa.id} className="hover:bg-gray-50/30 transition-colors">
+                            <tr key={villa.v_uuid} className="hover:bg-gray-50/30 transition-colors">
                                 <td className="px-6 py-4">
-                                    <div className="font-medium text-gray-900">{villa.name || villa.title || 'No Name'}</div>
-                                    <div className="text-xs text-gray-400 mt-1">ID: {villa.id}</div>
+                                    <div className="font-medium text-gray-900">{villa.villa_name || 'No Name'}</div>
+                                    <div className="text-xs text-gray-400 mt-1">ID: {villa.v_uuid}</div>
                                 </td>
                                 <td className="px-6 py-4">
                                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
