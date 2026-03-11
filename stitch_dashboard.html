@@ -1,0 +1,244 @@
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Ibiza Beyond - Villa Management</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#ecb613",
+                        "background-light": "#f8f8f6",
+                        "background-dark": "#221d10",
+                    },
+                    fontFamily: {
+                        "display": ["Plus Jakarta Sans", "sans-serif"]
+                    },
+                    borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: "Plus Jakarta Sans", sans-serif;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display">
+<div class="relative flex h-screen w-full overflow-hidden">
+<aside class="hidden md:flex flex-col w-64 border-r border-primary/10 bg-white dark:bg-background-dark/50">
+<div class="p-6">
+<div class="flex items-center gap-3">
+<div class="bg-primary size-10 rounded-full flex items-center justify-center text-background-dark">
+<span class="material-symbols-outlined">diamond</span>
+</div>
+<div class="flex flex-col">
+<h1 class="text-slate-900 dark:text-slate-100 text-base font-bold leading-tight">Ibiza Beyond</h1>
+<p class="text-primary text-xs font-medium uppercase tracking-wider">Luxury Villa Management</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 px-4 space-y-1 mt-4">
+<a class="flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-primary/10 hover:text-primary rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="text-sm font-medium">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 bg-primary/10 text-primary rounded-lg" href="#">
+<span class="material-symbols-outlined">villa</span>
+<span class="text-sm font-medium">Villas</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-primary/10 hover:text-primary rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined">calendar_month</span>
+<span class="text-sm font-medium">Bookings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-primary/10 hover:text-primary rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="text-sm font-medium">Settings</span>
+</a>
+</nav>
+<div class="p-4 border-t border-primary/10">
+<div class="flex items-center gap-3 p-2 bg-slate-50 dark:bg-slate-800/50 rounded-xl">
+<div class="size-10 rounded-full bg-cover bg-center" data-alt="User profile avatar portrait" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAjgy5RqGhtb3U01temeRxZSQfd_-18fjqyendfoW-yA1GkzChZSwlEGLtOU2nfHaf7A2oPNLcZNN--_ZCcj71EqvnvkfvFIySgFlJsdnSRAiTZ3KfiRMlOUcFchwjA5H7BcwORqMYMlYpDmGezwYpKwkUEJTgZi6lZqCPvF9O52Qwdj923g-jMhsjDERra5XtN6rL8d0aQ1I6oGCK4jLICKPcR3bgu1fOPi-_7RuAhYtgX3rQE-DZn9Gv4XdWTDnvuSlQPrWx3-2w')"></div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-semibold truncate">Alex Rivera</p>
+<p class="text-xs text-slate-500 truncate">Admin Access</p>
+</div>
+</div>
+</div>
+</aside>
+<main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+<header class="h-16 flex items-center justify-between px-6 border-b border-primary/10 bg-white/80 dark:bg-background-dark/80 backdrop-blur-md sticky top-0 z-10">
+<div class="flex items-center gap-4 flex-1">
+<button class="md:hidden text-slate-600 dark:text-slate-400">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<div class="relative w-full max-w-md group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary transition-colors">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-primary/50 text-sm placeholder:text-slate-500" placeholder="Search villas, locations, or status..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-3 ml-4">
+<button class="relative p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-2 right-2 size-2 bg-primary rounded-full ring-2 ring-white dark:ring-background-dark"></span>
+</button>
+</div>
+</header>
+<div class="flex-1 overflow-y-auto p-6 md:p-8">
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+<div>
+<h2 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 mb-1">Villa Inventory</h2>
+<p class="text-slate-500 dark:text-slate-400">Manage and monitor your luxury villa portfolio in Ibiza.</p>
+</div>
+<button class="bg-primary hover:bg-primary/90 text-background-dark font-bold px-6 py-2.5 rounded-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shadow-lg shadow-primary/20">
+<span class="material-symbols-outlined">add</span>
+                        Add New Villa
+                    </button>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+<div class="bg-white dark:bg-slate-800/40 rounded-xl overflow-hidden border border-primary/5 shadow-sm hover:shadow-xl transition-all group">
+<div class="relative aspect-[4/3] overflow-hidden">
+<img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" data-alt="Luxury white villa with pool in Ibiza" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBgpMT4-sk3GBOhcjqvDFiI7C0V0fgrw3HXYhOLK0FlBdXCGdnaT3tEilWxWN0A4XpIRDiVkBaXUFpl-glLjHqjF-hb0SjxGue7Qe88ujmvqNiSLWtAZK7tcf-oZPnBrQ8TYbhojKfkzKbiwSQ2KGpnwF6x2AWrLWWFgnHDmu2gm0qgsXLkqMEhWSCcz2MHTl062Md-3tnudNiWuWJgvUG3pVG20z2CQbG0-JenRel-S1jnhUVBXdPniy1hUZ4SoL1sk89_TMTxMSw"/>
+<span class="absolute top-4 right-4 bg-green-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full">Available</span>
+</div>
+<div class="p-5">
+<h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">Villa Es Vedra</h3>
+<div class="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-sm mt-1">
+<span class="material-symbols-outlined text-xs">location_on</span>
+<span>Sant Josep</span>
+</div>
+<p class="mt-4 text-primary font-bold text-lg">€2,500<span class="text-slate-400 text-sm font-normal"> / night</span></p>
+<div class="grid grid-cols-2 gap-3 mt-6">
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/10 transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span> Edit
+                                </button>
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-red-500/10 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-500/10 transition-colors">
+<span class="material-symbols-outlined text-sm text-red-500">delete</span> Delete
+                                </button>
+</div>
+</div>
+</div>
+<div class="bg-white dark:bg-slate-800/40 rounded-xl overflow-hidden border border-primary/5 shadow-sm hover:shadow-xl transition-all group">
+<div class="relative aspect-[4/3] overflow-hidden">
+<img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" data-alt="Modern architecture luxury house with ocean view" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBFtu1dLx71OA4AEwz57Ghgk_26y0ARM5dj8Wc8FpEZzJk824AnJwJw_hKFPNVyodYYyw9syKZgEjXDzcx1LHmpLjW8qFkGNXDxflpG-pdudRGqjcV459uiZZDluQabYsISa1Iz2CBUjr0z-u0nGwBVdvBLdW7_nqGu-CJarOhZ0vi6gSObWsch_73y0unR_lDXfgazh33BMgmpXIvsgtm4b1q1dOPTtY3E4nJJxF0isfZvLeVCzsKMaEuI6blhxBBNtqREQAZGGCU"/>
+<span class="absolute top-4 right-4 bg-primary/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full">Booked</span>
+</div>
+<div class="p-5">
+<h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">Cala Jondal Retreat</h3>
+<div class="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-sm mt-1">
+<span class="material-symbols-outlined text-xs">location_on</span>
+<span>Sant Josep</span>
+</div>
+<p class="mt-4 text-primary font-bold text-lg">€3,200<span class="text-slate-400 text-sm font-normal"> / night</span></p>
+<div class="grid grid-cols-2 gap-3 mt-6">
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/10 transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span> Edit
+                                </button>
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-red-500/10 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-500/10 transition-colors">
+<span class="material-symbols-outlined text-sm text-red-500">delete</span> Delete
+                                </button>
+</div>
+</div>
+</div>
+<div class="bg-white dark:bg-slate-800/40 rounded-xl overflow-hidden border border-primary/5 shadow-sm hover:shadow-xl transition-all group">
+<div class="relative aspect-[4/3] overflow-hidden">
+<img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" data-alt="Classic mansion with gardens in Ibiza" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA_kiZ0H9b6JejEj71Pmg4iAuln3W-onOwc6Tfq4gP5q8eLAbCXBftEvniH-SuNbFLUvF9Q6PgQrV6FtOZswdaoBAT-Gwn_7UI7SyPrtZm6BKA5lIAy6rlRjksaABhNJrYI4pHz5BdM8IB7ZTq51FKdBT5l0mMcoQseK4KoE5bXS7bHGqp7CODIXkNa1uzSEkjqgSxDmVQ62gISzW3nstdJmkz1IUlUhPZkMu1xdrZgcYgh5Mz5B3xFLX9Dkk0xT1iBx1klEV37xgc"/>
+<span class="absolute top-4 right-4 bg-slate-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full">Maintenance</span>
+</div>
+<div class="p-5">
+<h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">Can Furnet Mansion</h3>
+<div class="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-sm mt-1">
+<span class="material-symbols-outlined text-xs">location_on</span>
+<span>Ibiza Town</span>
+</div>
+<p class="mt-4 text-primary font-bold text-lg">€1,800<span class="text-slate-400 text-sm font-normal"> / night</span></p>
+<div class="grid grid-cols-2 gap-3 mt-6">
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/10 transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span> Edit
+                                </button>
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-red-500/10 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-500/10 transition-colors">
+<span class="material-symbols-outlined text-sm text-red-500">delete</span> Delete
+                                </button>
+</div>
+</div>
+</div>
+<div class="bg-white dark:bg-slate-800/40 rounded-xl overflow-hidden border border-primary/5 shadow-sm hover:shadow-xl transition-all group">
+<div class="relative aspect-[4/3] overflow-hidden">
+<img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" data-alt="High-end coastal villa exterior" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAlpof6d5vQQr6fNZLZs3L7vLEq6DpVlh-i1HYJPeYzo7ecgiesFcX3OQwiQ_GP904Lh2aUSf474ggh8EPFCXgoPCnSWtmaevaiUF2sK_K-UxaYXzyKGwIh9P8lJnDTxDMt4t0szZM_o8MvaH0Qfvy1zLfvnnh64TTNc4tB2AwEpROU9ye6FcRPfh4QWSIHgywh8r7wv6ITbHw0mfOAGfGQgcf65z30LDra3mgPKIGyHh7hiMwT3IlNtZVk5Yt4FtaTaxwwMnW94dU"/>
+<span class="absolute top-4 right-4 bg-green-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full">Available</span>
+</div>
+<div class="p-5">
+<h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">Es Cubells Estate</h3>
+<div class="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-sm mt-1">
+<span class="material-symbols-outlined text-xs">location_on</span>
+<span>San Jose</span>
+</div>
+<p class="mt-4 text-primary font-bold text-lg">€4,500<span class="text-slate-400 text-sm font-normal"> / night</span></p>
+<div class="grid grid-cols-2 gap-3 mt-6">
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/10 transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span> Edit
+                                </button>
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-red-500/10 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-500/10 transition-colors">
+<span class="material-symbols-outlined text-sm text-red-500">delete</span> Delete
+                                </button>
+</div>
+</div>
+</div>
+<div class="bg-white dark:bg-slate-800/40 rounded-xl overflow-hidden border border-primary/5 shadow-sm hover:shadow-xl transition-all group">
+<div class="relative aspect-[4/3] overflow-hidden">
+<img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" data-alt="Sunset view from a villa terrace" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDEaJXzmHnnvKjViwcs6Sy1WNaQqneZ1CK-GS6HcQBuxNstkAnZoGBIAeAoncrvRoTZANxesi9CQtK_N6RdBSdWswj2Lml8lZpqdJaQ5-PKxlhPCMr2CueZUY-d3M0PhJtGH_VciZ-De0LPftxy9RRg_oseMlj_JTzj6amBOGDhqY2hMXY1rbZ1YeJHCNXCa1UAvVpmQlggMjnn7SBocj9T5ojEcCtWDTqZa9OYES9fTw9mYyF_0XFPkVckkB-inj0PzwO9eRj-3E0"/>
+<span class="absolute top-4 right-4 bg-green-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full">Available</span>
+</div>
+<div class="p-5">
+<h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">Talamanca Heights</h3>
+<div class="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-sm mt-1">
+<span class="material-symbols-outlined text-xs">location_on</span>
+<span>Ibiza Town</span>
+</div>
+<p class="mt-4 text-primary font-bold text-lg">€2,900<span class="text-slate-400 text-sm font-normal"> / night</span></p>
+<div class="grid grid-cols-2 gap-3 mt-6">
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/10 transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span> Edit
+                                </button>
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-red-500/10 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-500/10 transition-colors">
+<span class="material-symbols-outlined text-sm text-red-500">delete</span> Delete
+                                </button>
+</div>
+</div>
+</div>
+<div class="bg-white dark:bg-slate-800/40 rounded-xl overflow-hidden border border-primary/5 shadow-sm hover:shadow-xl transition-all group">
+<div class="relative aspect-[4/3] overflow-hidden">
+<img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" data-alt="Luxury pool area with palm trees" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCCg0NVOAD2zAt9ZZYh7UdDdk9Sax23cszZcctc9UE0CSm4tLYj0U4PooPCfaTG7cKxTdJ2_NYUx4Vs10NP8OI9Nc2gWGKsn9-D_QDZ1K7zv000j-HlhOSDEEqW9Euv5iaWusLKnPiIaxc9nlZqE6Ga54FOS7nH1-A8xqEs3ssBAZm9sNWCvDNK2qbmT1LpieLPpTy6YvLjLqbyvp-uBzY1-DQ1GkrYR0f0RjIu2QOMulzgAC-ti-l9s-kiK6U0yLll1FQdsKmFeWI"/>
+<span class="absolute top-4 right-4 bg-primary/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full">Booked</span>
+</div>
+<div class="p-5">
+<h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">Santa Eulalia Oasis</h3>
+<div class="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-sm mt-1">
+<span class="material-symbols-outlined text-xs">location_on</span>
+<span>Santa Eulalia</span>
+</div>
+<p class="mt-4 text-primary font-bold text-lg">€2,100<span class="text-slate-400 text-sm font-normal"> / night</span></p>
+<div class="grid grid-cols-2 gap-3 mt-6">
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/10 transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span> Edit
+                                </button>
+<button class="flex items-center justify-center gap-2 py-2 px-3 border border-red-500/10 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-500/10 transition-colors">
+<span class="material-symbols-outlined text-sm text-red-500">delete</span> Delete
+                                </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

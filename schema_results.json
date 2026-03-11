@@ -1,0 +1,73 @@
+{
+  "agents": {
+    "status": "empty"
+  },
+  "quotes": {
+    "columns": [
+      "id",
+      "agent_id",
+      "client_id",
+      "v_uuid",
+      "check_in",
+      "check_out",
+      "supplier_base_price",
+      "admin_markup",
+      "agent_markup",
+      "final_price",
+      "shareable_token",
+      "status",
+      "created_at"
+    ]
+  },
+  "invenio_seasonal_prices": {
+    "columns": [
+      "id",
+      "v_uuid",
+      "start_date",
+      "end_date",
+      "amount",
+      "minimum_nights",
+      "allowed_checkin_days"
+    ]
+  },
+  "invenio_properties": {
+    "columns": [
+      "v_uuid",
+      "villa_name",
+      "description",
+      "tagline",
+      "license",
+      "bedrooms",
+      "bathrooms",
+      "sleeps",
+      "country",
+      "destination",
+      "areaname",
+      "district",
+      "gps",
+      "cleaning",
+      "cleaning_charge",
+      "minimum_price",
+      "maximum_price",
+      "deposit",
+      "check_in",
+      "check_out",
+      "minimum_nights",
+      "allowed_checkin_days",
+      "ical_url",
+      "v_id",
+      "features",
+      "last_synced_at",
+      "created_at",
+      "allow_shortstays",
+      "direct_client_contract",
+      "dcc_commission",
+      "dcc_commission_vat_included",
+      "connected_to_owner_ical",
+      "thumbnail_url"
+    ]
+  },
+  "clients": {
+    "status": "empty"
+  }
+}

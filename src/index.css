@@ -2,8 +2,60 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap');
+
 @layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    @apply antialiased;
+  }
+
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-background-dark text-slate-100 font-display;
+  }
+
+  ::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #1a1d26;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-primary/30 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-primary/50;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-surface-dark border border-border-dark rounded-xl backdrop-blur-sm;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-background-dark font-bold px-5 py-2.5 rounded-lg hover:bg-primary/90 transition-all active:scale-95 shadow-lg shadow-primary/20;
+  }
+
+  .nav-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-primary hover:bg-primary/10;
+  }
+
+  .nav-link.active {
+    @apply bg-primary/10 text-primary;
+  }
+
+  .stat-card {
+    @apply bg-surface-dark border border-border-dark rounded-xl p-5;
+  }
+
+  .input-dark {
+    @apply bg-surface-dark2 border border-border-dark rounded-lg px-4 py-2.5 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all text-sm;
   }
 }
