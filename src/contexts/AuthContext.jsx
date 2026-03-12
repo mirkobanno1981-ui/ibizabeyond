@@ -25,6 +25,14 @@ export const AuthProvider = ({ children }) => {
         let subscription = null;
 
         // Step 1: get the existing session immediately (synchronous-ish)
+        const demoRole = localStorage.getItem('demo_role');
+        if (demoRole) {
+            setUser({ id: '00000000-0000-0000-0000-000000000000', email: 'demo@ibizabeyond.com' });
+            setRole(demoRole);
+            setLoading(false);
+            return;
+        }
+
         supabase.auth.getSession().then(async ({ data: { session } }) => {
             if (session?.user) {
                 setUser(session.user);

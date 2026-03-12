@@ -248,6 +248,25 @@ export default function Login() {
                 <p className="text-center text-[11px] text-slate-600 mt-6">
                     © 2026 Ibiza Beyond · Luxury Villa Rentals
                 </p>
+
+                {/* Developer Demo Access - Temporary */}
+                <div className="mt-8 pt-6 border-t border-white/5 flex flex-col items-center gap-2">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Demo Access (Bypass Login)</p>
+                    <div className="flex gap-4">
+                        <button 
+                            onClick={() => { localStorage.setItem('demo_role', 'admin'); window.location.reload(); }}
+                            className="text-[10px] px-3 py-1 bg-primary/10 text-primary border border-primary/20 rounded hover:bg-primary/20 transition-colors"
+                        >
+                            Enter as Admin
+                        </button>
+                        <button 
+                            onClick={() => { localStorage.setItem('demo_role', 'agent'); window.location.reload(); }}
+                            className="text-[10px] px-3 py-1 bg-white/5 text-slate-400 border border-white/10 rounded hover:bg-white/10 transition-colors"
+                        >
+                            Enter as Agent
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     );
