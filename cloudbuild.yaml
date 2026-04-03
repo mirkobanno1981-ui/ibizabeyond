@@ -1,0 +1,32 @@
+steps:
+  # 1. Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-t', 'europe-west1-docker.pkg.dev/ibzabeyond/ibizabeyond-repo/ibizabeyond-frontend', 
+      '.'
+    ]
+
+  # 2. Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'europe-west1-docker.pkg.dev/ibzabeyond/ibizabeyond-repo/ibizabeyond-frontend']
+
+  # 3. Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+    - 'run'
+    - 'deploy'
+    - 'ibizabeyond-frontend'
+    - '--image'
+    - 'europe-west1-docker.pkg.dev/ibzabeyond/ibizabeyond-repo/ibizabeyond-frontend'
+    - '--region'
+    - 'europe-west1'
+    - '--platform'
+    - 'managed'
+    - '--allow-unauthenticated'
+    - '--port'
+    - '8080'
+
+images:
+  - 'europe-west1-docker.pkg.dev/ibzabeyond/ibizabeyond-repo/ibizabeyond-frontend'

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchICal, parseICal, getBlockedDates } from '../lib/calendar';
+import VillaMap from './VillaMap';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1200&q=80';
 
@@ -23,6 +24,18 @@ export default function VillaView() {
     const [error, setError] = useState(null);
     const [activePhotoIndex, setActivePhotoIndex] = useState(0);
     const [showPhotoModal, setShowPhotoModal] = useState(false);
+
+    // Keyboard navigation for gallery
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (!showPhotoModal) return;
+            if (e.key === 'ArrowLeft') setActivePhotoIndex(p => Math.max(0, p - 1));
+            if (e.key === 'ArrowRight') setActivePhotoIndex(p => Math.min(photos.length - 1, p + 1));
+            if (e.key === 'Escape') setShowPhotoModal(false);
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [showPhotoModal, photos.length]);
     
     // Quote selection states
     const [selectionStart, setSelectionStart] = useState(null);
@@ -31,8 +44,274 @@ export default function VillaView() {
     const [selectedClientId, setSelectedClientId] = useState('');
     const [clientSearch, setClientSearch] = useState('');
     const [savingQuote, setSavingQuote] = useState(false);
-    const [agentMarkup, setAgentMarkup] = useState(15);
     const [agentDetails, setAgentDetails] = useState(null);
+    const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 15, ivaPercent: 10 });
+    const [useStripeFee, setUseStripeFee] = useState(false);
+    
+    // Quick Client Create
+    const [showNewClientForm, setShowNewClientForm] = useState(false);
+    const [newClient, setNewClient] = useState({ full_name: '', email: '', phone_number: '' });
+    const [creatingClient, setCreatingClient] = useState(false);
+
+    // Quote management states
+    const [extraServices, setExtraServices] = useState([]);
+    const [isManualPrice, setIsManualPrice] = useState(false);
+    const [manualPrice, setManualPrice] = useState(0);
+    const [createdQuoteId, setCreatedQuoteId] = useState(null);
+
+    // --- Helpers: Pricing & Rules ---
+    const getIsSat = (ds) => {
+        if (!ds) return false;
+        const [y, m, d] = ds.split('-').map(Number);
+        return new Date(y, m - 1, d).getDay() === 6;
+    };
+
+    const getPriceForDate = (dateStr, withMarkup = false) => {
+        const date = new Date(dateStr);
+        const rate = seasonalRates.find(r => {
+            const start = new Date(r.start_date);
+            const end = new Date(r.end_date);
+            return date >= start && date <= end;
+        });
+        
+        let amount = 0;
+        if (rate) amount = parseFloat(rate.amount);
+        else amount = parseFloat(villa?.minimum_price || 0) / 7;
+
+        if (withMarkup) {
+            // ADMINS see the Global Margin to verify their settings. 
+            // AGENTS see their specific margin (fallback to global).
+            const adminMarkup = (role !== 'admin' && agentDetails?.admin_margin > 0) 
+                ? agentDetails.admin_margin 
+                : globalMargins.invenioToAdmin;
+            return Math.round(amount * (1 + adminMarkup / 100));
+        }
+
+        return Math.round(amount);
+    };
+
+    const getRuleForDate = (dateStr) => {
+        const date = new Date(dateStr);
+        const seasonalRule = seasonalRates.find(r => {
+            const start = new Date(r.start_date);
+            const end = new Date(r.end_date);
+            return date >= start && date <= end;
+        });
+        return {
+            minimum_nights: seasonalRule?.minimum_nights || villa.minimum_nights || 7,
+            allowed_checkin_days: seasonalRule?.allowed_checkin_days || villa.allowed_checkin_days || 'Flexible check in days'
+        };
+    };
+
+    const isGapBooking = () => {
+        if (!selectionStart || !selectionEnd) return false;
+        const diffTime = Math.abs(new Date(selectionEnd) - new Date(selectionStart));
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const blocked = blockedDates.sort();
+        let prevBooking = null;
+        let nextBooking = null;
+        for (const d of blocked) {
+            if (d < selectionStart) prevBooking = d;
+            if (d > selectionEnd && !nextBooking) nextBooking = d;
+        }
+        if (prevBooking && nextBooking) {
+            const gapStart = new Date(prevBooking);
+            gapStart.setDate(gapStart.getDate() + 1);
+            const gapEnd = new Date(nextBooking);
+            gapEnd.setDate(gapEnd.getDate() - 1);
+            const gapNights = Math.ceil((gapEnd - gapStart) / (1000 * 60 * 60 * 24)) + 1;
+            return (gapNights >= 3 && diffDays >= 3);
+        }
+        return false;
+    };
+
+    const validateBooking = () => {
+        if (!selectionStart || !selectionEnd) return { valid: true };
+        const start = new Date(selectionStart);
+        const end = new Date(selectionEnd);
+        const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const isLastMinute = (start - today) / (1000 * 60 * 60 * 24) <= 7;
+        const isLongStay = diffDays >= 28;
+        const isShortStay = diffDays <= 6;
+        const gapBooking = isGapBooking();
+        const rule = getRuleForDate(selectionStart);
+        const errors = [];
+        
+        if (rule.allowed_checkin_days === 'Strictly Saturday-Saturday') {
+            if (!getIsSat(selectionStart) || !getIsSat(selectionEnd)) {
+                errors.push("This villa only accepts Saturday to Saturday stays.");
+            }
+            // For strict villas, we also enforce the minimum stay without bypasses unless it's a gap
+            if (!gapBooking && diffDays < rule.minimum_nights) {
+                errors.push(`This villa requires a minimum of ${rule.minimum_nights} nights.`);
+            }
+        } else {
+            if (!gapBooking) {
+                const bypassMinNights = isLongStay || (isLastMinute && diffDays >= 3);
+                if (!bypassMinNights && diffDays < rule.minimum_nights) {
+                    errors.push(`The minimum stay is ${rule.minimum_nights} nights.`);
+                }
+            } else if (diffDays < 3) {
+                errors.push("Gap bookings must be at least 3 nights.");
+            }
+        }
+        if (isShortStay) {
+            if (villa.allow_shortstays !== '1' && villa.allow_shortstays !== 'yes') {
+                errors.push("This villa does not accept short stays (under 7 nights).");
+            }
+        }
+        return { valid: errors.length === 0, errors, isShortStay, diffDays };
+    };
+
+    const getBasePriceForSelection = () => {
+        if (!selectionStart || !selectionEnd) return { total: 0, items: [] };
+        const start = new Date(selectionStart);
+        const end = new Date(selectionEnd);
+        const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
+        
+        const items = [];
+        let subtotal = 0;
+        
+        for (let i = 0; i < diffDays; i++) {
+            const d = new Date(start);
+            d.setDate(start.getDate() + i);
+            const dStr = d.toISOString().split('T')[0];
+            const price = getPriceForDate(dStr);
+            subtotal += price;
+        }
+
+        items.push({ 
+            label: `Base Accommodation (${diffDays} nights)`, 
+            amount: subtotal,
+            desc: `Stay from ${new Date(selectionStart).toLocaleDateString()} to ${new Date(selectionEnd).toLocaleDateString()}`
+        });
+
+        if (villa.cleaning_charge > 0) {
+            items.push({ 
+                label: 'Cleaning Fee', 
+                amount: parseFloat(villa.cleaning_charge),
+                desc: 'One-time fixed charge'
+            });
+            subtotal += parseFloat(villa.cleaning_charge);
+        }
+
+        const isShortStay = diffDays <= 6;
+        if (isShortStay && (villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes' || villa.allow_shortstays === true)) {
+            let factor = 0;
+            if (diffDays === 3) factor = 0.50;
+            else if (diffDays === 4) factor = 0.25;
+            else if (diffDays === 5) factor = 0.20;
+            else if (diffDays === 6) factor = 0.10;
+            
+            if (factor > 0) {
+                const premiumPercent = subtotal * factor;
+                items.push({ 
+                    label: `Short Stay Premium (${factor * 100}%)`, 
+                    amount: premiumPercent,
+                    desc: `Mandatory surcharge for ${diffDays}-night stay`
+                });
+                items.push({ 
+                    label: 'Short Stay Service Fee', 
+                    amount: 200,
+                    desc: 'Fixed processing fee for short-term rentals'
+                });
+                subtotal += premiumPercent + 200;
+            }
+        }
+
+        return { total: subtotal, items };
+    };
+    const getQuoteBreakdown = () => {
+        if (!selectionStart || !selectionEnd) return { total: 0, profit: 0, items: [] };
+        
+        const { total: baseTotal, items: baseItems } = getBasePriceForSelection();
+        const breakdownItems = [...baseItems];
+        
+        // Use logic consistent with display: Admins use global, Agents use personal
+        const adminMarkup = (role !== 'admin' && agentDetails?.admin_margin > 0) 
+            ? agentDetails.admin_margin 
+            : globalMargins.invenioToAdmin;
+            
+        const totalWithMarkup = baseTotal * (1 + adminMarkup / 100);
+        
+        let subtotal;
+        let finalPrice;
+        let agentProfit;
+
+        if (isManualPrice) {
+            subtotal = manualPrice;
+            agentProfit = manualPrice - baseTotal;
+            breakdownItems.push({
+                label: 'Manual Rate Adjustment',
+                amount: manualPrice - baseTotal,
+                desc: 'Price adjusted manually by agent'
+            });
+        } else {
+            subtotal = totalWithMarkup;
+        }
+
+        const extraTotal = extraServices.reduce((sum, s) => {
+            if (s.price > 0) {
+                breakdownItems.push({
+                    label: s.name || 'Extra Service',
+                    amount: s.price,
+                    desc: 'Additional service requested'
+                });
+            }
+            return sum + (parseFloat(s.price) || 0);
+        }, 0);
+
+        subtotal += extraTotal;
+        const stripeFee = useStripeFee ? subtotal * 0.015 : 0;
+        
+        if (stripeFee > 0) {
+            breakdownItems.push({
+                label: 'Stripe Processing Fee (1.5%)',
+                amount: stripeFee,
+                desc: 'Secure payment gateway processing'
+            });
+        }
+
+        // VAT (IVA) - Apply only to agency services (margin + extras + stripe fee)
+        const agencyServicesTotal = (subtotal - baseTotal) + stripeFee;
+        const ivaAmount = agencyServicesTotal * (globalMargins.ivaPercent / 100);
+        
+        breakdownItems.push({
+            label: `IVA (VAT) ${globalMargins.ivaPercent}%`,
+            amount: ivaAmount,
+            desc: 'Applied exclusively to agency services'
+        });
+
+        finalPrice = Math.round(subtotal + stripeFee + ivaAmount);
+        agentProfit = Math.round(subtotal - baseTotal);
+        
+        return { 
+            base: baseTotal, 
+            priceWithAdmin: totalWithMarkup, 
+            total: finalPrice, 
+            profit: agentProfit,
+            items: breakdownItems.map(item => ({ ...item, amount: Math.round(item.amount) }))
+        };
+    };
+
+    const calculateQuoteTotal = () => getQuoteBreakdown().total;
+
+    // Budget check
+    const fullValidation = () => {
+        const result = validateBooking();
+        if (result.valid && result.isShortStay && selectionEnd) {
+            const breakdown = getQuoteBreakdown();
+            if (breakdown.total < 3500) {
+                result.valid = false;
+                result.errors.push("Short stay total must be over €3,500 for this villa.");
+            }
+        }
+        return result;
+    };
+
+    const bookingStatus = fullValidation();
 
     useEffect(() => {
         if (id) fetchVillaData();
@@ -66,28 +345,40 @@ export default function VillaView() {
                 .order('start_date', { ascending: true });
             setSeasonalRates(rateData || []);
 
-            // 4. Fetch Clients for Quote creation (Only those belonging to this agent)
-            const { data: clientData } = await supabase
-                .from('clients')
-                .select('id, full_name')
-                .eq('agent_id', user?.id)
-                .order('full_name');
+            // 4. Fetch Clients for Quote creation
+            let clientQuery = supabase.from('clients').select('id, full_name').order('full_name');
+            if (role !== 'admin') {
+                clientQuery = clientQuery.eq('agent_id', user?.id);
+            }
+            const { data: clientData } = await clientQuery;
             setClients(clientData || []);
 
-            // 5. Fetch Agent's default markup and info
+            // 5. Fetch Agent's info/override
             if (user?.id) {
                 const { data: agentProfile } = await supabase
                     .from('agents')
-                    .select('markup_percent, company_name, logo_url')
+                    .select('admin_margin, company_name, logo_url')
                     .eq('id', user.id)
-                    .single();
+                    .maybeSingle();
                 if (agentProfile) {
-                    setAgentMarkup(agentProfile.markup_percent || 15);
                     setAgentDetails(agentProfile);
                 }
             }
 
-            // 5. Fetch iCal Availability
+            // 5. Fetch Global Margins
+            const { data: marginData } = await supabase
+                .from('margin_settings')
+                .select('*')
+                .eq('id', 1)
+                .single();
+            if (marginData) {
+                setGlobalMargins({
+                    invenioToAdmin: marginData.invenio_to_admin_margin || 15,
+                    ivaPercent: marginData.iva_percent || 10
+                });
+            }
+
+            // 6. Fetch iCal Availability
             if (villaData.ical_url) {
                 const icalData = await fetchICal(villaData.ical_url);
                 if (icalData) {
@@ -103,79 +394,127 @@ export default function VillaView() {
         }
     }
 
-    // --- Helper: Get Daily Price ---
-    const getPriceForDate = (dateStr) => {
-        const date = new Date(dateStr);
-        const rate = seasonalRates.find(r => {
-            const start = new Date(r.start_date);
-            const end = new Date(r.end_date);
-            return date >= start && date <= end;
-        });
 
-        // Seasonal rates from Invenio are NIGHTLY prices. 
-        // fallback minimum_price from Invenio is a WEEKLY price.
-        if (rate) {
-            return Math.round(parseFloat(rate.amount));
-        } else {
-            const weeklyBase = parseFloat(villa?.minimum_price || 0);
-            return Math.round(weeklyBase / 7);
-        }
-    };
-
-    const getRuleForDate = (dateStr) => {
-        const date = new Date(dateStr);
-        const seasonalRule = seasonalRates.find(r => {
-            const start = new Date(r.start_date);
-            const end = new Date(r.end_date);
-            return date >= start && date <= end;
-        });
-
-        return {
-            minimum_nights: seasonalRule?.minimum_nights || villa.minimum_nights || 7,
-            allowed_checkin_days: seasonalRule?.allowed_checkin_days || villa.allowed_checkin_days || 'Flexible check in days'
-        };
-    };
-
-    const validateBooking = () => {
-        if (!selectionStart || !selectionEnd) return { valid: true };
-
-        const start = new Date(selectionStart);
-        const end = new Date(selectionEnd);
-        const diffTime = Math.abs(end - start);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        
-        const rule = getRuleForDate(selectionStart);
-        const errors = [];
-
-        // 1. Min Nights
-        if (diffDays < rule.minimum_nights) {
-            errors.push(`Minimum stay is ${rule.minimum_nights} nights.`);
-        }
-
-        // 2. Changeover Days
-        if (rule.allowed_checkin_days === 'Strictly Saturday-Saturday') {
-            const checkInDay = start.getDay(); // 0 is Sunday, 6 is Saturday
-            const checkOutDay = end.getDay();
+    async function handleQuickCreateClient() {
+        if (!newClient.full_name) return alert('Name is required');
+        setCreatingClient(true);
+        try {
+            const { data, error } = await supabase.from('clients').insert({
+                ...newClient,
+                agent_id: user?.id
+            }).select().single();
             
-            if (checkInDay !== 6) {
-                errors.push("Check-in must be on a Saturday.");
-            }
-            if (checkOutDay !== 6) {
-                errors.push("Check-out must be on a Saturday.");
-            }
+            if (error) throw error;
+            
+            setClients(prev => [data, ...prev]);
+            setSelectedClientId(data.id);
+            setShowNewClientForm(false);
+            setNewClient({ full_name: '', email: '', phone_number: '' });
+        } catch (err) {
+            alert('Error creating client: ' + err.message);
+        } finally {
+            setCreatingClient(false);
         }
+    }
 
-        return {
-            valid: errors.length === 0,
-            errors
-        };
+    const resetQuoteModal = () => {
+        setShowQuoteModal(false);
+        setCreatedQuoteId(null);
+        setIsManualPrice(false);
+        setManualPrice(0);
+        setExtraServices([]);
+        setSelectedClientId('');
+        setClientSearch('');
+        // Restore agent default markup
+        if (agentDetails) {
+            setAgentMarkup(agentDetails.markup_percent || 15);
+        }
     };
 
-    const bookingStatus = validateBooking();
+    const handleDateClick = (dStr, isBlocked) => {
+        if (isBlocked) return;
+        
+        const rule = getRuleForDate(dStr);
+        const isStrictlySat = rule.allowed_checkin_days === 'Strictly Saturday-Saturday';
 
-    const [extraServices, setExtraServices] = useState([]);
-    const [isManualPrice, setIsManualPrice] = useState(false);
-    const [manualPrice, setManualPrice] = useState(0);
+        if (!selectionStart || (selectionStart && selectionEnd)) {
+            // Start new selection
+            if (isStrictlySat && !getIsSat(dStr)) {
+                alert("ATTENTION: This villa strictly requires Saturday check-in. Please select a Saturday on the calendar.");
+                return;
+            }
+            setSelectionStart(dStr);
+            setSelectionEnd(null);
+        } else {
+            // Complete selection
+            const start = new Date(selectionStart);
+            const end = new Date(dStr);
+            
+            if (end < start) {
+                // If clicked date is before start, make it the new start
+                if (isStrictlySat && !getIsSat(dStr)) {
+                    alert("This villa requires Saturday check-in.");
+                    return;
+                }
+                setSelectionStart(dStr);
+            } else {
+                // Verify end date is a Saturday if strictly Sat-Sat
+                if (isStrictlySat && !getIsSat(dStr)) {
+                    alert("This villa requires Saturday check-out. Please select a Saturday.");
+                    return;
+                }
+
+                // Check if any blocked dates in between
+                let hasBlocked = false;
+                let current = new Date(start);
+                while (current <= end) {
+                    const checkStr = current.toISOString().split('T')[0];
+                    if (blockedDates.includes(checkStr)) {
+                        hasBlocked = true;
+                        break;
+                    }
+                    current.setDate(current.getDate() + 1);
+                }
+
+                if (hasBlocked) {
+                    if (isStrictlySat && !getIsSat(dStr)) {
+                        alert("This villa requires Saturday check-in.");
+                        return;
+                    }
+                    setSelectionStart(dStr);
+                } else {
+                    setSelectionEnd(dStr);
+                    
+                    // NEW: Avoid race condition by checking validation with local values
+                    const startObj = new Date(selectionStart);
+                    const endObj = new Date(dStr);
+                    const diff = Math.ceil(Math.abs(endObj - startObj) / (1000 * 60 * 60 * 24));
+                    const ruleObj = getRuleForDate(selectionStart);
+                    
+                    let isAutoValid = true;
+                    // Check Sat-Sat
+                    if (ruleObj.allowed_checkin_days === 'Strictly Saturday-Saturday') {
+                        if (!getIsSat(selectionStart) || !getIsSat(dStr)) isAutoValid = false;
+                        // Min stay for strict villas
+                        if (diff < ruleObj.minimum_nights) isAutoValid = false;
+                    } else {
+                        // Regular validation logic
+                        const todayObj = new Date();
+                        todayObj.setHours(0, 0, 0, 0);
+                        const isLastMin = (startObj - todayObj) / (1000 * 60 * 60 * 24) <= 7;
+                        const isLong = diff >= 28;
+                        const bypass = isLong || (isLastMin && diff >= 3);
+                        if (!bypass && diff < ruleObj.minimum_nights) isAutoValid = false;
+                    }
+                    
+                    if (isAutoValid) {
+                        setShowQuoteModal(true);
+                    }
+                }
+            }
+        }
+    };
+
 
     const addService = () => setExtraServices([...extraServices, { name: '', price: 0 }]);
     const removeService = (idx) => setExtraServices(extraServices.filter((_, i) => i !== idx));
@@ -185,92 +524,23 @@ export default function VillaView() {
         setExtraServices(newServices);
     };
 
-    const getBasePriceForSelection = () => {
-        if (!selectionStart || !selectionEnd) return 0;
-        const start = new Date(selectionStart);
-        const end = new Date(selectionEnd);
-        const diffTime = Math.abs(end - start);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        
-        let totalBase = 0;
-        for (let i = 0; i < diffDays; i++) {
-            const d = new Date(start);
-            d.setDate(start.getDate() + i);
-            const dStr = d.toISOString().split('T')[0];
-            totalBase += getPriceForDate(dStr);
-        }
 
-        // Add cleaning fee
-        const cleaning = parseFloat(villa.cleaning_charge || 0);
-        totalBase += cleaning;
-
-        // Apply short stay logic
-        const rule = getRuleForDate(selectionStart);
-        let surchargeFactor = 0;
-        if (rule.allowed_checkin_days !== 'Strictly Saturday-Saturday' && (villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes')) {
-            if (diffDays === 3) surchargeFactor = 0.50;
-            else if (diffDays === 4) surchargeFactor = 0.25;
-            else if (diffDays === 5) surchargeFactor = 0.20;
-            else if (diffDays === 6) surchargeFactor = 0.10;
-        }
-
-        if (surchargeFactor > 0) {
-            totalBase = totalBase * (1 + surchargeFactor) + 200;
-        }
-
-        return totalBase;
-    };
-
-    const calculateQuoteTotal = () => {
-        if (!selectionStart || !selectionEnd || !bookingStatus.valid) return 0;
-        if (isManualPrice) return manualPrice;
-
-        const base = getBasePriceForSelection();
-        
-        // Fetch Admin margin from margin_settings if not already available
-        // For simplicity here, we assume admin margin is already applied to base if we were fetching it elsewhere, 
-        // but the table schema suggests we store supplier_base_price and admin_markup separately.
-        // Let's assume global admin_markup is 15% if not found.
-        const adminMarkup = 15; // In a production app, fetch from margin_settings
-        
-        const priceWithAdmin = base * (1 + adminMarkup / 100);
-        const priceWithAgent = priceWithAdmin * (1 + agentMarkup / 100);
-        
-        const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        
-        return Math.round(priceWithAgent + extraTotal);
-    };
-
-    // --- Selection Logic ---
-    const handleDateClick = (dateStr, isBlocked) => {
-        if (isBlocked) return;
-        
-        if (!selectionStart || (selectionStart && selectionEnd)) {
-            setSelectionStart(dateStr);
-            setSelectionEnd(null);
-        } else {
-            const start = new Date(selectionStart);
-            const end = new Date(dateStr);
-            
-            if (end < start) {
-                setSelectionStart(dateStr);
-                setSelectionEnd(null);
-            } else {
-                setSelectionEnd(dateStr);
-            }
-        }
-    };
-
-
-    const [createdQuoteId, setCreatedQuoteId] = useState(null);
 
     async function handleCreateQuote() {
         if (!selectedClientId || !selectionStart || !selectionEnd) return;
+        
+        const status = fullValidation();
+        if (!status.valid) {
+            alert("Unable to create quote: " + status.errors.join(" "));
+            return;
+        }
+
         setSavingQuote(true);
         try {
-            const finalPrice = calculateQuoteTotal();
-            const supplierBase = getBasePriceForSelection();
-            const adminMarkup = 15; // Fallback or fetch from settings
+            const { total: finalPrice, items: breakdown, base: supplierBase } = getQuoteBreakdown();
+            const activeAdminMargin = (agentDetails?.admin_margin > 0) 
+                ? agentDetails.admin_margin 
+                : globalMargins.invenioToAdmin;
 
             const { data, error: quoteErr } = await supabase.from('quotes').insert({
                 v_uuid: villa.v_uuid,
@@ -278,10 +548,12 @@ export default function VillaView() {
                 check_in: selectionStart,
                 check_out: selectionEnd,
                 supplier_base_price: supplierBase,
-                admin_markup: adminMarkup,
-                agent_markup: agentMarkup,
+                admin_markup: activeAdminMargin,
+                agent_markup: 0,
                 extra_services: extraServices,
+                stripe_fee_included: useStripeFee,
                 final_price: finalPrice,
+                price_breakdown: breakdown, // New column
                 is_manual_price: isManualPrice,
                 status: 'draft',
                 agent_id: user?.id
@@ -296,6 +568,32 @@ export default function VillaView() {
         }
     }
 
+    async function handleRequestApproval() {
+        if (!createdQuoteId) return;
+        setSavingQuote(true);
+        try {
+            const { error } = await supabase
+                .from('quotes')
+                .update({ status: 'waiting_owner' })
+                .eq('id', createdQuoteId);
+            
+            if (error) throw error;
+            
+            // Trigger Notification to Owner
+            supabase.functions.invoke('notify-owner', {
+                body: { quoteId: createdQuoteId, action: 'request_approval' }
+            }).catch(err => console.error('Notification failed:', err));
+
+            alert('Approval request sent to owner!');
+            resetQuoteModal();
+            navigate('/quotes');
+        } catch (err) {
+            alert('Error requesting approval: ' + err.message);
+        } finally {
+            setSavingQuote(false);
+        }
+    }
+
     // --- Render Logic ---
     if (loading) return (
         <div className="flex items-center justify-center min-h-[60vh]">
@@ -304,8 +602,8 @@ export default function VillaView() {
     );
 
     if (error || !villa) return (
-        <div className="p-12 text-center text-slate-500">
-            <h2 className="text-xl font-bold text-white mb-2">Error</h2>
+        <div className="p-12 text-center text-text-muted">
+            <h2 className="text-xl font-bold text-text-primary mb-2">Error</h2>
             <p>{error || 'Villa not found'}</p>
         </div>
     );
@@ -316,42 +614,42 @@ export default function VillaView() {
         <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-8 pb-20">
             {/* Header & Gallery */}
             <div className="space-y-4">
-                <div className="flex items-center gap-2 text-xs text-slate-500">
+                <div className="flex items-center gap-2 text-xs text-text-muted">
                     <button onClick={() => navigate('/villas')} className="hover:text-primary transition-colors">Villas</button>
-                    <span className="material-symbols-outlined text-[10px]">chevron_right</span>
-                    <span className="text-slate-300 font-medium">{villa.villa_name}</span>
+                    <span className="material-symbols-outlined notranslate text-[10px]">chevron_right</span>
+                    <span className="text-text-secondary font-medium">{villa.villa_name}</span>
                 </div>
                 
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[400px] md:h-[600px]">
-                    <div className="lg:col-span-3 relative rounded-2xl overflow-hidden bg-surface-dark group cursor-pointer" onClick={() => setShowPhotoModal(true)}>
+                    <div className="lg:col-span-3 relative rounded-2xl overflow-hidden bg-surface group cursor-pointer" onClick={() => setShowPhotoModal(true)}>
                         <img src={mainPhoto} className="w-full h-full object-cover" alt={villa.villa_name} />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-8">
                              <div>
-                                <h1 className="text-3xl font-bold text-white">{villa.villa_name}</h1>
-                                <p className="text-slate-200 mt-2 italic">"{villa.tagline || 'Experience luxury in Ibiza'}"</p>
+                                <h1 className="text-3xl font-bold text-text-primary">{villa.villa_name}</h1>
+                                <p className="text-text-primary mt-2 italic">"{villa.tagline || 'Experience luxury in Ibiza'}"</p>
                              </div>
                         </div>
                         {photos.length > 0 && (
-                            <div className="absolute bottom-6 right-6 bg-black/60 backdrop-blur-sm border border-white/10 px-4 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-2">
-                                <span className="material-symbols-outlined text-[18px]">photo_library</span>
+                            <div className="absolute bottom-6 right-6 bg-black/60 backdrop-blur-sm border border-border px-4 py-2 rounded-xl text-text-primary text-xs font-bold flex items-center gap-2">
+                                <span className="material-symbols-outlined notranslate text-[18px]">photo_library</span>
                                 {photos.length} Photos
                             </div>
                         )}
                     </div>
                     <div className="hidden lg:flex flex-col gap-4">
                         {photos.slice(1, 5).map((ph, idx) => (
-                            <div key={idx} className="flex-1 rounded-2xl overflow-hidden bg-surface-dark relative border border-border-dark cursor-pointer group" onClick={() => { setActivePhotoIndex(idx + 1); setShowPhotoModal(true); }}>
+                            <div key={idx} className="flex-1 rounded-2xl overflow-hidden bg-surface relative border border-border cursor-pointer group" onClick={() => { setActivePhotoIndex(idx + 1); setShowPhotoModal(true); }}>
                                 <img src={ph.url} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" alt="" />
                                 {idx === 3 && photos.length > 5 && (
                                     <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                                        <span className="text-white font-bold text-lg">+{photos.length - 5}</span>
+                                        <span className="text-text-primary font-bold text-lg">+{photos.length - 5}</span>
                                     </div>
                                 )}
                             </div>
                         ))}
                         {photos.length <= 1 && (
-                            <div className="flex-1 rounded-2xl border border-dashed border-border-dark flex items-center justify-center text-slate-600">
-                                <span className="material-symbols-outlined text-4xl">add_photo_alternate</span>
+                            <div className="flex-1 rounded-2xl border border-dashed border-border flex items-center justify-center text-text-muted">
+                                <span className="material-symbols-outlined notranslate text-4xl">add_photo_alternate</span>
                             </div>
                         )}
                     </div>
@@ -360,46 +658,63 @@ export default function VillaView() {
 
             {/* Photo Lightbox Modal */}
             {showPhotoModal && (
-                <div className="fixed inset-0 z-[100] flex flex-col bg-black/95 backdrop-blur-xl animate-in fade-in duration-300">
-                    <div className="p-4 md:p-8 flex justify-between items-center">
-                        <span className="text-white/60 font-bold text-xs uppercase tracking-widest">{villa.villa_name} Gallery — {activePhotoIndex + 1} / {photos.length}</span>
-                        <button onClick={() => setShowPhotoModal(false)} className="size-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 transition-all">
-                            <span className="material-symbols-outlined">close</span>
+                <div className="fixed inset-0 z-[100] flex flex-col bg-black/98 backdrop-blur-2xl animate-in fade-in duration-300 select-none">
+                    {/* Top Bar */}
+                    <div className="p-4 md:p-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/50 to-transparent">
+                        <div className="flex flex-col">
+                            <span className="text-text-primary font-bold text-sm tracking-tight">{villa.villa_name}</span>
+                            <span className="text-text-primary/40 text-[10px] font-black uppercase tracking-[0.2em]">{activePhotoIndex + 1} / {photos.length}</span>
+                        </div>
+                        <button 
+                            onClick={() => setShowPhotoModal(false)} 
+                            className="size-10 md:size-12 rounded-full bg-surface-2 border border-border flex items-center justify-center text-text-primary hover:bg-primary/20 transition-all hover:scale-110 active:scale-95 shadow-xl"
+                        >
+                            <span className="material-symbols-outlined notranslate">close</span>
                         </button>
                     </div>
-                    <div className="flex-1 relative flex items-center justify-center p-4">
+
+                    {/* Main Viewport */}
+                    <div className="flex-1 relative flex items-center justify-center p-2 md:p-6 overflow-hidden">
+                        {/* Navigation Arrows */}
                         <button 
-                            className="absolute left-4 md:left-8 size-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 disabled:opacity-20"
+                            className="absolute left-4 md:left-8 z-20 size-12 md:size-16 rounded-full bg-surface-2 border border-border flex items-center justify-center text-text-primary hover:bg-white/20 disabled:opacity-0 transition-all hover:scale-110 active:scale-90 shadow-2xl backdrop-blur-md"
                             disabled={activePhotoIndex === 0}
-                            onClick={() => setActivePhotoIndex(p => p - 1)}
+                            onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(p => p - 1); }}
                         >
-                            <span className="material-symbols-outlined text-3xl">chevron_left</span>
+                            <span className="material-symbols-outlined notranslate text-2xl md:text-4xl">chevron_left</span>
                         </button>
-                        
-                        <img 
-                            src={photos[activePhotoIndex]?.url} 
-                            className="max-w-full max-h-full object-contain rounded-lg shadow-2xl animate-in fade-in zoom-in duration-500" 
-                            alt="" 
-                        />
+
+                        <div className="w-full h-full flex items-center justify-center pointer-events-none">
+                            <img 
+                                key={activePhotoIndex}
+                                src={photos[activePhotoIndex]?.url} 
+                                className="max-w-full max-h-full object-contain rounded-sm shadow-[0_0_100px_rgba(0,0,0,1)] animate-in fade-in zoom-in-95 duration-500 pointer-events-auto" 
+                                alt="" 
+                            />
+                        </div>
 
                         <button 
-                            className="absolute right-4 md:right-8 size-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 disabled:opacity-20"
+                            className="absolute right-4 md:right-8 z-20 size-12 md:size-16 rounded-full bg-surface-2 border border-border flex items-center justify-center text-text-primary hover:bg-white/20 disabled:opacity-0 transition-all hover:scale-110 active:scale-90 shadow-2xl backdrop-blur-md"
                             disabled={activePhotoIndex === photos.length - 1}
-                            onClick={() => setActivePhotoIndex(p => p + 1)}
+                            onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(p => p + 1); }}
                         >
-                            <span className="material-symbols-outlined text-3xl">chevron_right</span>
+                            <span className="material-symbols-outlined notranslate text-2xl md:text-4xl">chevron_right</span>
                         </button>
                     </div>
-                    <div className="p-4 md:p-8 flex gap-2 overflow-x-auto pb-6 scrollbar-hide">
-                        {photos.map((ph, idx) => (
-                            <div 
-                                key={idx} 
-                                className={`size-20 flex-shrink-0 rounded-xl overflow-hidden cursor-pointer transition-all ${activePhotoIndex === idx ? 'ring-2 ring-primary ring-offset-4 ring-offset-black scale-110' : 'opacity-40 hover:opacity-100'}`}
-                                onClick={() => setActivePhotoIndex(idx)}
-                            >
-                                <img src={ph.thumbnail_url || ph.url} className="w-full h-full object-cover" alt="" />
-                            </div>
-                        ))}
+
+                    {/* Thumbnails Strip */}
+                    <div className="p-4 md:p-8 flex gap-3 overflow-x-auto pb-6 scrollbar-hide justify-center items-center bg-gradient-to-t from-black/50 to-transparent">
+                        <div className="flex gap-2 mx-auto">
+                            {photos.map((ph, idx) => (
+                                <div 
+                                    key={idx} 
+                                    className={"size-14 md:size-20 flex-shrink-0 rounded-lg overflow-hidden cursor-pointer transition-all duration-300 " + (activePhotoIndex === idx ? 'ring-2 ring-primary ring-offset-4 ring-offset-black scale-105 opacity-100 shadow-lg shadow-primary/20' : 'opacity-30 hover:opacity-100 grayscale-[50%] hover:grayscale-0')}
+                                    onClick={() => setActivePhotoIndex(idx)}
+                                >
+                                    <img src={ph.thumbnail_url || ph.url} className="w-full h-full object-cover" alt="" />
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
             )}
@@ -412,40 +727,67 @@ export default function VillaView() {
                     {/* Overview Chips */}
                     <div className="flex flex-wrap gap-4 py-2">
                         <div className="glass-card flex items-center gap-3 px-5 py-3 border-primary/20 bg-primary/2">
-                            <span className="material-symbols-outlined text-primary">bed</span>
-                            <div><p className="text-xs text-slate-500 leading-tight">Bedrooms</p><p className="font-bold text-white">{villa.bedrooms}</p></div>
+                            <span className="material-symbols-outlined notranslate text-primary">bed</span>
+                            <div><p className="text-xs text-text-muted leading-tight">Bedrooms</p><p className="font-bold text-text-primary">{villa.bedrooms}</p></div>
                         </div>
                         <div className="glass-card flex items-center gap-3 px-5 py-3 border-primary/20 bg-primary/2">
-                            <span className="material-symbols-outlined text-primary">shower</span>
-                            <div><p className="text-xs text-slate-500 leading-tight">Bathrooms</p><p className="font-bold text-white">{villa.bathrooms}</p></div>
+                            <span className="material-symbols-outlined notranslate text-primary">shower</span>
+                            <div><p className="text-xs text-text-muted leading-tight">Bathrooms</p><p className="font-bold text-text-primary">{villa.bathrooms}</p></div>
                         </div>
                         <div className="glass-card flex items-center gap-3 px-5 py-3 border-primary/20 bg-primary/2">
-                            <span className="material-symbols-outlined text-primary">groups</span>
-                            <div><p className="text-xs text-slate-500 leading-tight">Sleeps</p><p className="font-bold text-white">{villa.sleeps}</p></div>
+                            <span className="material-symbols-outlined notranslate text-primary">groups</span>
+                            <div><p className="text-xs text-text-muted leading-tight">Sleeps</p><p className="font-bold text-text-primary">{villa.sleeps}</p></div>
                         </div>
                     </div>
 
                     {/* Description */}
                     <div className="glass-card p-6 md:p-8">
-                        <h2 className="text-xl font-bold text-white mb-4">About this Villa</h2>
-                        <div className="text-slate-400 text-sm leading-relaxed space-y-4 whitespace-pre-line">
+                        <h2 className="text-xl font-bold text-text-primary mb-4">About this Villa</h2>
+                        <div className="text-text-muted text-sm leading-relaxed space-y-4 whitespace-pre-line">
                             {villa.description || 'No description available for this property.'}
                         </div>
                     </div>
+
+                    {/* Map / Location Section */}
+                    {villa.gps && (
+                        <div className="glass-card p-6 md:p-8">
+                            <h2 className="text-xl font-bold text-text-primary mb-6 flex items-center gap-2">
+                                <span className="material-symbols-outlined notranslate text-primary text-[24px]">map</span>
+                                Indicative Location
+                            </h2>
+                            <div className="rounded-2xl overflow-hidden h-[400px] border border-border relative group">
+                                <div className="absolute inset-0 bg-primary/5 pointer-events-none group-hover:bg-transparent transition-colors z-10"></div>
+                                <VillaMap 
+                                    locations={[{ 
+                                        gps: villa.gps, 
+                                        name: villa.villa_name 
+                                    }]} 
+                                    radius={2000}
+                                />
+                            </div>
+                            <div className="mt-4 flex items-start gap-3 p-4 bg-background/50 rounded-xl border border-border">
+                                <span className="material-symbols-outlined notranslate text-amber-500/80">info</span>
+                                <p className="text-xs text-text-muted italic leading-relaxed">
+                                    For security and privacy reasons, this map shows the general area of the property. 
+                                    The exact address and GPS coordinates will be shared with you once the booking is confirmed.
+                                </p>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Calendar / Availability */}
                     <div className="glass-card p-6 md:p-8">
                         <div className="flex items-center justify-between mb-8">
                             <div>
-                                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                                    <span className="material-symbols-outlined text-primary text-[24px]">calendar_today</span>
+                                <h2 className="text-xl font-bold text-text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined notranslate text-primary text-[24px]">calendar_today</span>
                                     Availability & Prices
                                 </h2>
-                                <p className="text-xs text-slate-500 mt-1">Select dates to calculate a quote</p>
+                                <p className="text-xs text-text-muted mt-1">Select dates to calculate a quote</p>
                             </div>
                             <div className="flex gap-4">
-                                <div className="flex items-center gap-2"><div className="size-3 rounded-full bg-red-500/80"></div><span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Booked</span></div>
-                                <div className="flex items-center gap-2"><div className="size-3 rounded-full bg-surface-dark border border-border-dark"></div><span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Available</span></div>
+                                <div className="flex items-center gap-2"><div className="size-3 rounded-full bg-red-500/80"></div><span className="text-[10px] text-text-muted uppercase font-bold tracking-widest">Booked</span></div>
+                                <div className="flex items-center gap-2"><div className="size-3 rounded-full bg-surface border border-border"></div><span className="text-[10px] text-text-muted uppercase font-bold tracking-widest">Available</span></div>
                             </div>
                         </div>
 
@@ -461,17 +803,21 @@ export default function VillaView() {
                                 
                                 return (
                                     <div key={monthName}>
-                                        <h3 className="text-sm font-bold text-slate-300 mb-4 capitalize tracking-wide">{monthName}</h3>
+                                        <h3 className="text-sm font-bold text-text-secondary mb-4 capitalize tracking-wide">{monthName}</h3>
                                         <div className="grid grid-cols-7 gap-1 md:gap-2">
                                             {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => (
-                                                <div key={d} className="text-center text-[10px] text-slate-600 font-bold mb-1">{d}</div>
+                                                <div key={d} className="text-center text-[10px] text-text-muted font-bold mb-1">{d}</div>
                                             ))}
                                             {[...Array(firstDay)].map((_, i) => <div key={i} />)}
                                             {[...Array(daysInMonth)].map((_, i) => {
                                                 const d = i + 1;
                                                 const dStr = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                                                const isBlocked = blockedDates.includes(dStr);
-                                                const price = getPriceForDate(dStr);
+                                                const today = new Date();
+                                                today.setHours(0,0,0,0);
+                                                const isPast = new Date(dStr) < today;
+                                                const isIllegalDay = villa.allowed_checkin_days === 'Strictly Saturday-Saturday' && !getIsSat(dStr);
+                                                const isBlocked = blockedDates.includes(dStr) || isPast;
+                                                const price = getPriceForDate(dStr, true);
                                                 
                                                 const isSelected = dStr === selectionStart || dStr === selectionEnd || 
                                                     (selectionStart && selectionEnd && new Date(dStr) >= new Date(selectionStart) && new Date(dStr) <= new Date(selectionEnd));
@@ -482,13 +828,17 @@ export default function VillaView() {
                                                         onClick={() => handleDateClick(dStr, isBlocked)}
                                                         className={`
                                                             relative aspect-square flex flex-col items-center justify-center rounded-xl transition-all cursor-pointer group
-                                                            ${isBlocked ? 'bg-red-500/10 border-red-500/20 grayscale opacity-60 cursor-not-allowed' : 'bg-surface-dark border border-border-dark hover:border-primary/50'}
-                                                            ${isSelected ? 'bg-primary border-primary ring-2 ring-primary/20 ring-offset-2 ring-offset-background-dark scale-105 z-10' : ''}
+                                                            ${isBlocked ? 'bg-red-500/10 border-red-500/20 grayscale opacity-60 cursor-not-allowed' : 'bg-surface border border-border hover:border-primary/50'}
+                                                            ${isSelected ? 'bg-primary border-primary ring-2 ring-primary/20 ring-offset-2 ring-offset-background scale-105 z-10' : ''}
+                                                            ${(isIllegalDay && !isSelected && !isBlocked) ? 'opacity-30' : ''}
+                                                            ${isPast ? 'opacity-20 cursor-not-allowed border-none bg-transparent' : ''}
                                                         `}
                                                     >
-                                                        <span className={`text-[11px] font-bold ${isSelected ? 'text-background-dark' : 'text-slate-400'}`}>{d}</span>
-                                                        <span className={`text-[8px] font-medium mt-0.5 ${isSelected ? 'text-background-dark/80' : 'text-slate-600'}`}>€{price}</span>
-                                                        {isBlocked && (
+                                                        <span className={`text-sm font-bold ${isSelected ? 'text-[#0f1117]' : (isIllegalDay ? 'text-text-muted' : 'text-text-primary')} ${isPast ? 'text-text-muted/30' : ''}`}>{d}</span>
+                                                        {!isPast && (
+                                                            <span className={`text-[10px] font-bold mt-0.5 ${isSelected ? 'text-[#0f1117]/80' : (isIllegalDay ? 'text-text-muted/50' : 'text-primary')}`}>€{price}</span>
+                                                        )}
+                                                        {isBlocked && !isPast && (
                                                             <div className="absolute inset-0 flex items-center justify-center">
                                                                 <div className="w-[80%] h-[1px] bg-red-500/30 rotate-45"></div>
                                                             </div>
@@ -505,44 +855,61 @@ export default function VillaView() {
 
                     {/* Villa Rules Section */}
                     <div className="glass-card p-6 md:p-8">
-                        <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                            <span className="material-symbols-outlined text-primary text-[24px]">gavel</span>
+                        <h2 className="text-xl font-bold text-text-primary mb-6 flex items-center gap-2">
+                            <span className="material-symbols-outlined notranslate text-primary text-[24px]">gavel</span>
                             Villa Rules & Information
                         </h2>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                             <div className="space-y-4">
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">General Rules</h3>
-                                <div className="text-sm text-slate-300 whitespace-pre-line leading-relaxed">
+                                <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">General Rules</h3>
+                                <div className="text-sm text-text-secondary whitespace-pre-line leading-relaxed">
                                     {villa.house_rules || 'Standard luxury rental rules apply. No parties, no loud music after 11 PM, and treat the property with respect.'}
                                 </div>
                             </div>
-                            <div className="bg-background-dark/40 rounded-2xl p-6 border border-border-dark space-y-4">
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Stay Policy</h3>
+                            <div className="bg-background/40 rounded-2xl p-6 border border-border space-y-4">
+                                <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Stay Policy</h3>
                                 <div className="space-y-3">
                                     <div className="flex justify-between text-xs">
-                                        <span className="text-slate-500">Allow Short Stays</span>
-                                        <span className="text-slate-200 font-bold capitalize">{villa.allow_shortstays || 'no'}</span>
+                                        <span className="text-text-muted">Short Stays Accepted</span>
+                                        <span className={`font-bold ${(villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes') ? 'text-primary' : 'text-text-primary'}`}>
+                                            {(villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes') ? 'Yes (with premium)' : 'No'}
+                                        </span>
                                     </div>
                                     <div className="flex justify-between text-xs">
-                                        <span className="text-slate-500">Security Deposit</span>
-                                        <span className="text-slate-200 font-bold">€{parseFloat(villa.deposit || villa.security_deposit || 0).toLocaleString()}</span>
+                                        <span className="text-text-muted">Security Deposit</span>
+                                        <span className="text-text-primary font-bold">€{parseFloat(villa.deposit || villa.security_deposit || 0).toLocaleString()}</span>
                                     </div>
                                     <div className="flex justify-between text-xs">
-                                        <span className="text-slate-500">Cleaning Charge</span>
-                                        <span className="text-slate-200 font-bold">€{parseFloat(villa.cleaning_charge || 0).toLocaleString()}</span>
+                                        <span className="text-text-muted">Cleaning Charge</span>
+                                        <span className="text-text-primary font-bold">€{parseFloat(villa.cleaning_charge || 0).toLocaleString()}</span>
                                     </div>
                                     <div className="flex justify-between text-xs">
-                                        <span className="text-slate-500">Smoking Allowed</span>
-                                        <span className="text-slate-200 font-bold">No</span>
+                                        <span className="text-text-muted">Check-in / Check-out</span>
+                                        <span className="text-text-primary font-bold">{villa.allowed_checkin_days || 'Flexible'}</span>
                                     </div>
-                                    <div className="flex justify-between text-xs">
-                                        <span className="text-slate-500">Pets Allowed</span>
-                                        <span className="text-slate-200 font-bold">Check with owner</span>
-                                    </div>
+                                </div>
+                                <div className="mt-6 pt-6 border-t border-border/50">
+                                    <h4 className="text-[10px] font-black text-text-muted uppercase tracking-[0.2em] mb-3">Special Stay Rules</h4>
+                                    <ul className="space-y-2">
+                                        <li className="flex items-start gap-2 text-[11px] text-text-secondary leading-relaxed">
+                                            <span className="material-symbols-outlined notranslate text-[14px] text-primary mt-0.5">info</span>
+                                            Stays of 28+ nights automatically bypass minimum stay requirements.
+                                        </li>
+                                        <li className="flex items-start gap-2 text-[11px] text-text-secondary leading-relaxed">
+                                            <span className="material-symbols-outlined notranslate text-[14px] text-primary mt-0.5">bolt</span>
+                                            Last-minute bookings (within 7 days) only require 3 nights minimum.
+                                        </li>
+                                        <li className="flex items-start gap-2 text-[11px] text-text-secondary leading-relaxed">
+                                            <span className="material-symbols-outlined notranslate text-[14px] text-primary mt-0.5">rebase</span>
+                                            Short stays (3-6 nights) are subject to a premium and a €3,500 minimum budget.
+                                        </li>
+                                    </ul>
                                 </div>
                             </div>
                         </div>
                     </div>
+
+
                 </div>
 
                 {/* RIGHT: Booking Sidebar */}
@@ -552,24 +919,33 @@ export default function VillaView() {
                         <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
                         
                         <div className="relative">
-                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Weekly From</p>
+                            <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mb-1">Weekly From</p>
                             <div className="flex items-baseline gap-2 mb-6">
-                                <span className="text-4xl font-extrabold text-white">€{parseFloat(villa.minimum_price || 0).toLocaleString()}</span>
-                                <span className="text-slate-500 text-sm">/ week</span>
+                                <span className="text-4xl font-extrabold text-text-primary">
+                                    €{Math.round(
+                                        parseFloat(villa.minimum_price || 0) * (1 + ((role !== 'admin' && agentDetails?.admin_margin > 0) ? agentDetails.admin_margin : globalMargins.invenioToAdmin) / 100)
+                                    ).toLocaleString()}
+                                </span>
+                                <span className="text-text-muted text-sm">/ week</span>
                             </div>
 
                             <div className="space-y-3 mb-8">
                                 <div className="flex justify-between text-xs">
-                                    <span className="text-slate-400">Security Deposit</span>
-                                    <span className="text-slate-200 font-bold">€{parseFloat(villa.deposit || 0).toLocaleString()}</span>
+                                    <span className="text-text-muted">Security Deposit</span>
+                                    <span className="text-text-primary font-bold">€{parseFloat(villa.deposit || 0).toLocaleString()}</span>
+                                </div>
+                                 <div className="flex justify-between text-xs">
+                                    <span className="text-text-muted">Minimum Stay</span>
+                                    <span className="text-text-primary font-bold">
+                                        {selectionStart 
+                                            ? `${getRuleForDate(selectionStart).minimum_nights} nights` 
+                                            : `${villa.minimum_nights || 7} nights`
+                                        }
+                                    </span>
                                 </div>
                                 <div className="flex justify-between text-xs">
-                                    <span className="text-slate-400">Minimum Stay</span>
-                                    <span className="text-slate-200 font-bold">7 nights</span>
-                                </div>
-                                <div className="flex justify-between text-xs">
-                                    <span className="text-slate-400">Location</span>
-                                    <span className="text-slate-200 font-bold">{villa.district || villa.areaname || 'Ibiza'}</span>
+                                    <span className="text-text-muted">Location</span>
+                                    <span className="text-text-primary font-bold">{villa.district || villa.areaname || 'Ibiza'}</span>
                                 </div>
                             </div>
 
@@ -578,11 +954,11 @@ export default function VillaView() {
                                     <p className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${bookingStatus.valid ? 'text-primary' : 'text-red-400'}`}>
                                         {bookingStatus.valid ? 'Selected Period' : 'Booking Rule Violation'}
                                     </p>
-                                    <div className="flex items-center justify-between font-bold text-white text-sm">
+                                    <div className="flex items-center justify-between font-bold text-text-primary text-sm">
                                         <span>{new Date(selectionStart).toLocaleDateString()}</span>
                                         {selectionEnd && (
                                             <>
-                                                <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                                                <span className="material-symbols-outlined notranslate text-[14px]">arrow_forward</span>
                                                 <span>{new Date(selectionEnd).toLocaleDateString()}</span>
                                             </>
                                         )}
@@ -590,7 +966,7 @@ export default function VillaView() {
                                     {!bookingStatus.valid && selectionEnd && (
                                         <div className="mt-4 p-4 rounded-xl bg-red-500/20 border border-red-500/30 space-y-2 animate-in shake duration-500">
                                             <p className="text-xs font-black text-red-400 uppercase tracking-widest flex items-center gap-2">
-                                                <span className="material-symbols-outlined text-sm">warning</span>
+                                                <span className="material-symbols-outlined notranslate text-sm">warning</span>
                                                 Invalid Selection
                                             </p>
                                             {bookingStatus.errors.map((err, idx) => (
@@ -602,7 +978,7 @@ export default function VillaView() {
                                     )}
                                     {selectionEnd && bookingStatus.valid && (
                                         <div className="mt-4 pt-4 border-t border-primary/20 flex justify-between items-baseline animate-in fade-in slide-in-from-bottom-2">
-                                            <span className="text-xs text-slate-400 font-bold uppercase tracking-widest">Estimated Total</span>
+                                            <span className="text-xs text-text-muted font-bold uppercase tracking-widest">Estimated Total</span>
                                             <span className="text-2xl font-black text-primary">€{calculateQuoteTotal().toLocaleString()}</span>
                                         </div>
                                     )}
@@ -621,8 +997,8 @@ export default function VillaView() {
                                     <p className="text-[10px] text-red-500/70 font-bold uppercase tracking-widest">Selected dates violate villa rules</p>
                                 </div>
                             ) : (
-                                <div className="text-center p-4 rounded-xl border border-dashed border-border-dark">
-                                    <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest">Select dates on calendar</p>
+                                <div className="text-center p-4 rounded-xl border border-dashed border-border">
+                                    <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Select dates on calendar</p>
                                 </div>
                             )}
                         </div>
@@ -630,16 +1006,16 @@ export default function VillaView() {
 
                     {/* Features Card */}
                     <div className="glass-card p-6">
-                        <h3 className="text-sm font-bold text-white mb-4">Highlights</h3>
+                        <h3 className="text-sm font-bold text-text-primary mb-4">Highlights</h3>
                         <div className="grid grid-cols-1 gap-3">
                             {(Array.isArray(villa.features) ? villa.features : []).map(f => (
-                                <div key={f} className="flex items-center gap-3 text-xs text-slate-400">
-                                    <span className="material-symbols-outlined text-primary/60 text-[18px]">check_circle</span>
+                                <div key={f} className="flex items-center gap-3 text-xs text-text-muted">
+                                    <span className="material-symbols-outlined notranslate text-primary/60 text-[18px]">check_circle</span>
                                     {f}
                                 </div>
                             ))}
                             {(!villa.features || villa.features.length === 0) && (
-                                <p className="text-xs text-slate-500 italic">No specific features listed</p>
+                                <p className="text-xs text-text-muted italic">No specific features listed</p>
                             )}
                         </div>
                     </div>
@@ -649,29 +1025,29 @@ export default function VillaView() {
             {/* Quote Modal */}
             {showQuoteModal && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-                    <div className="bg-surface-dark border border-border-dark rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div className="p-8 border-b border-border-dark">
+                    <div className="bg-surface border border-border rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="p-8 border-b border-border">
                             <div className="flex justify-between items-start mb-2">
-                                <h2 className="text-2xl font-bold text-white">New Quote</h2>
-                                <button onClick={() => setShowQuoteModal(false)} className="text-slate-500 hover:text-white transition-colors">
-                                    <span className="material-symbols-outlined">close</span>
+                                <h2 className="text-2xl font-bold text-text-primary">New Quote</h2>
+                                <button onClick={resetQuoteModal} className="text-text-muted hover:text-text-primary transition-colors">
+                                    <span className="material-symbols-outlined notranslate">close</span>
                                 </button>
                             </div>
-                            <p className="text-slate-500 text-xs">Confirm dates and select a client for <span className="text-primary font-bold">{villa.villa_name}</span></p>
+                            <p className="text-text-muted text-xs">Confirm dates and select a client for <span className="text-primary font-bold">{villa.villa_name}</span></p>
                         </div>
 
                         <div className="p-6 md:p-8 space-y-6 max-h-[70vh] overflow-y-auto">
                             {createdQuoteId ? (
                                 <div className="text-center space-y-6 py-4 animate-in fade-in zoom-in">
                                     <div className="size-20 bg-green-500/10 rounded-full flex items-center justify-center mx-auto border border-green-500/20">
-                                        <span className="material-symbols-outlined text-green-500 text-4xl">check_circle</span>
+                                        <span className="material-symbols-outlined notranslate text-green-500 text-4xl">check_circle</span>
                                     </div>
                                     <div>
-                                        <h3 className="text-xl font-bold text-white mb-2">Quote Created!</h3>
-                                        <p className="text-slate-400 text-sm">The proposal is ready. You can now share this private link with your client.</p>
+                                        <h3 className="text-xl font-bold text-text-primary mb-2">Quote Created!</h3>
+                                        <p className="text-text-muted text-sm">The proposal is ready. You can now share this private link with your client.</p>
                                     </div>
                                     
-                                    <div className="bg-background-dark/50 p-4 rounded-2xl border border-border-dark flex items-center gap-3">
+                                    <div className="bg-background/50 p-4 rounded-2xl border border-border flex items-center gap-3">
                                         <input 
                                             readOnly 
                                             value={`${window.location.origin}/quote/${createdQuoteId}`}
@@ -684,71 +1060,84 @@ export default function VillaView() {
                                             }}
                                             className="btn-primary px-4 py-2 text-[10px] uppercase font-bold"
                                         >
-                                            Copy
+                                            Copy Link
                                         </button>
                                     </div>
+
+                                    {villa.owner_id && (
+                                        <div className="pt-4 border-t border-border/50">
+                                            <button 
+                                                onClick={handleRequestApproval}
+                                                disabled={savingQuote}
+                                                className="w-full py-4 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 rounded-2xl font-black uppercase tracking-widest text-[11px] transition-all flex items-center justify-center gap-2"
+                                            >
+                                                <span className="material-symbols-outlined notranslate text-[18px]">hourglass_top</span>
+                                                {savingQuote ? 'Requesting...' : 'Request Owner Approval'}
+                                            </button>
+                                            <p className="text-[9px] text-text-muted mt-2 uppercase font-bold tracking-widest">The owner will receive a notification to approve or decline this stay.</p>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 <>
                                     {/* Selected Info Summary */}
                                     <div className="grid grid-cols-2 gap-4">
-                                        <div className="bg-background-dark/50 p-4 rounded-2xl border border-border-dark">
-                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Check-in</p>
-                                            <p className="text-sm font-bold text-white">{new Date(selectionStart).toLocaleDateString('en-GB')}</p>
+                                        <div className="bg-background/50 p-4 rounded-2xl border border-border">
+                                            <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mb-1">Check-in</p>
+                                            <p className="text-sm font-bold text-text-primary">{new Date(selectionStart).toLocaleDateString('en-GB')}</p>
                                         </div>
-                                        <div className="bg-background-dark/50 p-4 rounded-2xl border border-border-dark">
-                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Check-out</p>
-                                            <p className="text-sm font-bold text-white">{new Date(selectionEnd).toLocaleDateString('en-GB')}</p>
+                                        <div className="bg-background/50 p-4 rounded-2xl border border-border">
+                                            <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mb-1">Check-out</p>
+                                            <p className="text-sm font-bold text-text-primary">{new Date(selectionEnd).toLocaleDateString('en-GB')}</p>
                                         </div>
                                     </div>
                                     
                                     <div className="flex justify-between items-center p-4 rounded-2xl bg-primary/5 border border-primary/20">
-                                        <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Price</span>
+                                        <div className="flex flex-col">
+                                            <span className="text-xs font-bold text-text-muted uppercase tracking-widest">Total Quote Price</span>
+                                            <label className="flex items-center gap-2 mt-2 cursor-pointer group">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="accent-primary size-3" 
+                                                    checked={useStripeFee}
+                                                    onChange={e => setUseStripeFee(e.target.checked)}
+                                                />
+                                                <span className="text-[10px] text-text-muted font-bold uppercase group-hover:text-primary transition-colors">Add Stripe Fee (1.5%)</span>
+                                            </label>
+                                        </div>
                                         <div className="text-right">
                                             <span className="text-2xl font-black text-primary block">€{calculateQuoteTotal().toLocaleString()}</span>
-                                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter italic">Includes your {agentMarkup}% margin</span>
+                                            <div className="flex items-center justify-end gap-2 mt-1">
+                                                <span className="text-[10px] text-green-500 font-black uppercase bg-green-500/10 px-2 py-0.5 rounded">
+                                                    Your Profit: €{getQuoteBreakdown().profit.toLocaleString()}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    {/* Markup Override */}
-                                    <div className="space-y-3">
-                                        <div className="flex justify-between items-center">
-                                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Custom Margin (%)</label>
-                                            <div className="relative w-24">
-                                                <input 
-                                                    type="number"
-                                                    value={agentMarkup}
-                                                    onChange={e => setAgentMarkup(e.target.value)}
-                                                    className="w-full bg-background-dark border border-white/10 rounded-xl px-3 py-2 text-right text-primary font-bold outline-none focus:border-primary/40"
-                                                />
-                                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-primary/30 font-bold pointer-events-none">%</span>
-                                            </div>
-                                        </div>
-                                        <p className="text-[10px] text-slate-600 font-medium italic leading-tight">You can override your default brand margin for this specific quote only.</p>
-                                    </div>
 
                                     {/* Extra Services */}
                                     <div className="space-y-4">
                                         <div className="flex items-center justify-between">
-                                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Extra Services</label>
+                                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest">Extra Services</label>
                                             <button 
                                                 onClick={addService}
                                                 className="text-[10px] font-bold text-primary uppercase hover:underline flex items-center gap-1"
                                             >
-                                                <span className="material-symbols-outlined text-sm">add</span> Add Service
+                                                <span className="material-symbols-outlined notranslate text-sm">add</span> Add Service
                                             </button>
                                         </div>
                                         <div className="space-y-2">
                                             {extraServices.map((s, idx) => (
-                                                <div key={idx} className="flex gap-2 items-center bg-background-dark/50 p-2 rounded-xl border border-border-dark animate-in slide-in-from-right-2">
+                                                <div key={idx} className="flex gap-2 items-center bg-background/50 p-2 rounded-xl border border-border animate-in slide-in-from-right-2">
                                                     <input 
                                                         placeholder="Service name"
-                                                        className="flex-1 bg-transparent border-none text-[11px] text-slate-200 outline-none"
+                                                        className="flex-1 bg-transparent border-none text-[11px] text-text-primary outline-none"
                                                         value={s.name}
                                                         onChange={e => updateService(idx, 'name', e.target.value)}
                                                     />
                                                     <div className="relative w-20">
-                                                        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[10px] text-slate-600">€</span>
+                                                        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">€</span>
                                                         <input 
                                                             type="number"
                                                             placeholder="0"
@@ -757,19 +1146,19 @@ export default function VillaView() {
                                                             onChange={e => updateService(idx, 'price', e.target.value)}
                                                         />
                                                     </div>
-                                                    <button onClick={() => removeService(idx)} className="text-slate-600 hover:text-red-400 p-1">
-                                                        <span className="material-symbols-outlined text-sm">delete</span>
+                                                    <button onClick={() => removeService(idx)} className="text-text-muted hover:text-red-400 p-1">
+                                                        <span className="material-symbols-outlined notranslate text-sm">delete</span>
                                                     </button>
                                                 </div>
                                             ))}
-                                            {extraServices.length === 0 && <p className="text-[10px] text-slate-600 italic">No extra services added.</p>}
+                                            {extraServices.length === 0 && <p className="text-[10px] text-text-muted italic">No extra services added.</p>}
                                         </div>
                                     </div>
 
                                     {/* Manual Price Override */}
-                                    <div className="space-y-3 pt-2 border-t border-border-dark">
+                                    <div className="space-y-3 pt-2 border-t border-border">
                                         <div className="flex justify-between items-center">
-                                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Manual Price Override</label>
+                                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest">Manual Price Override</label>
                                             <label className="flex items-center gap-2 cursor-pointer group">
                                                 <input 
                                                     type="checkbox" 
@@ -790,47 +1179,86 @@ export default function VillaView() {
                                                 />
                                             </div>
                                         )}
-                                        <p className="text-[10px] text-slate-600 font-medium italic leading-tight">
+                                        <p className="text-[10px] text-text-muted font-medium italic leading-tight">
                                             {isManualPrice ? 'Warning: Automatic calculations are suspended.' : 'Using automatic calculation based on selection and margin.'}
                                         </p>
                                     </div>
 
                                     {/* Client Search/Select */}
-                                    <div>
-                                        <label className="block text-xs text-slate-500 font-bold uppercase tracking-widest mb-3">Select Client</label>
-                                        <div className="space-y-3">
-                                            <div className="relative">
-                                                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-[18px]">search</span>
-                                                <input 
-                                                    className="input-dark w-full pl-10" 
-                                                    placeholder="Search client name..." 
-                                                    value={clientSearch}
-                                                    onChange={e => setClientSearch(e.target.value)}
-                                                />
-                                            </div>
-                                            <select 
-                                                className="input-dark w-full py-3"
-                                                size={5}
-                                                value={selectedClientId}
-                                                onChange={e => setSelectedClientId(e.target.value)}
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-xs text-text-muted font-bold uppercase tracking-widest">Select Client</label>
+                                            <button 
+                                                onClick={() => setShowNewClientForm(!showNewClientForm)}
+                                                className={`text-[10px] font-black uppercase px-2 py-1 rounded transition-colors ${showNewClientForm ? 'bg-red-500/20 text-red-400' : 'bg-primary/20 text-primary'}`}
                                             >
-                                                <option value="" disabled>Choose a client...</option>
-                                                {clients
-                                                    .filter(c => !clientSearch || c.full_name?.toLowerCase().includes(clientSearch.toLowerCase()))
-                                                    .map(c => (
-                                                    <option key={c.id} value={c.id} className="p-2 border-b border-white/5 last:border-0">{c.full_name}</option>
-                                                ))}
-                                            </select>
+                                                {showNewClientForm ? 'Cancel New' : '+ New Client'}
+                                            </button>
                                         </div>
+                                        
+                                        {showNewClientForm ? (
+                                            <div className="p-4 bg-surface-2 border border-border rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2">
+                                                <input 
+                                                    className="input-theme w-full" 
+                                                    placeholder="Full Name *" 
+                                                    value={newClient.full_name}
+                                                    onChange={e => setNewClient(p => ({ ...p, full_name: e.target.value }))}
+                                                />
+                                                <input 
+                                                    className="input-theme w-full" 
+                                                    placeholder="Email Address" 
+                                                    value={newClient.email}
+                                                    onChange={e => setNewClient(p => ({ ...p, email: e.target.value }))}
+                                                />
+                                                <input 
+                                                    className="input-theme w-full" 
+                                                    placeholder="Phone Number" 
+                                                    value={newClient.phone_number}
+                                                    onChange={e => setNewClient(p => ({ ...p, phone_number: e.target.value }))}
+                                                />
+                                                <button 
+                                                    onClick={handleQuickCreateClient}
+                                                    disabled={creatingClient || !newClient.full_name}
+                                                    className="w-full btn-primary py-2 text-xs font-bold disabled:opacity-50"
+                                                >
+                                                    {creatingClient ? 'Creating...' : 'Create & Select Client'}
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <div className="relative">
+                                                    <span className="material-symbols-outlined notranslate absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-[18px]">search</span>
+                                                    <input 
+                                                        className="input-theme w-full pl-10" 
+                                                        placeholder="Search client name..." 
+                                                        value={clientSearch}
+                                                        onChange={e => setClientSearch(e.target.value)}
+                                                    />
+                                                </div>
+                                                <select 
+                                                    className="input-theme w-full py-3"
+                                                    size={4}
+                                                    value={selectedClientId}
+                                                    onChange={e => setSelectedClientId(e.target.value)}
+                                                >
+                                                    <option value="" disabled>Choose a client...</option>
+                                                    {clients
+                                                        .filter(c => !clientSearch || c.full_name?.toLowerCase().includes(clientSearch.toLowerCase()))
+                                                        .map(c => (
+                                                        <option key={c.id} value={c.id} className="p-2 border-b border-border last:border-0">{c.full_name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
                                     </div>
                                 </>
                             )}
                         </div>
 
-                        <div className="p-6 md:p-8 bg-background-dark/30 border-t border-border-dark flex flex-col md:flex-row gap-4">
+                        <div className="p-6 md:p-8 bg-background/30 border-t border-border flex flex-col md:flex-row gap-4">
                             {createdQuoteId ? (
                                 <button 
-                                    onClick={() => { setShowQuoteModal(false); setCreatedQuoteId(null); navigate('/quotes'); }}
+                                    onClick={() => { resetQuoteModal(); navigate('/quotes'); }}
                                     className="flex-1 btn-primary py-4 font-bold shadow-lg shadow-primary/20"
                                 >
                                     Close & View All Quotes
@@ -838,14 +1266,14 @@ export default function VillaView() {
                             ) : (
                                 <>
                                     <button 
-                                        onClick={() => setShowQuoteModal(false)}
-                                        className="flex-1 py-4 rounded-2xl border border-border-dark text-slate-400 font-bold hover:bg-white/5 transition-all"
+                                        onClick={resetQuoteModal}
+                                        className="flex-1 py-4 rounded-2xl border border-border text-text-muted font-bold hover:bg-surface-2 transition-all"
                                     >
                                         Cancel
                                     </button>
                                     <button 
                                         onClick={handleCreateQuote}
-                                        disabled={!selectedClientId || savingQuote}
+                                        disabled={!selectedClientId || savingQuote || !bookingStatus.valid}
                                         className="flex-[2] btn-primary py-4 font-bold shadow-lg shadow-primary/20 disabled:opacity-40"
                                     >
                                         {savingQuote ? 'Creating...' : 'Create & Save Quote'}

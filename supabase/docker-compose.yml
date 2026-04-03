@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:15.1.0.117
+    command: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+    volumes:
+      - ./volumes/db/data:/var/lib/postgresql/data
+      - ./volumes/db/init:/docker-entrypoint-initdb.d
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      timeout: 5s
+      retries: 5
+
+  auth:
+    container_name: supabase-auth
+    image: supabase/gotrue:v2.132.3
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres?sslmode=disable
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+      GOTRUE_EXTERNAL_URL: ${GOTRUE_EXTERNAL_URL}
+      GOTRUE_EXTERNAL_PROVIDERS_GOOGLE_ENABLED: "false"
+    restart: always
+
+  rest:
+    container_name: supabase-rest
+    image: postgrest/postgrest:v11.1.0
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMA: public,auth
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+    restart: always
+
+  kong:
+    container_name: supabase-kong
+    image: kong:2.8.1
+    depends_on:
+      auth:
+        condition: service_started
+      rest:
+        condition: service_started
+    entrypoint: sh -c "echo 'hello' && kong start"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+    volumes:
+      - ./volumes/api/kong.yml:/var/lib/kong/kong.yml
+    ports:
+      - "8000:8000"
+    restart: always
+
+networks:
+  default:
+    name: supabase_network

@@ -1,0 +1,16 @@
+services:
+  app:
+    image: node:20-alpine
+    container_name: ibiza-beyond-dev
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "8085:5173"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - VITE_POLLING=true
+      - VITE_SUPABASE_URL=https://nqnwmotrjlbqdnrwcyfz.supabase.co
+      - VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5xbndtb3RyamxicWRucndjeWZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDA4NTIsImV4cCI6MjA4ODAxNjg1Mn0.ku8cl9x-2d_PWI63MTSyOFELJaNIVLUiqFFqDU3p3CM
+    command: sh -c "npm install && npm run dev -- --host"

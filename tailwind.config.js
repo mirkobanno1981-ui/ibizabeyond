@@ -8,12 +8,19 @@ export default {
     theme: {
         extend: {
             colors: {
-                primary: '#e8ab30',
-                'background-dark': '#0f1117',
-                'background-light': '#f8f9fa',
-                'surface-dark': '#1a1d26',
-                'surface-dark2': '#22263a',
-                'border-dark': 'rgba(232,171,48,0.15)',
+                primary: 'var(--primary)',
+                background: 'var(--background)',
+                surface: 'var(--surface)',
+                'surface-2': 'var(--surface-2)',
+                border: 'var(--border)',
+                'text-primary': 'var(--text-primary)',
+                'text-secondary': 'var(--text-secondary)',
+                'text-muted': 'var(--text-muted)',
+                // Legacy support (mapping to new variables to avoid breaking things immediately)
+                'background-dark': 'var(--background)',
+                'surface-dark': 'var(--surface)',
+                'surface-dark2': 'var(--surface-2)',
+                'border-dark': 'var(--border)',
             },
             fontFamily: {
                 display: ['Manrope', 'Inter', 'sans-serif'],

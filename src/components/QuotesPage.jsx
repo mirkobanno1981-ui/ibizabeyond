@@ -1,389 +1,729 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import QuotesKanban from './QuotesKanban';
+import EditQuoteModal from './EditQuoteModal';
 
 const STATUS_COLORS = {
-    draft: 'bg-slate-500/20 text-slate-400',
+    draft: 'bg-slate-500/20 text-text-muted',
     sent: 'bg-blue-500/20 text-blue-400',
-    booked: 'bg-green-500/20 text-green-400',
+    booked: 'bg-emerald-500/20 text-emerald-400',
+    check_in_ready: 'bg-purple-500/20 text-purple-400',
+    completed: 'bg-amber-500/20 text-amber-400',
     cancelled: 'bg-red-500/20 text-red-400',
-};
-
-const EditQuoteModal = ({ quote, onClose, onSaved }) => {
-    const [margin, setMargin] = useState(quote.agent_markup || 15);
-    const [extraServices, setExtraServices] = useState(quote.extra_services || []);
-    const [manualPrice, setManualPrice] = useState(quote.final_price || 0);
-    const [isManual, setIsManual] = useState(quote.is_manual_price || false);
-    const [saving, setSaving] = useState(false);
-
-    const addService = () => setExtraServices([...extraServices, { name: '', price: 0 }]);
-    const removeService = (idx) => setExtraServices(extraServices.filter((_, i) => i !== idx));
-    const updateService = (idx, field, val) => {
-        const newServices = [...extraServices];
-        newServices[idx][field] = field === 'price' ? parseFloat(val) || 0 : val;
-        setExtraServices(newServices);
-    };
-
-    const calculateAutoPrice = () => {
-        const base = parseFloat(quote.supplier_base_price || 0);
-        const adminMarkup = parseFloat(quote.admin_markup || 0);
-        const agentMarkup = parseFloat(margin || 0);
-        
-        const priceWithAdmin = base * (1 + adminMarkup / 100);
-        const priceWithAgent = priceWithAdmin * (1 + agentMarkup / 100);
-        
-        const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        return Math.round(priceWithAgent + extraTotal);
-    };
-
-    useEffect(() => {
-        if (!isManual) {
-            setManualPrice(calculateAutoPrice());
-        }
-    }, [margin, extraServices, isManual]);
-
-    const handleSave = async () => {
-        setSaving(true);
-        try {
-            const finalPrice = isManual ? manualPrice : calculateAutoPrice();
-            const { error } = await supabase
-                .from('quotes')
-                .update({
-                    agent_markup: margin,
-                    extra_services: extraServices,
-                    final_price: finalPrice,
-                    is_manual_price: isManual
-                })
-                .eq('id', quote.id);
-
-            if (error) throw error;
-            onSaved();
-        } catch (err) {
-            alert('Error updating quote: ' + err.message);
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <div className="bg-surface-dark border border-border-dark rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in duration-200">
-                <div className="p-6 border-b border-border-dark flex justify-between items-center">
-                    <h2 className="text-xl font-bold text-white">Edit Quote Details</h2>
-                    <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
-                        <span className="material-symbols-outlined">close</span>
-                    </button>
-                </div>
-
-                <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-                    {/* Margin */}
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Agent Margin (%)</label>
-                        <div className="relative">
-                            <input 
-                                type="number" 
-                                value={margin}
-                                onChange={e => setMargin(e.target.value)}
-                                disabled={isManual}
-                                className="w-full input-dark py-2.5 text-right font-bold text-primary disabled:opacity-50"
-                            />
-                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-600">%</span>
-                        </div>
-                    </div>
-
-                    {/* Extra Services */}
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Extra Services</label>
-                            <button onClick={addService} className="text-[10px] font-bold text-primary uppercase hover:underline flex items-center gap-1">
-                                <span className="material-symbols-outlined text-sm">add</span> Add Service
-                            </button>
-                        </div>
-                        <div className="space-y-2">
-                            {extraServices.map((s, idx) => (
-                                <div key={idx} className="flex gap-2 items-center bg-background-dark/50 p-2 rounded-xl border border-border-dark animate-in slide-in-from-right-2">
-                                    <input 
-                                        placeholder="Service name (e.g. Car Rental)"
-                                        className="flex-1 bg-transparent border-none text-sm text-slate-200 outline-none"
-                                        value={s.name}
-                                        onChange={e => updateService(idx, 'name', e.target.value)}
-                                    />
-                                    <div className="relative w-24">
-                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-600">€</span>
-                                        <input 
-                                            type="number"
-                                            placeholder="0"
-                                            className="w-full bg-transparent border-none text-sm text-right text-primary font-bold outline-none"
-                                            value={s.price}
-                                            onChange={e => updateService(idx, 'price', e.target.value)}
-                                        />
-                                    </div>
-                                    <button onClick={() => removeService(idx)} className="text-slate-600 hover:text-red-400 p-1">
-                                        <span className="material-symbols-outlined text-sm">delete</span>
-                                    </button>
-                                </div>
-                            ))}
-                            {extraServices.length === 0 && <p className="text-xs text-slate-600 italic">No extra services added.</p>}
-                        </div>
-                    </div>
-
-                    {/* Final Price & Override */}
-                    <div className="pt-4 border-t border-border-dark space-y-4">
-                        <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Total Price (EUR)</label>
-                            <label className="flex items-center gap-2 cursor-pointer group">
-                                <span className="text-[10px] font-bold text-slate-600 uppercase group-hover:text-primary transition-colors">Manual Override</span>
-                                <input 
-                                    type="checkbox" 
-                                    checked={isManual}
-                                    onChange={e => setIsManual(e.target.checked)}
-                                    className="accent-primary"
-                                />
-                            </label>
-                        </div>
-                        <div className="relative">
-                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-black text-primary/30">€</span>
-                            <input 
-                                type="number"
-                                value={isManual ? manualPrice : calculateAutoPrice()}
-                                onChange={e => setManualPrice(e.target.value)}
-                                readOnly={!isManual}
-                                className={`w-full bg-primary/5 border-2 ${isManual ? 'border-primary' : 'border-primary/20'} rounded-2xl py-6 px-10 text-3xl font-black text-primary outline-none transition-all`}
-                            />
-                        </div>
-                        <p className="text-[10px] text-slate-500 italic text-center">
-                            {isManual ? 'Warning: Automatic calculations are suspended in manual mode.' : 'Calculated automatically based on subtotal, margin, and extras.'}
-                        </p>
-                    </div>
-                </div>
-
-                <div className="p-6 bg-background-dark/30 flex gap-3">
-                    <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-border-dark text-slate-400 font-bold hover:bg-white/5 transition-all text-sm">Cancel</button>
-                    <button 
-                        onClick={handleSave}
-                        disabled={saving}
-                        className="flex-[2] btn-primary py-3 font-bold shadow-lg shadow-primary/20 disabled:opacity-50 text-sm"
-                    >
-                        {saving ? 'Saving...' : 'Save Changes'}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
+    expired: 'bg-slate-500/10 text-slate-500',
+    waiting_owner: 'bg-amber-500/20 text-amber-400 animate-pulse',
+    owner_declined: 'bg-rose-500/20 text-rose-400',
+    details_requested: 'bg-cyan-500/20 text-cyan-400',
+    contract_sent: 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30',
+    contract_signed: 'bg-emerald-500/20 text-emerald-400 font-extrabold',
 };
 
 export default function QuotesPage() {
-    const { user } = useAuth();
-    const [quotes, setQuotes] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const { user, role, agentData } = useAuth();
+    const queryClient = useQueryClient();
     const [editQuote, setEditQuote] = useState(null);
+    const [assignQuote, setAssignQuote] = useState(null);
+    const [viewMode, setViewMode] = useState('list');
 
-    useEffect(() => { 
-        if (user) fetchQuotes(); 
-    }, [user]);
+    // --- Data Queries ---
+    const { data: quotes = [], isLoading: quotesLoading } = useQuery({
+        queryKey: ['quotes', user?.id, role],
+        queryFn: async () => {
+            if (!user?.id) return [];
+            
+            let query = supabase
+                .from('quotes')
+                .select(`
+                    id, status, check_in, check_out, final_price, created_at,
+                    client_id,
+                    agent_id,
+                    agent_markup,
+                    extra_services,
+                    is_manual_price,
+                    stripe_fee_included,
+                    supplier_base_price,
+                    admin_markup,
+                    price_breakdown,
+                    documenso_document_id,
+                    clients(full_name, phone_number),
+                    invenio_properties(*),
+                    invenio_boats(*),
+                    agents(company_name, contract_template, boat_contract_template)
+                `)
+                .order('created_at', { ascending: false });
 
-    async function fetchQuotes() {
-        setLoading(true);
-        const { data } = await supabase
-            .from('quotes')
-            .select(`
-                id, status, check_in, check_out, final_price, created_at,
-                client_id,
-                agent_id,
-                agent_markup,
-                extra_services,
-                is_manual_price,
-                supplier_base_price,
-                admin_markup,
-                clients(full_name, phone_number),
-                invenio_properties(*)
-            `)
-            .eq('agent_id', user.id)
-            .order('created_at', { ascending: false });
-        setQuotes(data || []);
-        setLoading(false);
+            if (role !== 'admin' && role !== 'super_admin') {
+                if (role === 'agency_admin' && agentData?.agency_id) {
+                    const { data: agencyAgents } = await supabase
+                        .from('agents')
+                        .select('id')
+                        .eq('agency_id', agentData.agency_id);
+                    const agentIds = (agencyAgents || []).map(a => a.id);
+                    query = query.in('agent_id', agentIds);
+                } else {
+                    query = query.eq('agent_id', user.id);
+                }
+            }
+            
+            const { data, error } = await query;
+            if (error) throw error;
+            return data || [];
+        },
+        enabled: !!user?.id,
+        staleTime: 1000 * 60 * 5, // 5 minutes
+    });
+
+    const { data: ivaPercent = 10 } = useQuery({
+        queryKey: ['margin_settings'],
+        queryFn: async () => {
+            const { data } = await supabase.from('margin_settings').select('iva_percent').eq('id', 1).single();
+            return parseFloat(data?.iva_percent) || 10;
+        },
+        staleTime: 1000 * 60 * 60, // 1 hour
+    });
+
+    // Helper to refresh data
+    const refreshData = () => {
+        queryClient.invalidateQueries({ queryKey: ['quotes'] });
+    };
+
+
+    async function handleDeleteQuote(id) {
+        if (!confirm('Are you sure you want to delete this quote? This action cannot be undone.')) return;
+        
+        try {
+            let query = supabase.from('quotes').delete().eq('id', id);
+            
+            if (role !== 'admin' && role !== 'super_admin') {
+                if (!user?.id) return;
+                query = query.eq('agent_id', user.id);
+            }
+
+            const { error } = await query;
+            if (error) throw error;
+            refreshData();
+        } catch (err) {
+            alert('Error deleting quote: ' + err.message);
+        }
     }
 
-    const generatePDF = async (quote) => {
-        const { data: agent } = await supabase
-            .from('agents')
-            .select('*')
-            .eq('id', user.id)
+    const handleWhatsAppShare = async (quote) => {
+        // Update status to 'sent' if it's currently 'draft'
+        if (quote.status === 'draft') {
+            await handleStatusChange(quote.id, 'sent');
+        }
+
+        const url = `${window.location.origin}/quote/${quote.id}`;
+        const propertyName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'your stay in Ibiza';
+        const message = `Hello ${quote.clients?.full_name || 'there'}! Here is your bespoke quote for ${propertyName}: ${url}`;
+        const whatsappUrl = `https://wa.me/${quote.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
+        window.open(whatsappUrl, '_blank');
+    };
+
+    const handleAskAvailability = async (quote) => {
+        const ownerId = quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id;
+        if (!ownerId) {
+            alert("This property does not have an owner assigned.");
+            return;
+        }
+
+        const { data: ownerData } = await supabase
+            .from('owners')
+            .select('name, phone_number')
+            .eq('id', ownerId)
             .single();
+
+        if (!ownerData?.phone_number) {
+            alert("No phone number found for this owner. Please add it in Owner Management.");
+            return;
+        }
+
+        const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
+        const villaName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name;
+        const msg = `Hello ${ownerData.name}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. Please confirm availability here: ${confirmUrl}`;
+        
+        const encodedMsg = encodeURIComponent(msg);
+        const waUrl = `https://wa.me/${ownerData.phone_number.replace(/\s+/g, '')}?text=${encodedMsg}`;
+
+        // 1. Update status
+        const { error } = await supabase
+            .from('quotes')
+            .update({ status: 'waiting_owner' })
+            .eq('id', quote.id);
+
+        if (error) {
+            alert('Error updating status: ' + error.message);
+            return;
+        }
+
+        // 2. Open WhatsApp
+        window.open(waUrl, '_blank');
+        refreshData();
+    };
+
+    const handleStatusChange = async (quoteId, newStatus) => {
+        try {
+            const { error } = await supabase
+                .from('quotes')
+                .update({ status: newStatus })
+                .eq('id', quoteId);
+
+            if (error) throw error;
+            
+            if (newStatus === 'waiting_owner') {
+                const q = quotes.find(q => q.id === quoteId);
+                if (q) handleAskAvailability(q);
+                return;
+            }
+
+            if (newStatus === 'booked') {
+                // Trigger automated invoicing
+                supabase.functions.invoke('stripe-create-invoice', { 
+                    body: { quoteId } 
+                }).catch(err => console.error('Automated invoicing failed:', err));
+            }
+
+            refreshData();
+        } catch (err) {
+            alert('Error updating status: ' + err.message);
+        }
+    };
+
+    const generatePDF = async (quote) => {
+        const { data: propertyPhotos } = await supabase
+            .from('invenio_photos')
+            .select('url')
+            .or(`v_uuid.eq.${quote.invenio_properties?.v_uuid},boat_uuid.eq.${quote.invenio_boats?.v_uuid}`)
+            .order('sort_order', { ascending: true })
+            .limit(4);
 
         const doc = new jsPDF('p', 'mm', 'a4');
         const villa = quote.invenio_properties;
-        
-        // Header
-        doc.setFillColor(15, 23, 42); // bg-background-dark
-        doc.rect(0, 0, 210, 40, 'F');
-        
-        if (agent?.logo_url) {
+        const boat = quote.invenio_boats;
+        const property = villa || boat;
+        const marginX = 20;
+
+        // Ultra-robust image to base64 converter with multiple fallbacks
+        const getBase64FromUrl = async (url) => {
+            if (!url) return null;
             try {
-                const img = new Image();
-                img.src = agent.logo_url;
-                await new Promise(r => img.onload = r);
-                doc.addImage(img, 'PNG', 15, 10, 20, 20);
-            } catch (e) {
-                doc.setTextColor(255, 255, 255);
-                doc.text('✦', 15, 22);
+                // Try FETCH first (most reliable if CORS is ok)
+                const response = await fetch(url, { mode: 'cors' });
+                const blob = await response.blob();
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+            } catch (err) {
+                console.warn("Fetch failed, trying canvas fallback for:", url);
+                // Fallback to Canvas (works for some CORS configurations)
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.crossOrigin = 'Anonymous';
+                    img.src = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now(); // Cache busting
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        resolve(canvas.toDataURL('image/jpeg', 0.8));
+                    };
+                    img.onerror = () => {
+                        console.error("All image load attempts failed for:", url);
+                        resolve(null);
+                    };
+                });
             }
+        };
+
+        // --- PAGE 1: COVER ---
+        // Header Background
+        doc.setFillColor(15, 23, 42); // slate-900
+        doc.rect(0, 0, 210, 60, 'F');
+
+        // Branding
+        // Fetch Agent & Owner details for branding
+        let agentBranding = null;
+        const { data: qAgent } = await supabase.from('agents').select('*').eq('id', quote.agent_id).single();
+        
+        if (qAgent?.agent_type === 'collaborator') {
+            const ownerId = property?.owner_id;
+            const { data: qOwner } = await supabase.from('owners').select('*').eq('id', ownerId).single();
+            agentBranding = {
+                company_name: qOwner?.company_name || qOwner?.name || 'Luxury Villa Collection',
+                logo_url: qOwner?.logo_url,
+                phone_number: '', // Owners usually don't show phone here
+                email: qOwner?.email || qAgent?.email
+            };
+        } else {
+            agentBranding = qAgent || { company_name: 'Luxury Villa Collection' };
+        }
+
+        const logoData = agentBranding?.logo_url ? await getBase64FromUrl(agentBranding.logo_url) : null;
+        if (logoData) {
+            try {
+                doc.addImage(logoData, 'PNG', marginX, 20, 40, 20, undefined, 'FAST');
+            } catch (e) { console.error("Logo add error:", e); }
+        } else {
+            doc.setFillColor(180, 150, 80); // Gold
+            doc.rect(marginX, 20, 40, 20, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(10);
+            doc.text('LUXURY', marginX + 20, 32, { align: 'center' });
         }
 
         doc.setTextColor(255, 255, 255);
-        doc.setFontSize(14);
+        doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
-        doc.text(agent?.company_name || 'Ibiza Beyond', 40, 20);
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        doc.text(agent?.phone_number || '', 40, 26);
-
-        // Client & Villa Title
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(22);
-        doc.setFont('helvetica', 'bold');
-        doc.text(villa?.villa_name || 'Villa Proposal', 15, 60);
+        doc.text(agentBranding?.company_name?.toUpperCase() || 'LUXURY VILLA COLLECTION', 55, 25);
         
-        doc.setFontSize(10);
-        doc.setTextColor(100, 100, 100);
-        doc.text('Presented to:', 15, 70);
-        doc.setTextColor(0, 0, 0);
-        doc.text(quote.clients?.full_name || 'Valued Client', 40, 70);
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(148, 163, 184); // slate-400
+        doc.text(agentBranding?.email || '', 55, 37);
 
-        // Details Table
-        doc.setDrawColor(230, 230, 230);
-        doc.line(15, 80, 195, 80);
+        // Fetch Contract Template & Prepare Data
+        const agent = quote.agents;
+        const contractTemplate = quote.invenio_boats ? (agent?.boat_contract_template || agent?.contract_template) : agent?.contract_template;
+        
+        const data = {
+            '{{client_full_name}}': quote.clients?.full_name || 'Valued Client',
+            '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
+            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
+            '{{check_in}}': quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB') : '',
+            '{{check_out}}': quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB') : '',
+            '{{final_price}}': `€${parseFloat(quote.final_price || 0).toLocaleString()}`,
+            '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
+            '{{deposit}}': `€${parseFloat(quote.deposit || 0).toLocaleString()}`
+        };
 
-        const details = [
-            ['Dates', `${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}`],
-            ['Location', villa?.district || 'Ibiza'],
-            ['Bedrooms', villa?.bedrooms?.toString() || '—'],
-            ['Total Price', `EUR ${parseFloat(quote.final_price).toLocaleString()}`]
-        ];
-
-        let y = 90;
-        details.forEach(([label, value]) => {
-            doc.setFont('helvetica', 'bold');
-            doc.text(label, 15, y);
-            doc.setFont('helvetica', 'normal');
-            doc.text(value, 60, y);
-            y += 10;
-        });
-
-        // Extra Services
-        if (quote.extra_services && quote.extra_services.length > 0) {
-            y += 5;
-            doc.setFont('helvetica', 'bold');
-            doc.text('Extra Services', 15, y);
-            y += 7;
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(9);
-            quote.extra_services.forEach(s => {
-                doc.text(s.name, 15, y);
-                doc.text(`EUR ${parseFloat(s.price).toLocaleString()}`, 195, y, { align: 'right' });
-                y += 6;
-            });
+        // Hero Image
+        if (propertyPhotos && propertyPhotos.length > 0) {
+            const heroData = await getBase64FromUrl(propertyPhotos[0].url);
+            if (heroData) {
+                try {
+                    doc.addImage(heroData, 'JPEG', 0, 60, 210, 120, undefined, 'FAST');
+                } catch (e) {
+                    doc.setFillColor(30, 41, 59);
+                    doc.rect(0, 60, 210, 120, 'F');
+                }
+            } else {
+                doc.setFillColor(30, 41, 59);
+                doc.rect(0, 60, 210, 120, 'F');
+            }
         }
 
-        // About
-        y += 10;
+        // Villa Title on Cover
+        doc.setFillColor(255, 255, 255);
+        doc.rect(marginX, 160, 170, 40, 'F');
+        doc.setDrawColor(241, 245, 249);
+        doc.rect(marginX, 160, 170, 40, 'D');
+
+        doc.setTextColor(15, 23, 42);
+        const title = property?.villa_name || property?.boat_name || 'PROPOSAL';
+        doc.setFontSize(24);
         doc.setFont('helvetica', 'bold');
-        doc.text('About the Property', 15, y);
-        y += 6;
+        doc.text(title.toUpperCase(), marginX + 10, 178);
+        
+        doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        const areaLabel = villa ? (villa.areaname || villa.district) : (boat.location_base_port || 'IBIZA');
+        doc.text(areaLabel.toUpperCase(), marginX + 10, 185);
+
+        // --- PAGE 2: PROPERTY & DETAILS ---
+        doc.addPage();
+        doc.setFillColor(15, 23, 42);
+        doc.rect(0, 0, 210, 20, 'F');
+
+        let y = 40;
+        
+        // 1. Stay Details Overview (Short)
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(18);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Your Stay', marginX, y);
+        y += 10;
         doc.setFontSize(9);
-        const splitText = doc.splitTextToSize(villa?.description || 'Exclusive luxury villa in Ibiza.', 180);
-        doc.text(splitText, 15, y);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        const datesText = quote.check_in 
+            ? `Dates: ${new Date(quote.check_in).toLocaleDateString('en-GB')} — ${new Date(quote.check_out).toLocaleDateString('en-GB')}`
+            : 'Open Dates';
+        doc.text(`Guest: ${quote.clients?.full_name || 'Valued Client'}  |  Reference: ${quote.id.slice(0,8)}`, marginX, y);
+        y += 5;
+        doc.text(datesText, marginX, y);
+        
+        y += 15;
+        doc.setDrawColor(226, 232, 240);
+        doc.line(marginX, y, 190, y);
+        y += 15;
 
-        // Footer
-        doc.setFontSize(8);
-        doc.setTextColor(150, 150, 150);
-        doc.text(`Generated on ${new Date().toLocaleDateString()} | ${agent?.company_name || 'Ibiza Beyond'}`, 105, 285, { align: 'center' });
+        // 2. The Property Description (User requested this first)
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('The Property', marginX, y);
+        
+        y += 8;
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(71, 85, 105);
+        const splitDesc = doc.splitTextToSize(property?.description || 'Exclusive experience in Ibiza.', 170);
+        doc.text(splitDesc, marginX, y);
+        y += (splitDesc.length * 5) + 15;
 
-        doc.save(`Quote_${villa?.villa_name.replace(/\s+/g, '_')}_${quote.id.slice(0, 8)}.pdf`);
+        // 3. Features & Amenities
+        if (y > 220) { doc.addPage(); y = 30; }
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Features & Amenities', marginX, y);
+        
+        y += 10;
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(51, 65, 85);
+        
+        const features = Array.isArray(property?.features) ? property.features : [];
+        let col = 0;
+        let startY = y;
+        features.slice(0, 30).forEach((f, i) => { // Limit to avoid page overflow here
+            if (i > 0 && i % 10 === 0) {
+                col++;
+                y = startY;
+            }
+            doc.text(`• ${f}`, marginX + (col * 55), y);
+            y += 6;
+        });
+
+        // 4. Quote Total
+        y += 20;
+        if (y > 250) { doc.addPage(); y = 40; }
+        
+        doc.setFillColor(248, 250, 252);
+        doc.rect(marginX, y, 170, 25, 'F');
+        doc.setDrawColor(180, 150, 80);
+        doc.line(marginX, y, marginX, y + 25); // Gold accent line
+        
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.text('PROPOSAL TOTAL', marginX + 10, y + 15);
+        doc.setFontSize(18);
+        doc.setTextColor(180, 150, 80);
+        doc.text(`EUR ${parseFloat(quote.final_price).toLocaleString('en-GB')}`, 185, y + 15, { align: 'right' });
+
+        // --- PAGE 3: TERMS & CONDITIONS ---
+        if (contractTemplate) {
+            doc.addPage();
+            y = 30;
+            doc.setTextColor(15, 23, 42);
+            doc.setFontSize(18);
+            doc.setFont('helvetica', 'bold');
+            doc.text('Terms & Conditions', marginX, y);
+            
+            y += 10;
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(51, 65, 85);
+            
+            let finalContract = contractTemplate;
+            Object.entries(data).forEach(([key, value]) => {
+                finalContract = finalContract.replaceAll(key, value);
+            });
+            
+            const splitContract = doc.splitTextToSize(finalContract, 170);
+            doc.text(splitContract, marginX, y);
+        }
+
+        // --- PAGE 3: PHOTO GALLERY ---
+        if (propertyPhotos && propertyPhotos.length > 1) {
+            doc.addPage();
+            y = 30;
+            doc.setFontSize(18);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(15, 23, 42);
+            doc.text('Photo Gallery', marginX, y);
+            
+            y += 15;
+            const photoWidth = 80;
+            const photoHeight = 55;
+            
+            for (let i = 1; i < Math.min(propertyPhotos.length, 5); i++) {
+                const galleryData = await getBase64FromUrl(propertyPhotos[i].url);
+                if (galleryData) {
+                    try {
+                        const px = marginX + ((i-1) % 2 * (photoWidth + 10));
+                        const py = y + (Math.floor((i-1) / 2) * (photoHeight + 10));
+                        doc.addImage(galleryData, 'JPEG', px, py, photoWidth, photoHeight, undefined, 'FAST');
+                    } catch (e) {
+                        console.error("Gallery image add error:", e);
+                    }
+                }
+            }
+        }
+
+        // Footer on all pages
+        const pageCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pageCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(8);
+            doc.setTextColor(150, 150, 150);
+            doc.text(`${agentBranding?.company_name || 'Ibiza Beyond'} | Private Proposal`, marginX, 285);
+            doc.text(`Page ${i} of ${pageCount}`, 190, 285, { align: 'right' });
+        }
+
+        doc.save(`Quote_${title?.replace(/\s+/g, '_')}_${quote.id.slice(0, 8)}.pdf`);
     };
 
     return (
         <div className="p-6 md:p-8 space-y-6">
             <div className="flex items-end justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-white">Quotes</h1>
-                    <p className="text-slate-500 text-sm mt-0.5">{quotes.length} quote{quotes.length !== 1 ? 's' : ''} issued</p>
+                    <h1 className="text-2xl font-bold text-text-primary">Quotes</h1>
+                    <p className="text-text-muted text-sm mt-0.5">{quotes.length} quote{quotes.length !== 1 ? 's' : ''} issued</p>
                 </div>
-                {/* <button className="btn-primary text-sm flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[16px]">add</span>
-                    New Quote
-                </button> */}
+                <div className="flex items-center gap-3">
+                    <div className="flex bg-surface-2 p-1 rounded-xl border border-border">
+                        <button 
+                            onClick={() => setViewMode('list')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all ${viewMode === 'list' ? 'bg-primary text-black shadow-lg shadow-primary/20' : 'text-text-muted hover:text-text-primary'}`}
+                        >
+                            <span className="material-symbols-outlined notranslate text-[18px]">format_list_bulleted</span>
+                            List
+                        </button>
+                        <button 
+                            onClick={() => setViewMode('kanban')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all ${viewMode === 'kanban' ? 'bg-primary text-black shadow-lg shadow-primary/20' : 'text-text-muted hover:text-text-primary'}`}
+                        >
+                            <span className="material-symbols-outlined notranslate text-[18px]">view_kanban</span>
+                            Kanban
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            <div className="glass-card overflow-hidden">
-                {loading ? (
-                    <div className="p-8 text-center">
-                        <div className="animate-spin inline-block size-6 border-2 border-primary border-t-transparent rounded-full"></div>
-                    </div>
-                ) : quotes.length === 0 ? (
-                    <div className="p-12 text-center text-slate-500">
-                        <span className="material-symbols-outlined text-4xl block mb-2 text-slate-700">request_quote</span>
-                        No quotes yet. Create your first quote above.
-                    </div>
-                ) : (
+            {quotesLoading && quotes.length === 0 ? (
+                <div className="p-12 glass-card flex flex-col items-center justify-center">
+                    <div className="animate-spin size-8 border-2 border-primary border-t-transparent rounded-full mb-4"></div>
+                    <p className="text-xs text-text-muted font-black uppercase tracking-widest">Loading Proposals...</p>
+                </div>
+            ) : quotes.length === 0 ? (
+                <div className="p-20 glass-card text-center text-text-muted">
+                    <span className="material-symbols-outlined notranslate text-5xl block mb-4 opacity-20">request_quote</span>
+                    <p className="font-bold text-lg mb-1">No quotes found</p>
+                    <p className="text-sm">Create your first proposal from the villa inventory.</p>
+                </div>
+            ) : viewMode === 'list' ? (
+                <div className="glass-card overflow-hidden">
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                             <thead>
-                                <tr className="border-b border-border-dark">
-                                    <th className="text-left text-xs text-slate-500 font-semibold px-5 py-3 uppercase tracking-wider">Villa</th>
-                                    <th className="text-left text-xs text-slate-500 font-semibold px-5 py-3 uppercase tracking-wider">Client</th>
-                                    <th className="text-left text-xs text-slate-500 font-semibold px-5 py-3 uppercase tracking-wider">Dates</th>
-                                    <th className="text-right text-xs text-slate-500 font-semibold px-5 py-3 uppercase tracking-wider">Price</th>
-                                    <th className="text-left text-xs text-slate-500 font-semibold px-5 py-3 uppercase tracking-wider">Actions</th>
+                                <tr className="border-b border-border bg-surface-2/30">
+                                    <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Listing</th>
+                                    <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Client</th>
+                                    {(role === 'admin' || role === 'super_admin' || role === 'agency_admin') && (
+                                        <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Agent</th>
+                                    )}
+                                    <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Dates</th>
+                                    {(role === 'admin' || role === 'super_admin') && (
+                                        <>
+                                            <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Owner Net</th>
+                                            <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Platform</th>
+                                        </>
+                                    )}
+                                    <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Agency Comm</th>
+                                    <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Total Price</th>
+                                    <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">IVA</th>
+                                    <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-border-dark">
+                            <tbody className="divide-y divide-border/30">
                                 {quotes.map(q => (
-                                    <tr key={q.id} className="hover:bg-white/2 transition-colors">
-                                        <td className="px-5 py-3.5 font-medium text-white max-w-[180px] truncate">
-                                            {q.invenio_properties?.villa_name || '—'}
-                                        </td>
-                                        <td className="px-5 py-3.5 text-slate-300">{q.clients?.full_name || '—'}</td>
-                                        <td className="px-5 py-3.5 text-slate-400 text-xs">
-                                            {q.check_in ? `${new Date(q.check_in).toLocaleDateString('en-GB')} → ${new Date(q.check_out).toLocaleDateString('en-GB')}` : '—'}
-                                        </td>
-                                        <td className="px-5 py-3.5 text-right text-primary font-bold">
-                                            {q.final_price ? `€${parseFloat(q.final_price).toLocaleString()}` : '—'}
-                                            {q.is_manual_price && <span className="block text-[8px] text-slate-500 uppercase tracking-tighter">Manual Override</span>}
-                                        </td>
-                                        <td className="px-5 py-3.5">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide mr-2 ${STATUS_COLORS[q.status] || ''}`}>
-                                                    {q.status}
+                                    <tr key={q.id} className="hover:bg-primary/5 transition-colors group">
+                                        <td className="px-5 py-4 font-bold text-text-primary max-w-[180px] truncate">
+                                            <div className="flex flex-col">
+                                                <span className="truncate">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name || '—'}</span>
+                                                <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">
+                                                    {q.invenio_properties ? 'Villa' : q.invenio_boats ? 'Boat' : 'Unknown'}
                                                 </span>
-                                                <button 
-                                                    onClick={() => setEditQuote(q)}
-                                                    className="size-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-slate-500 hover:text-primary transition-all group"
-                                                    title="Edit Quote"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px] group-hover:scale-110">edit</span>
-                                                </button>
-                                                <button 
-                                                    onClick={() => {
-                                                        const url = `${window.location.origin}/quote/${q.id}`;
-                                                        navigator.clipboard.writeText(url);
-                                                        alert('Public link copied to clipboard!');
-                                                    }}
-                                                    className="size-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-slate-500 hover:text-primary transition-all group"
-                                                    title="Copy public link"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px] group-hover:scale-110">share</span>
-                                                </button>
-                                                <button 
-                                                    onClick={() => generatePDF(q)}
-                                                    className="size-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-slate-500 hover:text-primary transition-all group"
-                                                    title="Download PDF"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px] group-hover:scale-110">picture_as_pdf</span>
-                                                </button>
+                                            </div>
+                                        </td>
+                                        <td className="px-5 py-4 text-text-secondary font-medium">{q.clients?.full_name || '—'}</td>
+                                        {(role === 'admin' || role === 'super_admin' || role === 'agency_admin') && (
+                                            <td className="px-5 py-4">
+                                                <div className="flex flex-col">
+                                                    <span className="text-text-primary font-bold text-xs">{q.agent_id === user.id ? 'You' : (q.agents?.company_name || 'Individual Agent')}</span>
+                                                    <span className="text-[9px] text-text-muted uppercase tracking-tighter">ID: {q.agent_id.slice(0,8)}</span>
+                                                </div>
+                                            </td>
+                                        )}
+                                        <td className="px-5 py-4 text-text-muted text-xs whitespace-nowrap">
+                                            {q.check_in ? `${new Date(q.check_in).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} → ${new Date(q.check_out).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}` : '—'}
+                                        </td>
+                                        
+                                         {(role === 'admin' || role === 'super_admin') && (
+                                             <>
+                                                 <td className="px-5 py-4 text-right">
+                                                     <p className="font-mono text-[13px] text-text-primary">€{parseFloat(q.supplier_base_price || 0).toLocaleString()}</p>
+                                                     <span className="text-[8px] text-text-muted uppercase font-black">Owner Net</span>
+                                                 </td>
+                                                 <td className="px-5 py-4 text-right">
+                                                     <p className="font-mono text-[13px] text-amber-500/90 font-bold">€{Math.round(parseFloat(q.supplier_base_price || 0) * (parseFloat(q.admin_markup || 0) / 100)).toLocaleString()}</p>
+                                                     <span className="text-[8px] text-amber-600/60 uppercase font-black">Platform Profit</span>
+                                                 </td>
+                                             </>
+                                         )}
+ 
+                                         <td className="px-5 py-4 text-right">
+                                             {(() => {
+                                                 const base = parseFloat(q.supplier_base_price || 0);
+                                                 const adminMarkup = parseFloat(q.admin_markup || 0);
+                                                 const agentMarkup = parseFloat(q.agent_markup || 0);
+                                                 const priceWithAdmin = base * (1 + adminMarkup / 100);
+                                                 
+                                                 const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
+                                                 const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : 0;
+                                                 const finalNet = parseFloat(q.final_price || 0) - ivaAmount;
+                                                 
+                                                 let agentProfit = 0;
+                                                 if (q.is_manual_price) {
+                                                     agentProfit = finalNet - priceWithAdmin;
+                                                 } else {
+                                                     agentProfit = priceWithAdmin * (agentMarkup / 100);
+                                                 }
+ 
+                                                 const isB2C = !q.agent_id || q.agent_id === '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
+                                                 return (
+                                                     <div className="flex flex-col items-end">
+                                                         <span className={`font-mono text-[13px] font-bold ${isB2C ? 'text-cyan-400' : 'text-emerald-400'}`}>
+                                                             €{Math.round(agentProfit).toLocaleString()}
+                                                         </span>
+                                                         <span className={`text-[8px] uppercase font-black ${isB2C ? 'text-cyan-600/60' : 'text-emerald-600/60'}`}>
+                                                             {isB2C ? 'B2C Commission' : 'Agency Comm'}
+                                                         </span>
+                                                     </div>
+                                                 );
+                                             })()}
+                                         </td>
+ 
+                                         <td className="px-5 py-4 text-right">
+                                             <div className="flex flex-col items-end">
+                                                 <span className="font-mono text-[15px] text-primary font-black">
+                                                     €{parseFloat(q.final_price || 0).toLocaleString()}
+                                                 </span>
+                                                 <span className="text-[8px] text-primary/60 uppercase font-black">{q.is_manual_price ? 'Manual Total' : 'Gross Total'}</span>
+                                             </div>
+                                         </td>
+ 
+                                         <td className="px-5 py-4 text-right">
+                                             <div className="flex flex-col items-end">
+                                                 <p className="font-mono text-[12px] text-text-muted">
+                                                     {(() => {
+                                                         const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
+                                                         return ivaItem ? `€${Math.round(ivaItem.amount).toLocaleString()}` : '€0';
+                                                     })()}
+                                                 </p>
+                                                 <span className="text-[8px] text-text-muted/60 uppercase font-black">IVA (VAT)</span>
+                                             </div>
+                                         </td>
+                                        <td className="px-5 py-4">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest mr-2 ${STATUS_COLORS[q.status] || ''}`}>
+                                                    {q.status?.replace(/_/g, ' ')}
+                                                </span>
+                                                <div className="flex items-center gap-1">
+                                                    <button 
+                                                        onClick={() => setEditQuote(q)}
+                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                        title="Edit Quote"
+                                                    >
+                                                        <span className="material-symbols-outlined notranslate text-[18px]">edit</span>
+                                                    </button>
+                                                    {(role === 'admin' || role === 'super_admin') && (
+                                                        <button 
+                                                            onClick={() => setAssignQuote(q)}
+                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                            title="Assign Agent"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">person_add</span>
+                                                        </button>
+                                                    )}
+                                                    <button 
+                                                        onClick={() => handleWhatsAppShare(q)}
+                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-[#25D366] transition-all"
+                                                        title="Share via WhatsApp"
+                                                    >
+                                                        <svg className="size-4 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.634 1.437h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => {
+                                                            const url = `${window.location.origin}/quote/${q.id}`;
+                                                            navigator.clipboard.writeText(url);
+                                                            alert('Public link copied to clipboard!');
+                                                        }}
+                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                        title="Copy public link"
+                                                    >
+                                                        <span className="material-symbols-outlined notranslate text-[18px]">share</span>
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => generatePDF(q)}
+                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                        title="Download PDF"
+                                                    >
+                                                        <span className="material-symbols-outlined notranslate text-[18px]">picture_as_pdf</span>
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleDeleteQuote(q.id)}
+                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-red-500 transition-all"
+                                                        title="Delete Quote"
+                                                    >
+                                                        <span className="material-symbols-outlined notranslate text-[18px]">delete</span>
+                                                    </button>
+                                                    
+                                                    {(q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
+                                                        <button 
+                                                            onClick={() => handleAskAvailability(q)}
+                                                            className="size-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/20 transition-all"
+                                                            title="Ask Owner Availability (WhatsApp)"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">chat</span>
+                                                        </button>
+                                                    )}
+                                                    
+                                                    {['draft', 'sent', 'owner_approved', 'waiting_owner'].includes(q.status) && !q.documenso_document_id && (
+                                                        <button 
+                                                            onClick={async () => {
+                                                                if (confirm('Generate and send B2B contract via Documenso?')) {
+                                                                    try {
+                                                                        const { data, error } = await supabase.functions.invoke('documenso-contract', {
+                                                                            body: { quoteId: q.id }
+                                                                        });
+                                                                        if (error) throw error;
+                                                                        if (data?.error) throw new Error(data.error);
+                                                                        alert('Contract generated and sent successfully!');
+                                                                        refreshData();
+                                                                    } catch(err) {
+                                                                        alert('Error generating contract: ' + err.message);
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className="size-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 hover:bg-indigo-500/20 transition-all"
+                                                            title="Generate & Send B2B Contract"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">draw</span>
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </div>
                                         </td>
                                     </tr>
@@ -391,8 +731,55 @@ export default function QuotesPage() {
                             </tbody>
                         </table>
                     </div>
-                )}
-            </div>
+                </div>
+            ) : (
+                <QuotesKanban 
+                    quotes={quotes}
+                    onEdit={setEditQuote}
+                    onAssign={setAssignQuote}
+                    onDelete={handleDeleteQuote}
+                    onDownloadPDF={generatePDF}
+                    onStatusChange={handleStatusChange}
+                    onWhatsAppShare={handleWhatsAppShare}
+                    onAskAvailability={handleAskAvailability}
+                    role={role}
+                    onShare={(q) => {
+                        const url = `${window.location.origin}/quote/${q.id}`;
+                        navigator.clipboard.writeText(url);
+                        alert('Public link copied to clipboard!');
+                    }}
+                />
+            )}
+
+            {assignQuote && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="bg-surface border border-border rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                        <div className="p-4 border-b border-border flex justify-between items-center">
+                            <h3 className="font-bold text-text-primary">Assign Quote</h3>
+                            <button onClick={() => setAssignQuote(null)}><span className="material-symbols-outlined notranslate text-sm">close</span></button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <p className="text-xs text-text-muted">Select an agent to manage this lead. They will see it in their dashboard.</p>
+                            <select 
+                                defaultValue={assignQuote.agent_id}
+                                onChange={async (e) => {
+                                    const newAgentId = e.target.value;
+                                    const { error } = await supabase.from('quotes').update({ agent_id: newAgentId }).eq('id', assignQuote.id);
+                                    if (error) alert(error.message);
+                                    else {
+                                        setAssignQuote(null);
+                                        refreshData();
+                                    }
+                                }}
+                                className="w-full input-theme p-2 text-sm"
+                            >
+                                <option value="">Invenio Administration</option>
+                                <AgentsList />
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {editQuote && (
                 <EditQuoteModal 
@@ -400,10 +787,23 @@ export default function QuotesPage() {
                     onClose={() => setEditQuote(null)} 
                     onSaved={() => {
                         setEditQuote(null);
-                        fetchQuotes();
-                    }}
+                        refreshData();
+                    }} 
                 />
             )}
         </div>
     );
+}
+
+// Small helper to avoid duplicate fetch code
+function AgentsList() {
+    const [agents, setAgents] = useState([]);
+    useEffect(() => {
+        async function fetch() {
+            const { data } = await supabase.from('agents').select('id, company_name');
+            setAgents(data || []);
+        }
+        fetch();
+    }, []);
+    return agents.map(a => <option key={a.id} value={a.id}>{a.company_name || 'Unnamed Agency'}</option>);
 }
