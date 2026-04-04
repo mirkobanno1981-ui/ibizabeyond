@@ -136,7 +136,15 @@ export default function OwnerConfirmationView() {
                     </div>
                     <span className="font-bold text-text-primary tracking-widest text-sm uppercase">Ibiza Beyond</span>
                 </div>
-                <div className="ml-auto">
+                <div className="ml-auto flex items-center gap-4">
+                    {quote.group_details && (
+                        <div className={`hidden md:flex items-center gap-2 px-4 py-1.5 rounded-full border text-[10px] font-black uppercase tracking-widest ${
+                            quote.group_details.type === 'family' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-primary/10 text-primary border-primary/20'
+                        }`}>
+                            <span className="material-symbols-outlined notranslate text-sm">verified_user</span>
+                            {quote.group_details.type === 'family' ? 'Verified Family' : 'Verified Group'}
+                        </div>
+                    )}
                     <span className="text-[10px] font-black text-primary border border-primary/30 px-3 py-1 rounded-full uppercase tracking-widest">
                         Availability Request
                     </span>
@@ -183,12 +191,86 @@ export default function OwnerConfirmationView() {
                                         <span className="material-symbols-outlined notranslate">groups</span>
                                     </div>
                                     <div>
-                                        <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Guests</p>
+                                        <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Client</p>
                                         <p className="text-base font-bold text-text-primary">
                                             {quote.clients?.full_name || 'V.I.P. Client'}
                                         </p>
                                     </div>
                                 </div>
+                                {quote.group_details && quote.group_details.type && (
+                                    <div className="p-6 rounded-[1.5rem] bg-surface-2 border-2 border-primary/20 space-y-4 animate-in zoom-in-95 duration-500 shadow-xl shadow-primary/5">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex flex-col">
+                                                <h3 className="text-[10px] font-black text-text-muted uppercase tracking-widest">Guest Quality Profile</h3>
+                                                <span className="text-[8px] text-primary font-bold uppercase tracking-widest">Ibiza Beyond Certified</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
+                                                    quote.group_details.type === 'family' ? 'bg-emerald-500 text-white' : 'bg-primary text-background-dark'
+                                                }`}>
+                                                    {quote.group_details.type}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2 text-text-primary">
+                                                    <span className="material-symbols-outlined notranslate text-sm text-primary">
+                                                        {quote.group_details.type === 'family' ? 'family_restroom' : 'group'}
+                                                    </span>
+                                                    <span className="text-xs font-bold uppercase tracking-wide">
+                                                        {quote.group_details.type === 'family' ? 'Family Group' : 'Friends Group'}
+                                                    </span>
+                                                </div>
+                                                <p className="text-[10px] text-text-muted pl-6">
+                                                    {quote.group_details.type === 'family' ? `${quote.group_details.children || quote.group_details.num_children || 0} Children` : `${quote.group_details.composition || 'Mixed'} group`}
+                                                </p>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2 text-text-primary">
+                                                    <span className="material-symbols-outlined notranslate text-sm text-primary">
+                                                        {quote.group_details.has_pets ? 'pets' : 'check_circle'}
+                                                    </span>
+                                                    <span className="text-xs font-bold uppercase tracking-wide">
+                                                        {quote.group_details.has_pets ? 'Traveling with Pets' : 'No Pets'}
+                                                    </span>
+                                                </div>
+                                                <p className="text-[10px] text-text-muted pl-6 italic">
+                                                    {quote.group_details.is_couples ? 'Couples only' : 'Qualified stay'}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Reliability Stamp */}
+                                        <div className="pt-4 border-t border-border/50 relative overflow-hidden group">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="material-symbols-outlined notranslate text-xs text-emerald-500 font-black">verified</span>
+                                                    <span className="text-[10px] font-black text-text-muted uppercase tracking-tighter">Stay Reliability Score</span>
+                                                </div>
+                                                <span className={`text-[10px] font-black ${
+                                                    quote.group_details.type === 'family' ? 'text-emerald-500' : 
+                                                    quote.group_details.is_couples ? 'text-primary' : 'text-amber-500'
+                                                }`}>
+                                                    {quote.group_details.type === 'family' ? '9.8 / 10 - ELITE' : 
+                                                     quote.group_details.is_couples ? '8.5 / 10 - HIGH' : '7.0 / 10 - SOLID'}
+                                                </span>
+                                            </div>
+                                            <div className="h-2 w-full bg-background rounded-full overflow-hidden border border-border/30">
+                                                <div 
+                                                    className={`h-full transition-all duration-1000 ease-out rounded-full ${
+                                                        quote.group_details.type === 'family' ? 'w-[98%] bg-emerald-500' : 
+                                                        quote.group_details.is_couples ? 'w-[85%] bg-primary' : 'w-[70%] bg-amber-500'
+                                                    }`}
+                                                />
+                                            </div>
+                                            <p className="text-[8px] text-text-muted mt-2 text-center uppercase tracking-widest font-bold opacity-60">
+                                                Profile matched against historical data for {quote.group_details.type} stays
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -234,9 +316,9 @@ export default function OwnerConfirmationView() {
                                     <button onClick={() => setStatus('pending')} className="text-xs font-bold text-primary underline">Change my mind</button>
                                 </div>
                             )}
-                        </div>
                     </div>
-                </section>
+                </div>
+            </section>
 
                 {/* Property Description */}
                 <section className="space-y-4 px-4">

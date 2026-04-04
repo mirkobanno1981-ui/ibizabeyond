@@ -622,22 +622,46 @@ export default function QuotePublicView() {
                                             </label>
                                         </div>
 
-                                        {/* Single-step booking flow */}
+                                        {/* Status Messaging & Payment Flow */}
                                         {!quote.deposit_paid ? (
-                                            <div className="space-y-3">
-                                                <button 
-                                                    onClick={handlePayment}
-                                                    disabled={processingPayment || !acceptTerms}
-                                                    className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest transition-all ${acceptTerms ? 'bg-primary text-background-dark shadow-xl shadow-primary/20 hover:scale-105' : 'bg-surface-2 text-text-muted grayscale cursor-not-allowed'}`}
-                                                >
-                                                    {processingPayment ? "Redirecting to Stripe..." : (isLastMinute ? "Confirm & Pay Full Amount" : "Confirm & Pay Deposit")}
-                                                </button>
-                                                {!acceptTerms && (
-                                                    <p className="text-[9px] text-text-muted font-bold uppercase tracking-widest text-center animate-pulse">
-                                                        Accept the agreement above to proceed
-                                                    </p>
-                                                )}
-                                            </div>
+                                            quote.status === 'sent' ? (
+                                                <div className="space-y-3">
+                                                    <button 
+                                                        onClick={handlePayment}
+                                                        disabled={processingPayment || !acceptTerms}
+                                                        className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest transition-all ${acceptTerms ? 'bg-primary text-background-dark shadow-xl shadow-primary/20 hover:scale-105' : 'bg-surface-2 text-text-muted grayscale cursor-not-allowed'}`}
+                                                    >
+                                                        {processingPayment ? "Redirecting to Stripe..." : (isLastMinute ? "Confirm & Pay Full Amount" : "Confirm & Pay Deposit")}
+                                                    </button>
+                                                    {!acceptTerms && (
+                                                        <p className="text-[9px] text-text-muted font-bold uppercase tracking-widest text-center animate-pulse">
+                                                            Accept the agreement above to proceed
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            ) : quote.status === 'waiting_owner' ? (
+                                                <div className="bg-amber-500/5 border border-amber-500/10 p-6 rounded-2xl space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                                                    <div className="flex justify-center">
+                                                        <div className="size-16 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500 relative">
+                                                            <span className="material-symbols-outlined notranslate text-3xl">hourglass_empty</span>
+                                                            <div className="absolute inset-0 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin"></div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-center space-y-2">
+                                                        <p className="text-[12px] font-black uppercase text-amber-500 tracking-[0.2em]">Verifying Availability</p>
+                                                        <p className="text-[10px] text-text-muted leading-relaxed max-w-[240px] mx-auto font-medium">
+                                                            The owner has been notified and is currently verifying the schedule for your stay. 
+                                                            <span className="block mt-2 text-primary">The booking option will be enabled immediately upon confirmation.</span>
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="bg-surface-2 p-6 rounded-2xl border border-border text-center grayscale opacity-60">
+                                                    <span className="material-symbols-outlined notranslate text-text-muted text-2xl mb-2">pending_actions</span>
+                                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Proposal Under Review</p>
+                                                    <p className="text-[9px] text-text-muted mt-1">This quote is currently being finalized by our agents.</p>
+                                                </div>
+                                            )
                                         ) : (
                                             <div className="space-y-3">
                                                 <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl flex items-center justify-center gap-3 text-emerald-400">

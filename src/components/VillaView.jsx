@@ -59,6 +59,13 @@ export default function VillaView() {
     const [manualPrice, setManualPrice] = useState(0);
     const [createdQuoteId, setCreatedQuoteId] = useState(null);
 
+    // Group Qualification States
+    const [groupType, setGroupType] = useState(''); // 'family' or 'friends'
+    const [numChildren, setNumChildren] = useState(0);
+    const [friendsComposition, setFriendsComposition] = useState(''); // 'males', 'females', 'mixed'
+    const [isCouples, setIsCouples] = useState(false);
+    const [hasPets, setHasPets] = useState(false);
+
     // --- Helpers: Pricing & Rules ---
     const getIsSat = (ds) => {
         if (!ds) return false;
@@ -434,17 +441,22 @@ export default function VillaView() {
     }
 
     const resetQuoteModal = () => {
+        setSelectionStart(null);
+        setSelectionEnd(null);
         setShowQuoteModal(false);
         setCreatedQuoteId(null);
-        setIsManualPrice(false);
-        setManualPrice(0);
-        setExtraServices([]);
         setSelectedClientId('');
         setClientSearch('');
-        // Restore agent default markup
-        if (agentDetails) {
-            setAgentMarkup(agentDetails.markup_percent || 15);
-        }
+        setShowNewClientForm(false);
+        setExtraServices([]);
+        setIsManualPrice(false);
+        setManualPrice(0);
+        // Reset conversion groups
+        setGroupType('');
+        setNumChildren(0);
+        setFriendsComposition('');
+        setIsCouples(false);
+        setHasPets(false);
     };
 
     const handleDateClick = (dStr, isBlocked) => {
@@ -569,10 +581,17 @@ export default function VillaView() {
                 extra_services: extraServices,
                 stripe_fee_included: useStripeFee,
                 final_price: finalPrice,
-                price_breakdown: breakdown, // New column
+                price_breakdown: breakdown,
                 is_manual_price: isManualPrice,
                 status: 'draft',
-                agent_id: user?.id
+                agent_id: user?.id,
+                group_details: {
+                    type: groupType,
+                    children: groupType === 'family' ? numChildren : 0,
+                    composition: groupType === 'friends' ? friendsComposition : null,
+                    is_couples: groupType === 'friends' ? isCouples : false,
+                    has_pets: hasPets
+                }
             }).select('id').single();
 
             if (quoteErr) throw quoteErr;
@@ -1051,7 +1070,7 @@ export default function VillaView() {
                     </div>
                 </div>
             </div>
-
+            
             {/* Quote Modal */}
             {showQuoteModal && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
@@ -1214,8 +1233,90 @@ export default function VillaView() {
                                         </p>
                                     </div>
 
+                                    {/* Group Qualification Section */}
+                                    <div className="space-y-4 pt-4 border-t border-border">
+                                        <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Group Qualification</label>
+                                        
+                                        {/* Group Type Buttons */}
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button 
+                                                onClick={() => setGroupType('family')}
+                                                className={`p-3 rounded-2xl border transition-all flex flex-col items-center gap-1 ${groupType === 'family' ? 'bg-primary/10 border-primary text-primary' : 'bg-surface border-border text-text-muted hover:border-text-muted'}`}
+                                            >
+                                                <span className="material-symbols-outlined notranslate text-xl">family_restroom</span>
+                                                <span className="text-[10px] font-bold uppercase tracking-wide">Family</span>
+                                            </button>
+                                            <button 
+                                                onClick={() => setGroupType('friends')}
+                                                className={`p-3 rounded-2xl border transition-all flex flex-col items-center gap-1 ${groupType === 'friends' ? 'bg-primary/10 border-primary text-primary' : 'bg-surface border-border text-text-muted hover:border-text-muted'}`}
+                                            >
+                                                <span className="material-symbols-outlined notranslate text-xl">group</span>
+                                                <span className="text-[10px] font-bold uppercase tracking-wide">Friends</span>
+                                            </button>
+                                        </div>
+
+                                        {/* Conditional Sub-questions */}
+                                        {groupType === 'family' && (
+                                            <div className="animate-in slide-in-from-top-2 duration-200">
+                                                <label className="text-[10px] text-text-muted font-bold uppercase tracking-widest mb-2 block">Number of Children</label>
+                                                <input 
+                                                    type="number"
+                                                    min="0"
+                                                    className="input-theme w-full"
+                                                    placeholder="0"
+                                                    value={numChildren}
+                                                    onChange={e => setNumChildren(parseInt(e.target.value) || 0)}
+                                                />
+                                            </div>
+                                        )}
+
+                                        {groupType === 'friends' && (
+                                            <div className="space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                <div>
+                                                    <label className="text-[10px] text-text-muted font-bold uppercase tracking-widest mb-2 block">Composition</label>
+                                                    <select 
+                                                        className="input-theme w-full py-2 text-xs"
+                                                        value={friendsComposition}
+                                                        onChange={e => setFriendsComposition(e.target.value)}
+                                                    >
+                                                        <option value="">Select composition...</option>
+                                                        <option value="males">All Males</option>
+                                                        <option value="females">All Females</option>
+                                                        <option value="mixed">Mixed Group</option>
+                                                    </select>
+                                                </div>
+                                                <label className="flex items-center gap-2 cursor-pointer group">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="accent-primary"
+                                                        checked={isCouples}
+                                                        onChange={e => setIsCouples(e.target.checked)}
+                                                    />
+                                                    <span className="text-[10px] text-text-muted font-bold uppercase group-hover:text-primary transition-colors">Couples Only?</span>
+                                                </label>
+                                            </div>
+                                        )}
+
+                                        {/* Pets Toggle */}
+                                        <div className="pt-2">
+                                            <label className="flex items-center gap-2 cursor-pointer group">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="accent-primary"
+                                                    checked={hasPets}
+                                                    onChange={e => setHasPets(e.target.checked)}
+                                                />
+                                                <span className="text-[10px] text-text-muted font-bold uppercase group-hover:text-primary transition-colors flex items-center gap-1">
+                                                    <span className="material-symbols-outlined notranslate text-sm">pets</span>
+                                                    Traveling with pets?
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    
                                     {/* Client Search/Select */}
                                     <div className="space-y-4">
+
                                         <div className="flex items-center justify-between">
                                             <label className="text-xs text-text-muted font-bold uppercase tracking-widest">Select Client</label>
                                             <button 
@@ -1286,6 +1387,7 @@ export default function VillaView() {
                         </div>
 
                         <div className="p-6 md:p-8 bg-background/30 border-t border-border flex flex-col md:flex-row gap-4">
+
                             {createdQuoteId ? (
                                 <button 
                                     onClick={() => { resetQuoteModal(); navigate('/quotes'); }}

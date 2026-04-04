@@ -181,7 +181,7 @@ export default function Dashboard() {
 
             const [villasRes, boatsRes, quotesRes, clientsRes, areasRes, recentRes, depositsRes, approvalsRes] = await Promise.all([
                 supabase.from('invenio_properties').select('v_uuid', { count: 'exact', head: true }),
-                supabase.from('invenio_boats').select('id', { count: 'exact', head: true }),
+                supabase.from('invenio_boats').select('*', { count: 'exact', head: true }),
                 quotesQuery,
                 clientsQuery,
                 supabase.from('invenio_properties').select('areaname').limit(1000),

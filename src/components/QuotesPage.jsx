@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -49,6 +49,7 @@ export default function QuotesPage() {
                     admin_markup,
                     price_breakdown,
                     documenso_document_id,
+                    group_details,
                     clients(full_name, phone_number),
                     invenio_properties(*),
                     invenio_boats(*),
@@ -96,6 +97,10 @@ export default function QuotesPage() {
         if (!confirm('Are you sure you want to delete this quote? This action cannot be undone.')) return;
         
         try {
+            // 1. Delete associated guests (manual cascade for foreign key)
+            await supabase.from('guests').delete().eq('quote_id', id);
+
+            // 2. Delete the quote
             let query = supabase.from('quotes').delete().eq('id', id);
             
             if (role !== 'admin' && role !== 'super_admin') {
@@ -542,7 +547,7 @@ export default function QuotesPage() {
                                     )}
                                     <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Agency Comm</th>
                                     <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Total Price</th>
-                                    <th className="text-right text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">IVA</th>
+                                    <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Profile</th>
                                     <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Actions</th>
                                 </tr>
                             </thead>
@@ -624,16 +629,24 @@ export default function QuotesPage() {
                                              </div>
                                          </td>
  
-                                         <td className="px-5 py-4 text-right">
-                                             <div className="flex flex-col items-end">
-                                                 <p className="font-mono text-[12px] text-text-muted">
-                                                     {(() => {
-                                                         const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
-                                                         return ivaItem ? `€${Math.round(ivaItem.amount).toLocaleString()}` : '€0';
-                                                     })()}
-                                                 </p>
-                                                 <span className="text-[8px] text-text-muted/60 uppercase font-black">IVA (VAT)</span>
-                                             </div>
+                                         <td className="px-5 py-4 min-w-[120px]">
+                                             {q.group_details ? (
+                                                 <div className="flex flex-col gap-1">
+                                                     <div className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-widest w-fit ${
+                                                         q.group_details.type === 'family' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-primary/10 text-primary'
+                                                     }`}>
+                                                         {q.group_details.type}
+                                                     </div>
+                                                     <div className="flex items-center gap-1">
+                                                        <div className="h-1 w-8 bg-background rounded-full overflow-hidden border border-border/30">
+                                                            <div className={`h-full ${q.group_details.type === 'family' ? 'w-[90%] bg-emerald-500' : 'w-[60%] bg-primary'} opacity-50`}></div>
+                                                        </div>
+                                                        <span className="text-[8px] text-text-muted font-bold uppercase">Rel</span>
+                                                     </div>
+                                                 </div>
+                                             ) : (
+                                                 <span className="text-[10px] text-text-muted italic">No profile</span>
+                                             )}
                                          </td>
                                         <td className="px-5 py-4">
                                             <div className="flex items-center gap-2">
@@ -700,29 +713,7 @@ export default function QuotesPage() {
                                                         </button>
                                                     )}
                                                     
-                                                    {['draft', 'sent', 'owner_approved', 'waiting_owner'].includes(q.status) && !q.documenso_document_id && (
-                                                        <button 
-                                                            onClick={async () => {
-                                                                if (confirm('Generate and send B2B contract via Documenso?')) {
-                                                                    try {
-                                                                        const { data, error } = await supabase.functions.invoke('documenso-contract', {
-                                                                            body: { quoteId: q.id }
-                                                                        });
-                                                                        if (error) throw error;
-                                                                        if (data?.error) throw new Error(data.error);
-                                                                        alert('Contract generated and sent successfully!');
-                                                                        refreshData();
-                                                                    } catch(err) {
-                                                                        alert('Error generating contract: ' + err.message);
-                                                                    }
-                                                                }
-                                                            }}
-                                                            className="size-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 hover:bg-indigo-500/20 transition-all"
-                                                            title="Generate & Send B2B Contract"
-                                                        >
-                                                            <span className="material-symbols-outlined notranslate text-[18px]">draw</span>
-                                                        </button>
-                                                    )}
+
                                                 </div>
                                             </div>
                                         </td>
