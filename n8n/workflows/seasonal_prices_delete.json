@@ -1,0 +1,200 @@
+{
+  "name": "Ibiza Beyond - Seasonal Prices (delete)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "id": "0ee6023a-b67d-4338-bdc6-87b27528b918",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_list",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "R$mAx1!"
+            },
+            {
+              "name": "bp_uuid",
+              "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1e0e5499-6e3b-4c13-85cb-5b25fe1aa40c",
+      "name": "Invenio - Get Villas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.inveniohomes.com/plapi/getdata/api_villa_price",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "R$mAx1!"
+            },
+            {
+              "name": "bp_uuid",
+              "value": "1cb81d6f-96b8-47eb-9ef3-910739bb8d3a"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2fc9e5c9-123f-4379-9750-6870040ec5fc",
+      "name": "Invenio - Get Prices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const villasNode = $(\"Invenio - Get Villas\").first();\nconst invenioPricesNode = $(\"Invenio - Get Prices\").first();\n\nif (!villasNode) throw new Error(\"Could not find Villas data.\");\nif (!invenioPricesNode) throw new Error(\"Could not find Invenio Prices data.\");\n\nconst villas = villasNode.json.villas || [];\nlet rawPriceData = invenioPricesNode.json.price_data || [];\n\n// 1. Array di UUID Ibiza validi\nconst ibizaUuids = {};\nvillas.forEach(v => {\n    if (v.destination === \"Ibiza\" && v.v_uuid) {\n        ibizaUuids[String(v.v_uuid).trim().toLowerCase()] = true;\n    }\n});\n\n// 2. Raggruppa prezzi per ogni villa\nlet itemsToProcess = [];\n\nlet priceEntries = [];\nif (Array.isArray(rawPriceData)) {\n    priceEntries = rawPriceData;\n} else if (typeof rawPriceData === \"object\") {\n    for (const [key, value] of Object.entries(rawPriceData)) {\n        let obj = {};\n        obj[key] = value;\n        priceEntries.push(obj);\n    }\n}\n\nfor (const item of priceEntries) {\n    const v_uuid = Object.keys(item)[0];\n    if (!v_uuid) continue;\n    \n    const safeUuid = String(v_uuid).trim().toLowerCase();\n    if (!ibizaUuids[safeUuid]) continue;\n    \n    const periods = item[v_uuid];\n    if (!periods || !Array.isArray(periods)) continue;\n    \n    let formattedPeriods = periods.map(p => ({\n        v_uuid: v_uuid,\n        start_date: p.start_date,\n        end_date: p.end_date,\n        amount: parseFloat(p.amount) || 0,\n        minimum_nights: parseInt(p.minimum_nights) || 1,\n        allowed_checkin_days: p[\" allowed_checkin_days \"] || p.allowed_checkin_days || null\n    }));\n    \n    if (formattedPeriods.length > 0) {\n        itemsToProcess.push({\n            v_uuid: v_uuid,\n            prices: formattedPeriods\n        });\n    }\n}\n\nreturn itemsToProcess.map(item => ({ json: item }));"
+      },
+      "id": "b4a1c04e-550b-41b2-b634-5f5cbfa48361",
+      "name": "Group Prices By Villa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "invenio_seasonal_prices",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "amount",
+              "condition": "neq",
+              "keyValue": "0"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        0
+      ],
+      "id": "8cc2625d-8120-4b8a-8cad-0efaa920b19b",
+      "name": "Delete a row"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        0
+      ],
+      "id": "e02c820f-9993-46e8-acb9-543a00e04e10",
+      "name": "Loop Over Items"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Invenio - Get Villas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invenio - Get Villas": {
+      "main": [
+        [
+          {
+            "node": "Invenio - Get Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invenio - Get Prices": {
+      "main": [
+        [
+          {
+            "node": "Group Prices By Villa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group Prices By Villa": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Delete a row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete a row": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

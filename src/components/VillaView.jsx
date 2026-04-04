@@ -126,8 +126,27 @@ export default function VillaView() {
     };
 
     const validateBooking = () => {
-        if (!selectionStart || !selectionEnd) return { valid: true };
+        if (!selectionStart) return { valid: true, errors: [], prompt: "Select a check-in date on the calendar." };
+        
+        const rule = getRuleForDate(selectionStart);
         const start = new Date(selectionStart);
+        const errors = [];
+        let prompt = "";
+
+        // Check-in Day Validation (Immediate feedback after first click)
+        if (rule.allowed_checkin_days === 'Strictly Saturday-Saturday' && !getIsSat(selectionStart)) {
+            errors.push("This villa strictly requires a Saturday check-in.");
+        }
+
+        if (!selectionEnd) {
+            // Partial selection: only start date
+            const minNights = rule.minimum_nights || 7;
+            const earliestCheckOut = new Date(start);
+            earliestCheckOut.setDate(start.getDate() + minNights);
+            prompt = `Now select a check-out date (minimum stay: ${minNights} nights, from ${earliestCheckOut.toLocaleDateString()}).`;
+            return { valid: errors.length === 0, errors, prompt, isPartial: true };
+        }
+
         const end = new Date(selectionEnd);
         const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
         const today = new Date();
@@ -136,33 +155,30 @@ export default function VillaView() {
         const isLongStay = diffDays >= 28;
         const isShortStay = diffDays <= 6;
         const gapBooking = isGapBooking();
-        const rule = getRuleForDate(selectionStart);
-        const errors = [];
         
         if (rule.allowed_checkin_days === 'Strictly Saturday-Saturday') {
-            if (!getIsSat(selectionStart) || !getIsSat(selectionEnd)) {
-                errors.push("This villa only accepts Saturday to Saturday stays.");
+            if (!getIsSat(selectionEnd)) {
+                errors.push("This villa strictly requires check-out on a Saturday.");
             }
-            // For strict villas, we also enforce the minimum stay without bypasses unless it's a gap
             if (!gapBooking && diffDays < rule.minimum_nights) {
-                errors.push(`This villa requires a minimum of ${rule.minimum_nights} nights.`);
+                errors.push(`This villa requires a minimum of ${rule.minimum_nights} nights for this period.`);
             }
         } else {
             if (!gapBooking) {
                 const bypassMinNights = isLongStay || (isLastMinute && diffDays >= 3);
                 if (!bypassMinNights && diffDays < rule.minimum_nights) {
-                    errors.push(`The minimum stay is ${rule.minimum_nights} nights.`);
+                    errors.push(`The minimum stay required for this period is ${rule.minimum_nights} nights.`);
                 }
             } else if (diffDays < 3) {
-                errors.push("Gap bookings must be at least 3 nights.");
+                errors.push("Gap bookings (between two existing bookings) must be at least 3 nights.");
             }
         }
-        if (isShortStay) {
-            if (villa.allow_shortstays !== '1' && villa.allow_shortstays !== 'yes') {
-                errors.push("This villa does not accept short stays (under 7 nights).");
-            }
+
+        if (isShortStay && villa.allow_shortstays !== '1' && villa.allow_shortstays !== 'yes') {
+            errors.push("Short stays (less than 7 nights) are not allowed for this property.");
         }
-        return { valid: errors.length === 0, errors, isShortStay, diffDays };
+
+        return { valid: errors.length === 0, errors, isShortStay, diffDays, prompt: errors.length > 0 ? "Selection invalid. Please check the rules." : "Selection valid! You can now create the quote." };
     };
 
     const getBasePriceForSelection = () => {
@@ -785,6 +801,16 @@ export default function VillaView() {
                                 </h2>
                                 <p className="text-xs text-text-muted mt-1">Select dates to calculate a quote</p>
                             </div>
+
+                            {/* Dynamic Booking Guidance Banner */}
+                            <div className="hidden md:flex items-center gap-4 py-2 px-4 bg-primary/5 border border-primary/20 rounded-xl animate-in fade-in slide-in-from-right-3">
+                                <span className="material-symbols-outlined notranslate text-primary text-sm">info</span>
+                                <div className="flex gap-4 text-[10px] font-bold uppercase tracking-wider">
+                                    <span className="text-text-secondary">Min Stay: <b className="text-primary">{selectionStart ? getRuleForDate(selectionStart).minimum_nights : (villa.minimum_nights || 7)} nights</b></span>
+                                    <span className="text-text-secondary">Check-in: <b className="text-primary text-nowrap">{villa.allowed_checkin_days || 'Flexible'}</b></span>
+                                </div>
+                            </div>
+
                             <div className="flex gap-4">
                                 <div className="flex items-center gap-2"><div className="size-3 rounded-full bg-red-500/80"></div><span className="text-[10px] text-text-muted uppercase font-bold tracking-widest">Booked</span></div>
                                 <div className="flex items-center gap-2"><div className="size-3 rounded-full bg-surface border border-border"></div><span className="text-[10px] text-text-muted uppercase font-bold tracking-widest">Available</span></div>
@@ -949,31 +975,35 @@ export default function VillaView() {
                                 </div>
                             </div>
 
-                            {selectionStart && (
-                                <div className={`border rounded-xl p-4 mb-6 ${bookingStatus.valid ? 'bg-primary/10 border-primary/20' : 'bg-red-500/10 border-red-500/20'}`}>
-                                    <p className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${bookingStatus.valid ? 'text-primary' : 'text-red-400'}`}>
-                                        {bookingStatus.valid ? 'Selected Period' : 'Booking Rule Violation'}
+                             {selectionStart && (
+                                <div className={`border rounded-xl p-4 mb-6 transition-all duration-300 ${bookingStatus.valid ? (selectionEnd ? 'bg-primary/10 border-primary/20' : 'bg-surface border-primary/40') : 'bg-red-500/10 border-red-500/20'}`}>
+                                    <p className={`text-[10px] font-black uppercase tracking-widest mb-2 ${bookingStatus.valid ? (selectionEnd ? 'text-primary' : 'text-primary/70') : 'text-red-400'}`}>
+                                        {bookingStatus.valid ? (selectionEnd ? 'Selected Period' : 'Selection in Progress') : 'Booking Rule Violation'}
                                     </p>
                                     <div className="flex items-center justify-between font-bold text-text-primary text-sm">
-                                        <span>{new Date(selectionStart).toLocaleDateString()}</span>
-                                        {selectionEnd && (
-                                            <>
-                                                <span className="material-symbols-outlined notranslate text-[14px]">arrow_forward</span>
-                                                <span>{new Date(selectionEnd).toLocaleDateString()}</span>
-                                            </>
-                                        )}
+                                        <span className={!selectionStart ? 'opacity-30' : ''}>{selectionStart ? new Date(selectionStart).toLocaleDateString() : 'Pick Check-in'}</span>
+                                        <span className="material-symbols-outlined notranslate text-[14px]">arrow_forward</span>
+                                        <span className={!selectionEnd ? 'opacity-30' : ''}>{selectionEnd ? new Date(selectionEnd).toLocaleDateString() : 'Pick Check-out'}</span>
                                     </div>
-                                    {!bookingStatus.valid && selectionEnd && (
+
+                                    {bookingStatus.prompt && !selectionEnd && bookingStatus.valid && (
+                                        <div className="mt-3 p-3 rounded-lg bg-primary/5 text-[11px] text-primary font-medium border border-primary/10 animate-in fade-in slide-in-from-top-1">
+                                            {bookingStatus.prompt}
+                                        </div>
+                                    )}
+
+                                    {(!bookingStatus.valid || (selectionStart && bookingStatus.errors.length > 0)) && (
                                         <div className="mt-4 p-4 rounded-xl bg-red-500/20 border border-red-500/30 space-y-2 animate-in shake duration-500">
-                                            <p className="text-xs font-black text-red-400 uppercase tracking-widest flex items-center gap-2">
+                                            <p className="text-xs font-black text-red-100 uppercase tracking-widest flex items-center gap-2">
                                                 <span className="material-symbols-outlined notranslate text-sm">warning</span>
-                                                Invalid Selection
+                                                Fix Following:
                                             </p>
                                             {bookingStatus.errors.map((err, idx) => (
-                                                <p key={idx} className="text-sm text-red-200 font-medium leading-tight">
+                                                <p key={idx} className="text-[11px] text-red-50/80 font-medium leading-tight">
                                                     • {err}
                                                 </p>
                                             ))}
+                                            {!selectionEnd && <p className="text-[10px] text-red-100/60 mt-2 italic">Deselect and try again or select a valid date.</p>}
                                         </div>
                                     )}
                                     {selectionEnd && bookingStatus.valid && (
