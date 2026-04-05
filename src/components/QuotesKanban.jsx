@@ -128,7 +128,7 @@ const QuoteCard = ({ quote, onEdit, onAssign, onDelete, onDownloadPDF, onShare, 
                 <div className="flex items-center justify-between">
                     <p className="text-[10px] text-text-muted flex items-center gap-1.5 font-medium">
                         <span className="material-symbols-outlined notranslate text-[14px]">calendar_month</span>
-                        {new Date(quote.check_in).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                        {quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—'}
                     </p>
                     <p className="font-black text-primary text-[12px]">€{parseFloat(quote.final_price || 0).toLocaleString()}</p>
                 </div>

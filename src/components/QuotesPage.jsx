@@ -362,7 +362,7 @@ export default function QuotesPage() {
         const datesText = quote.check_in 
             ? `Dates: ${new Date(quote.check_in).toLocaleDateString('en-GB')} — ${new Date(quote.check_out).toLocaleDateString('en-GB')}`
             : 'Open Dates';
-        doc.text(`Guest: ${quote.clients?.full_name || 'Valued Client'}  |  Reference: ${quote.id.slice(0,8)}`, marginX, y);
+        doc.text(`Guest: ${quote.clients?.full_name || 'Valued Client'}  |  Reference: ${quote.id?.slice(0,8) || '—'}`, marginX, y);
         y += 5;
         doc.text(datesText, marginX, y);
         
@@ -486,7 +486,7 @@ export default function QuotesPage() {
             doc.text(`Page ${i} of ${pageCount}`, 190, 285, { align: 'right' });
         }
 
-        doc.save(`Quote_${title?.replace(/\s+/g, '_')}_${quote.id.slice(0, 8)}.pdf`);
+        doc.save(`Quote_${title?.replace(/\s+/g, '_')}_${quote.id?.slice(0, 8) || '—'}.pdf`);
     };
 
     return (
@@ -567,7 +567,7 @@ export default function QuotesPage() {
                                             <td className="px-5 py-4">
                                                 <div className="flex flex-col">
                                                     <span className="text-text-primary font-bold text-xs">{q.agent_id === user.id ? 'You' : (q.agents?.company_name || 'Individual Agent')}</span>
-                                                    <span className="text-[9px] text-text-muted uppercase tracking-tighter">ID: {q.agent_id.slice(0,8)}</span>
+                                                    <span className="text-[9px] text-text-muted uppercase tracking-tighter">ID: {q.agent_id?.slice(0,8) || '—'}</span>
                                                 </div>
                                             </td>
                                         )}
