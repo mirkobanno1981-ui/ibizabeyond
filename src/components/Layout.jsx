@@ -210,7 +210,10 @@ export default function Layout() {
                     </div>
                     <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-text-primary truncate">{displayName}</p>
-                        <p className="text-[11px] text-text-muted capitalize">{role} access</p>
+                        <div className="flex items-center gap-1">
+                            <p className="text-[11px] text-text-muted capitalize">{role} access</p>
+                            <span className="text-[9px] text-red-500 font-bold bg-red-500/10 px-1 rounded">v1.0.5 TEST</span>
+                        </div>
                     </div>
                     <button
                         onClick={handleSignOut}
