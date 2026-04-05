@@ -17,6 +17,13 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const [ivaPercent, setIvaPercent] = useState(10);
     const [ownerPhone, setOwnerPhone] = useState('');
     const [ownerName, setOwnerName] = useState('');
+    
+    // Group Qualification State
+    const [groupType, setGroupType] = useState(quote.group_details?.type || 'family');
+    const [numChildren, setNumChildren] = useState(quote.group_details?.children || 0);
+    const [friendsComposition, setFriendsComposition] = useState(quote.group_details?.composition || '');
+    const [isCouples, setIsCouples] = useState(quote.group_details?.is_couples || false);
+    const [hasPets, setHasPets] = useState(quote.group_details?.has_pets || false);
 
 
     useEffect(() => {
@@ -128,7 +135,14 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     stripe_fee_included: useStripeFee,
                     agent_id: assignedAgentId,
                     deposit_paid: depositPaid,
-                    balance_paid: balancePaid
+                    balance_paid: balancePaid,
+                    group_details: {
+                        type: groupType,
+                        children: groupType === 'family' ? numChildren : 0,
+                        composition: groupType === 'friends' ? friendsComposition : null,
+                        is_couples: groupType === 'friends' ? isCouples : false,
+                        has_pets: hasPets
+                    }
                 })
                 .eq('id', quote.id);
 
@@ -206,6 +220,78 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             <option value="waiting_owner">Waiting Owner</option>
                             <option value="owner_declined">Owner Declined</option>
                         </select>
+                    </div>
+
+                    {/* Group Qualification Section */}
+                    <div className="p-4 rounded-2xl bg-primary/5 border border-primary/20 space-y-4">
+                        <div className="flex items-center gap-2 mb-2">
+                            <span className="material-symbols-outlined notranslate text-primary text-sm">groups</span>
+                            <label className="text-[10px] font-black text-primary uppercase tracking-widest">Group Qualification</label>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                            <button 
+                                onClick={() => setGroupType('family')}
+                                className={`py-2 px-3 rounded-xl border text-[10px] font-bold uppercase transition-all ${groupType === 'family' ? 'bg-primary border-primary text-white shadow-lg' : 'bg-surface border-border text-text-muted hover:border-primary/50'}`}
+                            >
+                                Family
+                            </button>
+                            <button 
+                                onClick={() => setGroupType('friends')}
+                                className={`py-2 px-3 rounded-xl border text-[10px] font-bold uppercase transition-all ${groupType === 'friends' ? 'bg-primary border-primary text-white shadow-lg' : 'bg-surface border-border text-text-muted hover:border-primary/50'}`}
+                            >
+                                Friends
+                            </button>
+                        </div>
+
+                        {groupType === 'family' ? (
+                            <div className="space-y-2 animate-in fade-in duration-200">
+                                <label className="text-[9px] font-bold text-text-muted uppercase px-1">Number of Children</label>
+                                <input 
+                                    type="number"
+                                    min="0"
+                                    value={numChildren}
+                                    onChange={(e) => setNumChildren(parseInt(e.target.value) || 0)}
+                                    className="w-full input-theme py-2 px-3 text-xs"
+                                    placeholder="0"
+                                />
+                            </div>
+                        ) : (
+                            <div className="space-y-3 animate-in fade-in duration-200">
+                                <div className="space-y-2">
+                                    <label className="text-[9px] font-bold text-text-muted uppercase px-1">Composition (e.g. 4 guys, 2 girls)</label>
+                                    <input 
+                                        type="text"
+                                        value={friendsComposition}
+                                        onChange={(e) => setFriendsComposition(e.target.value)}
+                                        className="w-full input-theme py-2 px-3 text-xs"
+                                        placeholder="Briefly describe the group"
+                                    />
+                                </div>
+                                <label className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border cursor-pointer hover:border-primary/30 transition-all">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={isCouples}
+                                        onChange={e => setIsCouples(e.target.checked)}
+                                        className="size-3.5 accent-primary"
+                                    />
+                                    <span className="text-[9px] font-bold uppercase tracking-wider text-text-primary">Group of Couples?</span>
+                                </label>
+                            </div>
+                        )}
+
+                        <label className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border cursor-pointer hover:border-primary/30 transition-all">
+                            <input 
+                                type="checkbox" 
+                                checked={hasPets}
+                                onChange={e => setHasPets(e.target.checked)}
+                                className="size-3.5 accent-primary"
+                            />
+                            <div className="flex items-center gap-2">
+                                <span className="material-symbols-outlined notranslate text-sm text-text-muted">pets</span>
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-text-primary">Bringing Pets?</span>
+                            </div>
+                        </label>
                     </div>
 
                     {/* Ask Availability Button */}
