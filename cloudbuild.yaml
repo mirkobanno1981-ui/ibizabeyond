@@ -33,6 +33,9 @@ steps:
 images:
   - 'europe-west1-docker.pkg.dev/ibzabeyond/ibizabeyond-repo/ibizabeyond-frontend'
 
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 substitutions:
   _VITE_SUPABASE_URL: 'https://nqnwmotrjlbqdnrwcyfz.supabase.co'
   _VITE_SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5xbndtb3RyamxicWRucndjeWZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDA4NTIsImV4cCI6MjA4ODAxNjg1Mn0.ku8cl9x-2d_PWI63MTSyOFELJaNIVLUiqFFqDU3p3CM'
