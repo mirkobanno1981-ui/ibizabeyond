@@ -87,6 +87,26 @@ export default function VillasTable() {
 
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
+            } else if (role === 'agent' && user?.id) {
+                // Get agent profile id first
+                const { data: agentData } = await supabase
+                    .from('agents')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .single();
+                
+                if (agentData) {
+                    // Logic: Get properties where owner_id is an owner managed by this agent
+                    const { data: managedOwners } = await supabase
+                        .from('owners')
+                        .select('id')
+                        .eq('agent_id', agentData.id);
+                    
+                    const ownerIds = managedOwners?.map(o => o.id) || [];
+                    
+                    // We also include villas created_by this agent
+                    query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
+                }
             }
             if (search) {
                 query = query.or(`villa_name.ilike.%${search}%,areaname.ilike.%${search}%`);
@@ -298,7 +318,7 @@ export default function VillasTable() {
                         {loading ? 'Loading...' : `${totalCount} exclusive properties in Ibiza`}
                     </p>
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent' || role === 'owner') && (
                     <button 
                         onClick={() => setEditVilla({ 
                             v_uuid: null, 
@@ -734,7 +754,7 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                 </div>
 
                 <div className="mt-3 flex gap-2">
-                    {(role === 'admin' || role === 'super_admin' || role === 'editor') ? (
+                    {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent' || (role === 'owner' && villa.owner_id === user?.id)) ? (
                         <>
                             <button
                                 onClick={onEdit}

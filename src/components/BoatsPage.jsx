@@ -33,6 +33,23 @@ export default function BoatsPage() {
 
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
+            } else if (role === 'agent' && user?.id) {
+                // Get agent profile id first
+                const { data: agentData } = await supabase
+                    .from('agents')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .single();
+                
+                if (agentData) {
+                    const { data: managedOwners } = await supabase
+                        .from('owners')
+                        .select('id')
+                        .eq('agent_id', agentData.id);
+                    
+                    const ownerIds = managedOwners?.map(o => o.id) || [];
+                    query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
+                }
             }
             if (search) {
                 query = query.ilike('boat_name', `%${search}%`);
@@ -88,7 +105,7 @@ export default function BoatsPage() {
                         {loading ? 'Loading...' : `${boats.length} premium vessels available`}
                     </p>
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'owner') && (
+                {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent') && (
                     <button 
                         onClick={() => setEditBoat({})} 
                         className="btn-primary flex items-center gap-2 text-sm self-start"
@@ -311,7 +328,7 @@ function BoatCard({ boat, onEdit, role, isSelected, onSelect }) {
                 </div>
 
                 <div className="mt-4 flex gap-2">
-                    {(role === 'admin' || role === 'super_admin' || role === 'owner') ? (
+                    {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent') ? (
                         <>
                             <button 
                                 onClick={onEdit}
