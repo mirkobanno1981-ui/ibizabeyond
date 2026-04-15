@@ -5,6 +5,49 @@ import VillaMap from './VillaMap';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1200&q=80';
 
+const DEFAULT_B2C_CONTRACT = `# CONTRATTO DI LOCAZIONE TURISTICA ({{agency_name}} ↔ {{client_full_name}})
+
+**1. L'AGENTE / AGENZIA**
+- **Nome:** {{agency_name}}
+- **Sede:** {{agency_address}}
+- **Tax ID:** {{agency_tax_id}}
+- **Email:** {{agency_email}} | **Tel:** {{agency_phone}}
+
+**2. IL CONDUTTORE (Ospite)**
+- **Nome:** {{client_full_name}}
+- **Residenza:** {{client_address}}
+- **Documento:** {{client_passport}}
+- **Data di nascita:** {{client_dob}}
+- **Contatti:** {{client_email}} | {{client_phone}}
+
+### PREMESSO CHE:
+L'Agente ha l'autorizzazione a concedere in locazione la Villa **"{{villa_name}}"**, Licenza **{{villa_license}}**. Il Cliente accetta l'infrastruttura di **{{platform_name}}** per il pagamento.
+
+### ART. 1 - OGGETTO E PERIODO
+La Villa si trova in **{{villa_address}}**. 
+Periodo: dal **{{check_in}}** al **{{check_out}}**.
+Max occupanti: **{{max_guests}}**.
+
+### ART. 2 - PREZZO E PAGAMENTI
+Prezzo Totale: **{{final_price}}**.
+- **Acconto:** {{deposit_percent}}% al momento della prenotazione.
+- **Saldo:** {{balance_percent}}% entro {{balance_due_days}} giorni dall'arrivo.
+
+### ART. 3 - DEPOSITO CAUZIONALE
+Importo: **{{security_deposit_amount}}**. Sarà sbloccato entro 14 giorni dal check-out previa ispezione.
+
+### ART. 4 - REGOLE E DIVIETI
+Vietato organizzare feste o eventi non autorizzati. Rispetto rigoroso dei vicini (22:00-09:00). Penale spazzatura: €150.
+
+### ART. 5 - CANCELLAZIONE
+Fino a 60 giorni dall'arrivo: penale del 50%. Successivamente: penale del 100%.
+
+### ART. 6 - RESPONSABILITÀ
+La piattaforma {{platform_name}} agisce come solo fornitore tecnologico e non ha responsabilità operativa sulla Villa.
+
+**Luogo e Data:** Ibiza, lì {{today}}
+**Firma per Accettazione:** {{client_full_name}} (Firma Digitale)`;
+
 export default function QuotePublicView() {
     const { id } = useParams(); // quote_id
     const [quote, setQuote] = useState(null);
@@ -119,53 +162,8 @@ export default function QuotePublicView() {
         } catch (err) {
             console.error('Fetch error:', err);
             setError(err.message);
-        } finally {
-            setLoading(false);
         }
     }
-
-const DEFAULT_B2C_CONTRACT = `# CONTRATTO DI LOCAZIONE TURISTICA ({{agency_name}} ↔ {{client_full_name}})
-
-**1. L'AGENTE / AGENZIA**
-- **Nome:** {{agency_name}}
-- **Sede:** {{agency_address}}
-- **Tax ID:** {{agency_tax_id}}
-- **Email:** {{agency_email}} | **Tel:** {{agency_phone}}
-
-**2. IL CONDUTTORE (Ospite)**
-- **Nome:** {{client_full_name}}
-- **Residenza:** {{client_address}}
-- **Documento:** {{client_passport}}
-- **Data di nascita:** {{client_dob}}
-- **Contatti:** {{client_email}} | {{client_phone}}
-
-### PREMESSO CHE:
-L'Agente ha l'autorizzazione a concedere in locazione la Villa **"{{villa_name}}"**, Licenza **{{villa_license}}**. Il Cliente accetta l'infrastruttura di **{{platform_name}}** per il pagamento.
-
-### ART. 1 - OGGETTO E PERIODO
-La Villa si trova in **{{villa_address}}**. 
-Periodo: dal **{{check_in}}** al **{{check_out}}**.
-Max occupanti: **{{max_guests}}**.
-
-### ART. 2 - PREZZO E PAGAMENTI
-Prezzo Totale: **{{final_price}}**.
-- **Acconto:** {{deposit_percent}}% al momento della prenotazione.
-- **Saldo:** {{balance_percent}}% entro {{balance_due_days}} giorni dall'arrivo.
-
-### ART. 3 - DEPOSITO CAUZIONALE
-Importo: **{{security_deposit_amount}}**. Sarà sbloccato entro 14 giorni dal check-out previa ispezione.
-
-### ART. 4 - REGOLE E DIVIETI
-Vietato organizzare feste o eventi non autorizzati. Rispetto rigoroso dei vicini (22:00-09:00). Penale spazzatura: €150.
-
-### ART. 5 - CANCELLAZIONE
-Fino a 60 giorni dall'arrivo: penale del 50%. Successivamente: penale del 100%.
-
-### ART. 6 - RESPONSABILITÀ
-La piattaforma {{platform_name}} agisce come solo fornitore tecnologico e non ha responsabilità operativa sulla Villa.
-
-**Luogo e Data:** Ibiza, lì {{today}}
-**Firma per Accettazione:** {{client_full_name}} (Firma Digitale)`;
 
     const getProcessedTemplate = () => {
         if (!quote) return 'Loading agreement...';
