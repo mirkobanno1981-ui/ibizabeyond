@@ -22,6 +22,45 @@ const STATUS_COLORS = {
     contract_signed: 'bg-emerald-500/20 text-emerald-400 font-extrabold',
 };
 
+const DEFAULT_B2C_CONTRACT = `# CONTRATTO DI LOCAZIONE TURISTICA ({{agency_name}} ↔ {{client_full_name}})
+
+**1. L'AGENTE / AGENZIA**
+- **Nome:** {{agency_name}}
+- **Sede:** {{agency_address}}
+- **Tax ID:** {{agency_tax_id}}
+- **Email:** {{agency_email}} | **Tel:** {{agency_phone}}
+
+**2. IL CONDUTTORE (Ospite)**
+- **Nome:** {{client_full_name}}
+- **Residenza:** {{client_address}}
+- **Documento:** {{client_passport}}
+- **Data di nascita:** {{client_dob}}
+- **Contatti:** {{client_email}} | {{client_phone}}
+
+### PREMESSO CHE:
+L'Agente ha l'autorizzazione a concedere in locazione la Villa **"{{villa_name}}"**, Licenza **{{villa_license}}**. Il Cliente accetta l'infrastruttura di Ibiza Beyond per il pagamento.
+
+### ART. 1 - OGGETTO E PERIODO
+La Villa si trova in **{{villa_address}}**. 
+Periodo: dal **{{check_in}}** al **{{check_out}}**.
+
+### ART. 2 - PREZZO E PAGAMENTI
+Prezzo Totale: **{{final_price}}**.
+- **Acconto:** {{deposit_percent}}% al momento della prenotazione.
+- **Saldo:** {{balance_percent}}% entro {{balance_due_days}} giorni dall'arrivo.
+
+### ART. 3 - DEPOSITO CAUZIONALE
+Importo: **{{security_deposit_amount}}**. Sarà sbloccato entro 14 giorni dal check-out previa ispezione.
+
+### ART. 4 - REGOLE E DIVIETI
+Vietato organizzare feste o eventi non autorizzati. Rispetto rigoroso dei vicini.
+
+### ART. 5 - CANCELLAZIONE
+Fino a 60 giorni dall'arrivo: penale del 50%. Successivamente: penale del 100%.
+
+### ART. 6 - RESPONSABILITÀ
+La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico.`;
+
 export default function QuotesPage() {
     const { user, role, agentData } = useAuth();
     const queryClient = useQueryClient();
@@ -53,7 +92,7 @@ export default function QuotesPage() {
                     clients(full_name, phone_number),
                     invenio_properties(*),
                     invenio_boats(*),
-                    agents(company_name, contract_template, boat_contract_template)
+                    agents(company_name, contract_template, boat_contract_template, address, tax_id, phone_number, agency_details)
                 `)
                 .order('created_at', { ascending: false });
 
@@ -306,17 +345,43 @@ export default function QuotesPage() {
 
         // Fetch Contract Template & Prepare Data
         const agent = quote.agents;
-        const contractTemplate = quote.invenio_boats ? (agent?.boat_contract_template || agent?.contract_template) : agent?.contract_template;
+        const contractTemplate = quote.invenio_boats 
+            ? (agent?.boat_contract_template || agent?.contract_template || DEFAULT_B2C_CONTRACT) 
+            : (agent?.contract_template || DEFAULT_B2C_CONTRACT);
         
+        const isLastMinute = (() => {
+            const checkInDate = new Date(quote.check_in);
+            const today = new Date();
+            const diffTime = checkInDate.getTime() - today.getTime();
+            return Math.round(diffTime / (1000 * 60 * 60 * 24)) <= 49;
+        })();
+
         const data = {
             '{{client_full_name}}': quote.clients?.full_name || 'Valued Client',
+            '{{client_email}}': quote.clients?.email || '—',
+            '{{client_phone}}': quote.clients?.phone || '—',
+            '{{client_address}}': quote.clients?.address || '—',
+            '{{client_passport}}': quote.clients?.passport_number || '—',
+            '{{client_dob}}': quote.clients?.dob || '—',
+            
+            '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
+            '{{agency_address}}': agent?.address || agent?.agency_details || 'Ibiza, Balearic Islands',
+            '{{agency_tax_id}}': agent?.tax_id || agent?.agency_details || '—',
+            '{{agency_email}}': agent?.email || '—',
+            '{{agency_phone}}': agent?.phone_number || '—',
+
             '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
-            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
+            '{{villa_license}}': quote.invenio_properties?.license || '—',
+            '{{villa_address}}': quote.invenio_properties?.location || 'Ibiza',
             '{{check_in}}': quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB') : '',
             '{{check_out}}': quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB') : '',
             '{{final_price}}': `€${parseFloat(quote.final_price || 0).toLocaleString()}`,
-            '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
-            '{{deposit}}': `€${parseFloat(quote.deposit || 0).toLocaleString()}`
+            '{{deposit}}': `€${parseFloat(quote.deposit || 0).toLocaleString()}`,
+            '{{deposit_percent}}': isLastMinute ? '100' : '50',
+            '{{balance_percent}}': isLastMinute ? '0' : '50',
+            '{{balance_due_days}}': '30',
+            '{{security_deposit_amount}}': quote.invenio_properties?.security_deposit || quote.invenio_boats?.security_deposit || '—',
+            '{{today}}': new Date().toLocaleDateString('en-GB')
         };
 
         // Hero Image
