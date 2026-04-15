@@ -42,22 +42,48 @@ export default function AgentSettings() {
 
             if (error) throw error;
             if (data) {
-                const defaultTemplate = `# SEASONAL VILLA RENTAL AGREEMENT
+                const defaultTemplate = `# CONTRATTO DI LOCAZIONE TURISTICA ({{agency_name}} ↔ {{client_full_name}})
 
-This agreement is made between {{agency_name}} and {{client_full_name}}.
+**1. L'AGENTE / AGENZIA**
+- **Nome:** {{agency_name}}
+- **Sede:** {{agency_address}}
+- **Tax ID:** {{agency_tax_id}}
+- **Email:** {{agency_email}} | **Tel:** {{agency_phone}}
 
-### RESERVATION SUMMARY
-- VILLA: {{villa_name}}
-- CHECK-IN: {{check_in}}
-- CHECK-OUT: {{check_out}}
-- TOTAL PRICE: €{{final_price}}
+**2. IL CONDUTTORE (Ospite)**
+- **Nome:** {{client_full_name}}
+- **Residenza:** {{client_address}}
+- **Documento:** {{client_passport}}
+- **Data di nascita:** {{client_dob}}
+- **Contatti:** {{client_email}} | {{client_phone}}
 
-### PAYMENT SCHEDULE
-1. Downpayment + Commissions: Due now upon signature.
-2. Final Balance: Due 6 weeks before check-in.
-3. Security Deposit: Due 1 week before arrival.
+### PREMESSO CHE:
+L'Agente ha l'autorizzazione a concedere in locazione la Villa **"{{villa_name}}"**, Licenza **{{villa_license}}**. Il Cliente accetta l'infrastruttura di **Ibiza Beyond** per il pagamento.
 
-Signed Digitally via Documenso.`;
+### ART. 1 - OGGETTO E PERIODO
+La Villa si trova in **{{villa_address}}**. 
+Periodo: dal **{{check_in}}** al **{{check_out}}**.
+Max occupanti: **{{max_guests}}**.
+
+### ART. 2 - PREZZO E PAGAMENTI
+Prezzo Totale: **{{final_price}}**.
+- **Acconto:** {{deposit_percent}}% al momento della prenotazione.
+- **Saldo:** {{balance_percent}}% entro 30 giorni dall'arrivo.
+
+### ART. 3 - DEPOSITO CAUZIONALE
+Importo: **{{security_deposit_amount}}**. Sarà sbloccato entro 14 giorni dal check-out previa ispezione.
+
+### ART. 4 - REGOLE E DIVIETI
+Vietato organizzare feste o eventi non autorizzati. Rispetto rigoroso dei vicini (22:00-09:00). Penale spazzatura: €150.
+
+### ART. 5 - CANCELLAZIONE
+Fino a 60 giorni dall'arrivo: penale del 50%. Successivamente: penale del 100%.
+
+### ART. 6 - RESPONSABILITÀ
+La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha responsabilità operativa sulla Villa.
+
+**Luogo e Data:** Ibiza, lì {{today}}
+**Firma per Accettazione:** {{client_full_name}} (Firma Digitale)`;
 
                 setAgentData({
                     id: data.id,

@@ -64,8 +64,8 @@ export default function QuotePublicView() {
                     *,
                     invenio_properties(*),
                     invenio_boats(*),
-                    agents(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type),
-                    clients(full_name)
+                    agents(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details, email),
+                    clients(full_name, email, phone, address, passport_number, dob)
                 `)
                 .eq('id', id)
                 .single();
@@ -124,26 +124,117 @@ export default function QuotePublicView() {
         }
     }
 
+const DEFAULT_B2C_CONTRACT = `# CONTRATTO DI LOCAZIONE TURISTICA ({{agency_name}} ↔ {{client_full_name}})
+
+**1. L'AGENTE / AGENZIA**
+- **Nome:** {{agency_name}}
+- **Sede:** {{agency_address}}
+- **Tax ID:** {{agency_tax_id}}
+- **Email:** {{agency_email}} | **Tel:** {{agency_phone}}
+
+**2. IL CONDUTTORE (Ospite)**
+- **Nome:** {{client_full_name}}
+- **Residenza:** {{client_address}}
+- **Documento:** {{client_passport}}
+- **Data di nascita:** {{client_dob}}
+- **Contatti:** {{client_email}} | {{client_phone}}
+
+### PREMESSO CHE:
+L'Agente ha l'autorizzazione a concedere in locazione la Villa **"{{villa_name}}"**, Licenza **{{villa_license}}**. Il Cliente accetta l'infrastruttura di **{{platform_name}}** per il pagamento.
+
+### ART. 1 - OGGETTO E PERIODO
+La Villa si trova in **{{villa_address}}**. 
+Periodo: dal **{{check_in}}** al **{{check_out}}**.
+Max occupanti: **{{max_guests}}**.
+
+### ART. 2 - PREZZO E PAGAMENTI
+Prezzo Totale: **{{final_price}}**.
+- **Acconto:** {{deposit_percent}}% al momento della prenotazione.
+- **Saldo:** {{balance_percent}}% entro {{balance_due_days}} giorni dall'arrivo.
+
+### ART. 3 - DEPOSITO CAUZIONALE
+Importo: **{{security_deposit_amount}}**. Sarà sbloccato entro 14 giorni dal check-out previa ispezione.
+
+### ART. 4 - REGOLE E DIVIETI
+Vietato organizzare feste o eventi non autorizzati. Rispetto rigoroso dei vicini (22:00-09:00). Penale spazzatura: €150.
+
+### ART. 5 - CANCELLAZIONE
+Fino a 60 giorni dall'arrivo: penale del 50%. Successivamente: penale del 100%.
+
+### ART. 6 - RESPONSABILITÀ
+La piattaforma {{platform_name}} agisce come solo fornitore tecnologico e non ha responsabilità operativa sulla Villa.
+
+**Luogo e Data:** Ibiza, lì {{today}}
+**Firma per Accettazione:** {{client_full_name}} (Firma Digitale)`;
+
     const getProcessedTemplate = () => {
         if (!quote) return '';
-        let content = quote.invenio_boats ? (agent?.boat_contract_template || agent?.contract_template) : agent?.contract_template;
-        if (!content) return '';
         
+        let content = quote.invenio_boats 
+            ? (agent?.boat_contract_template || agent?.contract_template || DEFAULT_B2C_CONTRACT) 
+            : (agent?.contract_template || DEFAULT_B2C_CONTRACT);
+
+        const isLastMinute = (() => {
+            const checkInDate = new Date(quote.check_in);
+            const today = new Date();
+            const diffTime = checkInDate.getTime() - today.getTime();
+            return Math.round(diffTime / (1000 * 60 * 60 * 24)) <= 49;
+        })();
+
         const data = {
             '{{client_full_name}}': quote.clients?.full_name || 'Valued Client',
-            '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
-            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
-            '{{check_in}}': quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' }) : '',
-            '{{check_out}}': quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' }) : '',
-            '{{final_price}}': parseFloat(quote.final_price || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' }),
+            '{{client_email}}': quote.clients?.email || '—',
+            '{{client_phone}}': quote.clients?.phone || '—',
+            '{{client_address}}': quote.clients?.address || '[To be filled in registration]',
+            '{{client_passport}}': quote.clients?.passport_number || '[To be filled in registration]',
+            '{{client_dob}}': quote.clients?.dob || '—',
+            
             '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
-            '{{deposit}}': parseFloat(quote.deposit || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' })
+            '{{agency_address}}': agent?.address || agent?.agency_details || 'Ibiza, Balearic Islands',
+            '{{agency_tax_id}}': agent?.tax_id || agent?.agency_details || '—',
+            '{{agency_email}}': agent?.email || '—',
+            '{{agency_phone}}': agent?.phone_number || '—',
+
+            '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
+            '{{villa_license}}': quote.invenio_properties?.license || '—',
+            '{{villa_address}}': quote.invenio_properties?.location || 'Ibiza',
+            '{{max_guests}}': quote.invenio_properties?.sleeps || quote.invenio_boats?.capacity_day || '—',
+            
+            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
+            '{{platform_name}}': 'Ibiza Beyond',
+            '{{today}}': new Date().toLocaleDateString('it-IT'),
+            
+            '{{check_in}}': quote.check_in ? new Date(quote.check_in).toLocaleDateString('it-IT') : '—',
+            '{{check_out}}': quote.check_out ? new Date(quote.check_out).toLocaleDateString('it-IT') : '—',
+            '{{final_price}}': parseFloat(quote.final_price || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '{{deposit_percent}}': isLastMinute ? '100' : '50',
+            '{{balance_percent}}': isLastMinute ? '0' : '50',
+            '{{balance_due_days}}': '30',
+            '{{security_deposit_amount}}': parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '{{security_deposit_due_days}}': '7',
+
+            // Explicit mappings for Italian labels in [BRACKETS]
+            '\\[NOME CLIENTE\\]': quote.clients?.full_name || 'Valued Client',
+            '\\[NOME AGENTE/SOCIETÀ\\]': agent?.company_name || 'Ibiza Beyond',
+            '\\[NOME VILLA\\]': quote.invenio_properties?.villa_name || 'Villa',
+            '\\[DATA CHECK-IN\\]': quote.check_in ? new Date(quote.check_in).toLocaleDateString('it-IT') : '—',
+            '\\[DATA CHECK-OUT\\]': quote.check_out ? new Date(quote.check_out).toLocaleDateString('it-IT') : '—',
+            '\\[IMPORTO TOTALE\\]': parseFloat(quote.final_price || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '\\[IMPORTO DEPOSITO\\]': parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '\\[NUMERO LICENZA ETV\\]': quote.invenio_properties?.license || '—',
+            '\\[INDIRIZZO VILLA\\]': quote.invenio_properties?.location || 'Ibiza',
+            '\\[NOME PIATTAFORMA\\]': 'Ibiza Beyond'
         };
 
+        // Standardize [PLACEHOLDER] to {{placeholder}} if they exist in the template
+        let processedContent = content;
+        
+        // Handle both formats: [PLACEHOLDER] and {{placeholder}}
         Object.entries(data).forEach(([key, val]) => {
-            content = content.replace(new RegExp(key, 'g'), val);
+            processedContent = processedContent.replace(new RegExp(key, 'g'), val);
         });
-        return content;
+
+        return processedContent;
     };
 
     const handleSign = async () => {
