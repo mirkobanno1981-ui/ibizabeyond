@@ -156,14 +156,15 @@ export default function AgentsPage() {
                     agent_type: newAgent.agent_type,
                     status: 'approved',
                     is_active: true,
-                    agency_id: newId // Set agency_id to self for main agents
+                    agency_id: newId, // Set agency_id to self for main agents
+                    stripe_account_id: newAgent.stripe_account_id
                 }]);
 
             if (profileErr) throw profileErr;
 
             setMessage({ type: 'success', text: `${newAgent.agent_type === 'agency' ? 'Agency' : 'Agent'} created successfully!` });
             setShowAddModal(false);
-            setNewAgent({ email: '', password: '', firstName: '', lastName: '', company_name: '', agent_type: 'individual' });
+            setNewAgent({ email: '', password: '', firstName: '', lastName: '', company_name: '', agent_type: 'individual', stripe_account_id: '' });
             fetchAll();
         } catch (err) {
             console.error("Creation error:", err);
@@ -192,7 +193,8 @@ export default function AgentsPage() {
                     agent_type: editAgent.agent_type || 'individual',
                     parent_agent_id: editAgent.agent_type === 'sub_agent' ? editAgent.parent_agent_id : null,
                     contract_template: editAgent.contract_template,
-                    boat_contract_template: editAgent.boat_contract_template
+                    boat_contract_template: editAgent.boat_contract_template,
+                    stripe_account_id: editAgent.stripe_account_id
                 });
             if (profileError) throw profileError;
 
@@ -520,6 +522,20 @@ export default function AgentsPage() {
                                     <input type="number" step="0.1" className="input-theme w-full text-right" value={editAgent.admin_margin ?? 0} onChange={e => setEditAgent({...editAgent, admin_margin: e.target.value})} />
                                     <p className="text-[10px] text-text-muted mt-1 italic">0 = uses global default</p>
                                 </div>
+                                {role === 'super_admin' && (
+                                    <div>
+                                        <label className="block text-xs text-text-muted mb-1.5 font-medium">Stripe Account ID</label>
+                                        <input 
+                                            className="input-theme w-full font-mono text-xs" 
+                                            value={editAgent.stripe_account_id || ''} 
+                                            onChange={e => setEditAgent({...editAgent, stripe_account_id: e.target.value})} 
+                                            placeholder="acct_xxxxxxxxxxxxxx"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">Agent Type</label>
                                     <select 
@@ -800,6 +816,18 @@ export default function AgentsPage() {
                                         placeholder="Min. 6 characters"
                                     />
                                 </div>
+
+                                {role === 'super_admin' && (
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Stripe Account ID (Optional)</label>
+                                        <input 
+                                            className="input-theme w-full h-12 font-mono text-xs" 
+                                            value={newAgent.stripe_account_id || ''} 
+                                            onChange={e => setNewAgent({...newAgent, stripe_account_id: e.target.value})} 
+                                            placeholder="acct_xxxxxxxxxxxxxx"
+                                        />
+                                    </div>
+                                )}
 
                                 {newAgent.agent_type !== 'agency' && (
                                     <div className="space-y-1.5">

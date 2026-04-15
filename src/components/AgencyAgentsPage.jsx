@@ -14,7 +14,7 @@ export default function AgencyAgentsPage() {
     const [activeTab, setActiveTab] = useState('agents'); // 'agents', 'clients', 'quotes', 'bookings'
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState(null);
-    const [newAgent, setNewAgent] = useState({ email: '', password: '', firstName: '', lastName: '', role: 'agent' });
+    const [newAgent, setNewAgent] = useState({ email: '', password: '', firstName: '', lastName: '', role: 'agent', markup_percent: 15 });
     const [editAgent, setEditAgent] = useState(null);
     const [viewHistory, setViewHistory] = useState(null);
     const [agentQuotes, setAgentQuotes] = useState([]);
@@ -123,7 +123,8 @@ export default function AgencyAgentsPage() {
                         company_name: fullName,
                         role: newAgent.role,
                         agency_id: targetAgencyId,
-                        parent_agent_id: user.id
+                        parent_agent_id: user.id,
+                        markup_percent: parseFloat(newAgent.markup_percent) || 0
                     }
                 }
             });
@@ -134,7 +135,7 @@ export default function AgencyAgentsPage() {
 
             setMessage({ type: 'success', text: 'Team member added successfully!' });
             setShowAddModal(false);
-            setNewAgent({ email: '', password: '', firstName: '', lastName: '', role: 'agent' });
+            setNewAgent({ email: '', password: '', firstName: '', lastName: '', role: 'agent', markup_percent: 15 });
             fetchAllData();
         } catch (err) {
             setMessage({ type: 'error', text: err.message });
@@ -151,7 +152,8 @@ export default function AgencyAgentsPage() {
                 .from('agents')
                 .update({ 
                     is_active: editAgent.is_active,
-                    agent_type: editAgent.role === 'agency_admin' ? 'agency_admin' : 'sub_agent'
+                    agent_type: editAgent.role === 'agency_admin' ? 'agency_admin' : 'sub_agent',
+                    markup_percent: parseFloat(editAgent.markup_percent) || 0
                 })
                 .eq('id', editAgent.id);
             if (pErr) throw pErr;
@@ -269,6 +271,7 @@ export default function AgencyAgentsPage() {
                                                     <p className="font-black text-text-primary text-lg leading-none uppercase tracking-tighter">{agent.company_name}</p>
                                                     <div className="flex items-center gap-2 mt-2">
                                                         <span className="text-[9px] px-2 py-0.5 bg-surface-2 text-text-muted rounded-full font-black uppercase tracking-wider border border-border/50">{agent.role}</span>
+                                                        <span className="text-[9px] px-2 py-0.5 bg-primary/10 text-primary rounded-full font-black uppercase tracking-wider border border-primary/20">{agent.markup_percent || 0}% Margin</span>
                                                         {agent.is_active === false && <span className="text-[9px] px-2 py-0.5 bg-red-500/20 text-red-400 rounded-full font-black uppercase tracking-wider border border-red-500/20">Inactive</span>}
                                                     </div>
                                                 </div>
@@ -498,6 +501,18 @@ export default function AgencyAgentsPage() {
                                 <label className="text-[10px] font-black text-text-muted uppercase px-1">Password</label>
                                 <input required type="password" minLength={6} className="input-theme w-full" placeholder="••••••••" value={newAgent.password} onChange={e => setNewAgent({...newAgent, password: e.target.value})} />
                             </div>
+
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-text-muted uppercase px-1">Default Margin (%)</label>
+                                <input 
+                                    type="number" 
+                                    step="0.1"
+                                    className="input-theme w-full" 
+                                    placeholder="15.0"
+                                    value={newAgent.markup_percent} 
+                                    onChange={e => setNewAgent({...newAgent, markup_percent: e.target.value})} 
+                                />
+                            </div>
                             
                             <div className="pt-2">
                                 <label className="block text-[10px] font-black text-text-muted uppercase mb-3 px-1">System Permissions</label>
@@ -556,6 +571,23 @@ export default function AgencyAgentsPage() {
                                         </button>
                                     ))}
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-[10px] font-black text-text-muted uppercase mb-3 px-1">Default Commission Margin (%)</label>
+                                <div className="relative group">
+                                    <input 
+                                        type="number" 
+                                        step="0.1"
+                                        className="input-theme w-full pl-10 pr-4 py-4 font-black" 
+                                        placeholder="15.0"
+                                        value={editAgent.markup_percent || ''} 
+                                        onChange={e => setEditAgent({...editAgent, markup_percent: e.target.value})} 
+                                    />
+                                    <span className="material-symbols-outlined notranslate absolute left-3 top-1/2 -translate-y-1/2 text-text-muted group-focus-within:text-primary transition-colors">payments</span>
+                                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-black text-text-muted uppercase">Percent</div>
+                                </div>
+                                <p className="text-[9px] text-text-muted mt-2 px-1 italic">This margin will be applied as default for every new quote created by this agent.</p>
                             </div>
 
                             <div className="flex items-center justify-between p-4 bg-surface-2 rounded-2xl border border-border group hover:border-primary/30 transition-all cursor-pointer" onClick={() => setEditAgent({...editAgent, is_active: !editAgent.is_active})}>

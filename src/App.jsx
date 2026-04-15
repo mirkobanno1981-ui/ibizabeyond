@@ -116,7 +116,7 @@ function App() {
                     <Route path="team" element={<AgencyAgentsPage />} />
                     <Route path="settings" element={<AdminRoute><AdminSettings /></AdminRoute>} />
                     <Route path="agents" element={<AdminRoute><AgentsPage /></AdminRoute>} />
-                    <Route path="owners" element={<ProtectedRoute><OwnersPage /></ProtectedRoute>} />
+                    <Route path="owners" element={<AdminRoute><OwnersPage /></AdminRoute>} />
                     <Route path="payouts" element={<SuperAdminRoute><PayoutManager /></SuperAdminRoute>} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Route>

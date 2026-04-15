@@ -3,7 +3,9 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 const EditQuoteModal = ({ quote, onClose, onSaved }) => {
-    const { user, role } = useAuth();
+    const { user, role, agentData } = useAuth();
+    const isAgencyLeader = agentData?.agent_type === 'agency' || agentData?.agent_type === 'agency_admin' || agentData?.agent_type === 'owner'; // 'owner' in this context often means agency owner
+    const canManageMargins = role === 'admin' || role === 'super_admin' || isAgencyLeader;
     const [margin, setMargin] = useState(quote.agent_markup || 15);
     const [platformMargin, setPlatformMargin] = useState(quote.admin_markup || 0);
     const [extraServices, setExtraServices] = useState(quote.extra_services || []);
@@ -30,15 +32,24 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     useEffect(() => {
         async function fetchData() {
             const [agentsRes, settingsRes] = await Promise.all([
-                supabase.from('agents').select('id, company_name'),
+                supabase.from('agents').select('id, company_name, markup_percent'),
                 supabase.from('margin_settings').select('iva_percent').eq('id', 1).single()
             ]);
-            setAgents(agentsRes.data || []);
+            const fetchedAgents = agentsRes.data || [];
+            setAgents(fetchedAgents);
             if (settingsRes.data) setIvaPercent(parseFloat(settingsRes.data.iva_percent) || 10);
 
-            // Fetch Owner Info
+            // If quote has no markup set, apply the agent's default markup
+            if (!quote.agent_markup) {
+                const currentAgent = fetchedAgents.find(a => a.id === assignedAgentId);
+                if (currentAgent && currentAgent.markup_percent) {
+                    setMargin(currentAgent.markup_percent);
+                }
+            }
+
+            // Fetch Owner Info (Admins only)
             const ownerId = quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id;
-            if (ownerId) {
+            if (ownerId && (role === 'admin' || role === 'super_admin')) {
                 const { data: ownerData } = await supabase
                     .from('owners')
                     .select('name, phone_number')
@@ -158,6 +169,20 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     };
     
     const handleAskAvailability = async () => {
+        if (role === 'agent' || role === 'agency_admin') {
+            const { error } = await supabase
+                .from('quotes')
+                .update({ status: 'waiting_owner' })
+                .eq('id', quote.id);
+            if (error) {
+                alert('Error updating status: ' + error.message);
+            } else {
+                alert("Approval request status updated. An administrator will verify availability with the owner.");
+                onSaved();
+            }
+            return;
+        }
+
         if (!ownerPhone) {
             alert("No phone number found for this property's owner. Please add it in Owner Management.");
             return;
@@ -357,10 +382,11 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                     type="number" 
                                     value={margin}
                                     onChange={e => setMargin(e.target.value)}
-                                    disabled={isManual}
+                                    disabled={isManual || !canManageMargins}
                                     className="w-full input-theme py-2.5 text-right font-bold text-primary disabled:opacity-50"
                                 />
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-text-muted">%</span>
+                                {!canManageMargins && <div className="absolute -top-6 right-0 text-[8px] font-black text-red-500 uppercase tracking-widest">Read Only</div>}
                             </div>
                         </div>
                     </div>

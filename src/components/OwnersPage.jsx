@@ -10,12 +10,12 @@ export default function OwnersPage() {
     const [message, setMessage] = useState(null);
     const [editOwner, setEditOwner] = useState(null);
     const [showAddModal, setShowAddModal] = useState(false);
-    const [newOwner, setNewOwner] = useState({ name: '', email: '', password: '', company_name: '', logo_url: '', phone_number: '' });
+    const [newOwner, setNewOwner] = useState({ name: '', email: '', password: '', company_name: '', logo_url: '', phone_number: '', stripe_account_id: '' });
     const [newPassword, setNewPassword] = useState('');
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
     useEffect(() => {
-        if (!authLoading && (role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent')) {
+        if (!authLoading && (role === 'admin' || role === 'super_admin')) {
             fetchAll();
         } else if (!authLoading) {
             setLoading(false);
@@ -31,7 +31,7 @@ export default function OwnersPage() {
         );
     }
 
-    if (role !== 'admin' && role !== 'super_admin' && role !== 'owner' && role !== 'agent') {
+    if (role !== 'admin' && role !== 'super_admin') {
         return (
             <div className="h-screen flex items-center justify-center p-6 text-center">
                 <div className="max-w-md space-y-4">
@@ -139,6 +139,7 @@ export default function OwnersPage() {
                     company_name: newOwner.company_name,
                     logo_url: newOwner.logo_url,
                     phone_number: newOwner.phone_number,
+                    stripe_account_id: newOwner.stripe_account_id,
                     agent_id: agentIdToLink,
                     is_active: true
                 }]);
@@ -147,7 +148,7 @@ export default function OwnersPage() {
 
             setMessage({ type: 'success', text: 'Owner created successfully! A confirmation email has been sent.' });
             setShowAddModal(false);
-            setNewOwner({ name: '', email: '', password: '', company_name: '', logo_url: '', phone_number: '' });
+            setNewOwner({ name: '', email: '', password: '', company_name: '', logo_url: '', phone_number: '', stripe_account_id: '' });
             fetchAll();
         } catch (err) {
             console.error("Creation error:", err);
@@ -362,14 +363,17 @@ export default function OwnersPage() {
                                         placeholder="https://..."
                                     />
                                 </div>
-                                <div className="space-y-1.5">
-                                    <input 
-                                        className="input-theme w-full h-12 font-mono text-xs" 
-                                        value={editOwner.stripe_account_id || ''} 
-                                        onChange={e => setEditOwner({...editOwner, stripe_account_id: e.target.value})} 
-                                        placeholder="acct_xxxxxxxxxxxxxx"
-                                    />
-                                </div>
+                                {role === 'super_admin' && (
+                                     <div className="space-y-1.5">
+                                         <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Stripe Account ID (Payouts)</label>
+                                         <input 
+                                             className="input-theme w-full h-12 font-mono text-xs" 
+                                             value={editOwner.stripe_account_id || ''} 
+                                             onChange={e => setEditOwner({...editOwner, stripe_account_id: e.target.value})} 
+                                             placeholder="acct_xxxxxxxxxxxxxx"
+                                         />
+                                     </div>
+                                 )}
                                 {role === 'super_admin' && (
                                     <div className="pt-4 border-t border-border mt-6">
                                         <h3 className="text-xs font-black text-text-muted uppercase tracking-[0.2em] mb-4">Security Settings</h3>
@@ -508,6 +512,17 @@ export default function OwnersPage() {
                                         placeholder="Minimum 6 characters"
                                     />
                                 </div>
+                                {role === 'super_admin' && (
+                                     <div className="space-y-1.5">
+                                         <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Stripe Account ID (Optional)</label>
+                                         <input 
+                                             className="input-theme w-full h-12 font-mono text-xs" 
+                                             value={newOwner.stripe_account_id || ''} 
+                                             onChange={e => setNewOwner({...newOwner, stripe_account_id: e.target.value})} 
+                                             placeholder="acct_xxxxxxxxxxxxxx"
+                                         />
+                                     </div>
+                                 )}
                             </div>
 
                             <div className="p-4 bg-primary/10 rounded-2xl border border-primary/20 flex items-start gap-3">

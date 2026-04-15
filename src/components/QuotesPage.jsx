@@ -130,6 +130,16 @@ export default function QuotesPage() {
     };
 
     const handleAskAvailability = async (quote) => {
+        if (role === 'agent' || role === 'agency_admin') {
+            alert("Approval request status updated. An administrator will verify availability with the owner.");
+            await supabase
+                .from('quotes')
+                .update({ status: 'waiting_owner' })
+                .eq('id', quote.id);
+            refreshData();
+            return;
+        }
+
         const ownerId = quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id;
         if (!ownerId) {
             alert("This property does not have an owner assigned.");
@@ -703,7 +713,7 @@ export default function QuotesPage() {
                                                         <span className="material-symbols-outlined notranslate text-[18px]">delete</span>
                                                     </button>
                                                     
-                                                    {(q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
+                                                    {(role === 'admin' || role === 'super_admin') && (q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
                                                         <button 
                                                             onClick={() => handleAskAvailability(q)}
                                                             className="size-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/20 transition-all"

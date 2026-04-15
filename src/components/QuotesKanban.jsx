@@ -152,7 +152,7 @@ const QuoteCard = ({ quote, onEdit, onAssign, onDelete, onDownloadPDF, onShare, 
                     </button>
                     <button onClick={() => onShare(quote)} className="p-1 text-text-muted hover:text-primary transition-colors" title="Share link"><span className="material-symbols-outlined notranslate text-[16px]">share</span></button>
                     <button onClick={() => onDelete(quote.id)} className="p-1 text-text-muted hover:text-red-400 transition-colors" title="Delete Quote"><span className="material-symbols-outlined notranslate text-[16px]">delete</span></button>
-                    {(quote.status === 'draft' || quote.status === 'details_requested' || quote.status === 'waiting_owner') && (quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id) && (
+                    {(role === 'admin' || role === 'super_admin') && (quote.status === 'draft' || quote.status === 'details_requested' || quote.status === 'waiting_owner') && (quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id) && (
                         <button 
                             onClick={() => onAskAvailability(quote)}
                             className="p-1 text-amber-500 hover:text-amber-400 transition-colors" 

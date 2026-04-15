@@ -185,7 +185,7 @@ export default function Layout() {
                 <NavItem to="/quotes" icon="request_quote" label="Quotes" />
                 <NavItem to="/bookings" icon="calendar_month" label="Bookings" />
                 <NavItem to="/profile" icon={role === 'owner' ? 'person' : 'badge'} label={role === 'owner' ? 'Owner Settings' : 'Branding Settings'} />
-                {role === 'owner' && <NavItem to="/owners" icon="groups" label="Owners" />}
+
                 {(agentProfile?.agent_type === 'agency' || role === 'agency_admin') && (
                     <NavItem to="/team" icon="groups" label="Team" />
                 )}

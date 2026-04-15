@@ -55,7 +55,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') {
+        if (role === 'admin' || role === 'super_admin' || role === 'editor') {
             fetchOwners();
         }
     }, [role]);
@@ -195,7 +195,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             <Field label="Main Photo URL" field="thumbnail_url" form={form} handleChange={handleChange} fullWidth />
                             <Field label="License Number" field="license" form={form} handleChange={handleChange} />
                             <Field label="GPS Coordinates" field="gps" form={form} handleChange={handleChange} />
-                            {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') && (
+                            {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
                                 <div className="col-span-2">
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">
                                         {role === 'agent' ? 'Associated Owner (Contact)' : 'Villa Owner'}
