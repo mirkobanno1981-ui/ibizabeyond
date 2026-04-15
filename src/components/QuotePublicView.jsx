@@ -802,7 +802,7 @@ export default function QuotePublicView() {
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
                     <div className="bg-background rounded-3xl max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl p-8 md:p-12 border border-border">
                         <div className="flex justify-between items-center mb-8">
-                            <h2 className="text-2xl font-black uppercase text-text-primary">Rental Agreement</h2>
+                            <h2 className="text-2xl font-black uppercase text-text-primary">Rental Agreement & Terms [v2.0]</h2>
                             <button onClick={() => setShowAgreementModal(false)} className="bg-surface-2 p-2 rounded-full"><span className="material-symbols-outlined notranslate">close</span></button>
                         </div>
                         <div className="prose text-text-muted bg-surface/50 p-8 rounded-2xl whitespace-pre-line italic font-serif leading-relaxed border border-border/50">
