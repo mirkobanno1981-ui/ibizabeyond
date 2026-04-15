@@ -8,6 +8,8 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
     const [selectedClientId, setSelectedClientId] = useState('');
     const [saving, setSaving] = useState(false);
     const [ivaPercent, setIvaPercent] = useState(21);
+    const [platformMargin, setPlatformMargin] = useState(0);
+    const [agentMargin, setAgentMargin] = useState(15);
     const [success, setSuccess] = useState(false);
     const [createdIds, setCreatedIds] = useState([]);
     
@@ -76,7 +78,8 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                 }
 
                 const basePrice = totalBasePrice;
-                const adminMarkup = 0;
+                const priceWithAdminMarkup = basePrice * (1 + platformMargin / 100);
+                const priceWithAgentMarkup = priceWithAdminMarkup * (1 + agentMargin / 100);
                 
                 const breakdown = [];
                 breakdown.push({ 
@@ -85,13 +88,17 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                     desc: priceBreakdownDescription
                 });
 
-                // Boats often have fuel, skipper, etc., but those are usually "Extras" added later
-                // or part of the public price. For now, keep it simple like villas.
+                if (platformMargin > 0) {
+                    breakdown.push({ label: 'Platform Margin', amount: Math.round(priceWithAdminMarkup - basePrice), desc: 'Platform service fee' });
+                }
+                if (agentMargin > 0) {
+                    breakdown.push({ label: 'Agency Margin', amount: Math.round(priceWithAgentMarkup - priceWithAdminMarkup), desc: 'Agency commission' });
+                }
                 
-                const ivaAmount = basePrice * (ivaPercent / 100);
-                breakdown.push({ label: `IVA (VAT) ${ivaPercent}%`, amount: Math.round(ivaAmount), desc: 'VAT on charter' });
+                const ivaAmount = (priceWithAgentMarkup - basePrice) * (ivaPercent / 100);
+                breakdown.push({ label: `IVA (VAT) ${ivaPercent}%`, amount: Math.round(ivaAmount), desc: 'VAT on services' });
                 
-                const finalPrice = Math.round(basePrice + ivaAmount);
+                const finalPrice = Math.round(priceWithAgentMarkup + ivaAmount);
 
                 return {
                     boat_uuid: boat.v_uuid,
@@ -99,8 +106,8 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                     check_in: checkIn || null,
                     check_out: checkOut || null,
                     supplier_base_price: basePrice,
-                    admin_markup: adminMarkup,
-                    agent_markup: 15, // Default margin
+                    admin_markup: platformMargin,
+                    agent_markup: agentMargin,
                     final_price: finalPrice,
                     status: 'draft',
                     agent_id: user?.id,
@@ -208,6 +215,36 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                                 ))}
                             </select>
                         </div>
+
+                    {/* Margin Controls - Super Admin Only */}
+                    {user?.role === 'super_admin' && (
+                        <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-top-2">
+                            <div className="bg-surface-2/40 p-4 rounded-2xl border border-border/50">
+                                <label className="text-[9px] text-text-muted font-black uppercase tracking-widest block mb-2">Platform Mark-up (%)</label>
+                                <div className="flex items-center gap-2">
+                                    <span className="material-symbols-outlined notranslate text-sm text-primary">account_balance</span>
+                                    <input 
+                                        type="number"
+                                        value={platformMargin}
+                                        onChange={e => setPlatformMargin(parseFloat(e.target.value) || 0)}
+                                        className="bg-transparent border-none text-xs font-black text-text-primary w-full outline-none"
+                                    />
+                                </div>
+                            </div>
+                            <div className="bg-surface-2/40 p-4 rounded-2xl border border-border/50">
+                                <label className="text-[9px] text-text-muted font-black uppercase tracking-widest block mb-2">Agent Mark-up (%)</label>
+                                <div className="flex items-center gap-2">
+                                    <span className="material-symbols-outlined notranslate text-sm text-blue-400">person</span>
+                                    <input 
+                                        type="number"
+                                        value={agentMargin}
+                                        onChange={e => setAgentMargin(parseFloat(e.target.value) || 0)}
+                                        className="bg-transparent border-none text-xs font-black text-text-primary w-full outline-none"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     </div>
 
                     {/* Guest Qualification Section */}

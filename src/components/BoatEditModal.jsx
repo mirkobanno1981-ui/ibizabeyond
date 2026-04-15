@@ -26,7 +26,7 @@ const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = fa
 );
 
 export default function BoatEditModal({ boat, onClose, onSaved }) {
-    const { role } = useAuth();
+    const { role, user } = useAuth();
     const [owners, setOwners] = useState([]);
     const [form, setForm] = useState({
         boat_name: boat.boat_name || '',
@@ -72,7 +72,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        if (role === 'admin' || role === 'super_admin' || role === 'editor') {
+        if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') {
             fetchOwners();
         }
         if (boat.v_uuid) {
@@ -141,14 +141,33 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     };
 
     const fetchOwners = async () => {
-        const { data, error } = await supabase
-            .from('owners')
-            .select('id, name')
-            .eq('is_active', true)
-            .order('name');
-        
-        if (!error && data) {
-            setOwners(data);
+        try {
+            let query = supabase
+                .from('owners')
+                .select('id, name')
+                .eq('is_active', true);
+            
+            if (role === 'agent') {
+                const { data: agentData } = await supabase
+                    .from('agents')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .single();
+                
+                if (agentData) {
+                    query = query.eq('agent_id', agentData.id);
+                } else {
+                    setOwners([]);
+                    return;
+                }
+            }
+
+            const { data, error } = await query.order('name');
+            if (!error && data) {
+                setOwners(data);
+            }
+        } catch (err) {
+            console.error("Fetch owners info error:", err);
         }
     };
 
@@ -172,7 +191,8 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                 weekly_price: parseFloat(form.weekly_price) || 0,
                 security_deposit: parseFloat(form.security_deposit) || 0,
                 cleaning_fee: parseFloat(form.cleaning_fee) || 0,
-                owner_id: form.owner_id || null,
+                owner_id: role === 'owner' ? user.id : (form.owner_id || null),
+                created_by: boat.v_uuid ? boat.created_by : user.id
             };
 
             let result;
@@ -463,19 +483,27 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                             <Field label="Registration / License" field="registration_number" form={form} handleChange={handleChange} />
                             <Field label="Base Port" field="location_base_port" form={form} handleChange={handleChange} />
                             <Field label="SES Establishment Code" field="ses_establishment_code" form={form} handleChange={handleChange} />
-                            {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                            {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') && (
                                 <div className="col-span-2">
-                                    <label className="block text-xs text-text-muted mb-1.5 font-medium">Yacht Owner</label>
+                                    <label className="block text-xs text-text-muted mb-1.5 font-medium">
+                                        {role === 'agent' ? 'Associated Owner (Contact)' : 'Yacht Owner'}
+                                    </label>
                                     <select 
                                         className="input-theme w-full"
                                         value={form.owner_id}
                                         onChange={e => handleChange('owner_id', e.target.value)}
+                                        required={role === 'agent'}
                                     >
                                         <option value="">Select Owner...</option>
                                         {owners.map(o => (
                                             <option key={o.id} value={o.id}>{o.name}</option>
                                         ))}
                                     </select>
+                                    <p className="text-[10px] text-text-muted mt-2 italic">
+                                        {role === 'agent' 
+                                            ? 'You can only select owners that you manage as direct contacts.'
+                                            : 'Note: Owners must be registered as users first.'}
+                                    </p>
                                 </div>
                             )}
                         </div>

@@ -24,7 +24,7 @@ const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = fa
 );
 
 export default function VillaEditModal({ villa, onClose, onSaved }) {
-    const { role } = useAuth();
+    const { role, user } = useAuth();
     const [owners, setOwners] = useState([]);
     const [form, setForm] = useState({
         villa_name: villa.villa_name || '',
@@ -55,20 +55,41 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        if (role === 'admin' || role === 'super_admin' || role === 'editor') {
+        if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') {
             fetchOwners();
         }
     }, [role]);
 
     const fetchOwners = async () => {
-        const { data, error } = await supabase
-            .from('owners')
-            .select('id, name')
-            .eq('is_active', true)
-            .order('name');
-        
-        if (!error && data) {
-            setOwners(data);
+        try {
+            let query = supabase
+                .from('owners')
+                .select('id, name')
+                .eq('is_active', true);
+            
+            if (role === 'agent') {
+                // Get agent profile id
+                const { data: agentData } = await supabase
+                    .from('agents')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .single();
+                
+                if (agentData) {
+                    query = query.eq('agent_id', agentData.id);
+                } else {
+                    setOwners([]);
+                    return;
+                }
+            }
+
+            const { data, error } = await query.order('name');
+            
+            if (!error && data) {
+                setOwners(data);
+            }
+        } catch (err) {
+            console.error("Fetch owners error:", err);
         }
     };
 
@@ -103,8 +124,9 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 gps: form.gps,
                 deposit: parseFloat(form.deposit) || 0,
                 features: form.features,
-                owner_id: form.owner_id || null,
+                owner_id: role === 'owner' ? user.id : (form.owner_id || null),
                 ses_establishment_code: form.ses_establishment_code,
+                created_by: villa.v_uuid ? villa.created_by : user.id
             };
 
             let result;
@@ -173,13 +195,16 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             <Field label="Main Photo URL" field="thumbnail_url" form={form} handleChange={handleChange} fullWidth />
                             <Field label="License Number" field="license" form={form} handleChange={handleChange} />
                             <Field label="GPS Coordinates" field="gps" form={form} handleChange={handleChange} />
-                            {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                            {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') && (
                                 <div className="col-span-2">
-                                    <label className="block text-xs text-text-muted mb-1.5 font-medium">Villa Owner</label>
+                                    <label className="block text-xs text-text-muted mb-1.5 font-medium">
+                                        {role === 'agent' ? 'Associated Owner (Contact)' : 'Villa Owner'}
+                                    </label>
                                     <select 
                                         className="input-theme w-full"
                                         value={form.owner_id}
                                         onChange={e => handleChange('owner_id', e.target.value)}
+                                        required={role === 'agent'}
                                     >
                                         <option value="">Select Owner...</option>
                                         {owners.map(o => (
@@ -187,7 +212,9 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                                         ))}
                                     </select>
                                     <p className="text-[10px] text-text-muted mt-2 italic">
-                                        Note: Owners must be registered as users in the management section first.
+                                        {role === 'agent' 
+                                            ? 'You can only select owners that you manage as direct contacts.'
+                                            : 'Note: Owners must be registered as users in the management section first.'}
                                     </p>
                                 </div>
                             )}

@@ -15,7 +15,7 @@ export default function OwnersPage() {
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
     useEffect(() => {
-        if (!authLoading && (role === 'admin' || role === 'super_admin' || role === 'owner')) {
+        if (!authLoading && (role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent')) {
             fetchAll();
         } else if (!authLoading) {
             setLoading(false);
@@ -31,7 +31,7 @@ export default function OwnersPage() {
         );
     }
 
-    if (role !== 'admin' && role !== 'super_admin' && role !== 'owner') {
+    if (role !== 'admin' && role !== 'super_admin' && role !== 'owner' && role !== 'agent') {
         return (
             <div className="h-screen flex items-center justify-center p-6 text-center">
                 <div className="max-w-md space-y-4">
@@ -48,10 +48,26 @@ export default function OwnersPage() {
     async function fetchAll() {
         setLoading(true);
         try {
-            const { data, error } = await supabase
-                .from('owners')
-                .select('*')
-                .order('name');
+            let query = supabase.from('owners').select('*');
+            
+            if (role === 'agent') {
+                // First get the agent profile id
+                const { data: agentData } = await supabase
+                    .from('agents')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .single();
+                
+                if (agentData) {
+                    query = query.eq('agent_id', agentData.id);
+                } else {
+                    // If agent profile not found, return empty
+                    setOwners([]);
+                    return;
+                }
+            }
+
+            const { data, error } = await query.order('name');
 
             if (error) throw error;
             setOwners(data || []);
@@ -104,6 +120,16 @@ export default function OwnersPage() {
             if (roleErr) throw roleErr;
 
             // 3. Create Owner Profile
+            let agentIdToLink = null;
+            if (role === 'agent') {
+                const { data: agentData } = await supabase
+                    .from('agents')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .single();
+                agentIdToLink = agentData?.id;
+            }
+
             const { error: profileErr } = await supabase
                 .from('owners')
                 .insert([{
@@ -113,6 +139,7 @@ export default function OwnersPage() {
                     company_name: newOwner.company_name,
                     logo_url: newOwner.logo_url,
                     phone_number: newOwner.phone_number,
+                    agent_id: agentIdToLink,
                     is_active: true
                 }]);
 
@@ -193,13 +220,13 @@ export default function OwnersPage() {
                     <h1 className="text-2xl font-bold text-text-primary uppercase tracking-tight">Owner Management</h1>
                     <p className="text-text-muted text-sm mt-0.5">Manage property owners and their payment settings</p>
                 </div>
-                {(role === 'admin' || role === 'super_admin') && (
+                {(role === 'admin' || role === 'super_admin' || role === 'agent') && (
                     <button 
                         onClick={() => setShowAddModal(true)}
                         className="btn-primary text-sm flex items-center gap-2"
                     >
                         <span className="material-symbols-outlined notranslate text-[18px]">person_add</span>
-                        Create New Owner
+                        {role === 'agent' ? 'Add New Contact' : 'Create New Owner'}
                     </button>
                 )}
             </div>

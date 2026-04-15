@@ -47,6 +47,8 @@ export default function VillaView() {
     const [agentDetails, setAgentDetails] = useState(null);
     const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 15, ivaPercent: 10 });
     const [useStripeFee, setUseStripeFee] = useState(false);
+    const [platformMargin, setPlatformMargin] = useState(15);
+    const [agentMargin, setAgentMargin] = useState(0);
     
     // Quick Client Create
     const [showNewClientForm, setShowNewClientForm] = useState(false);
@@ -252,12 +254,11 @@ export default function VillaView() {
         const { total: baseTotal, items: baseItems } = getBasePriceForSelection();
         const breakdownItems = [...baseItems];
         
-        // Use logic consistent with display: Admins use global, Agents use personal
-        const adminMarkup = (role !== 'admin' && agentDetails?.admin_margin > 0) 
-            ? agentDetails.admin_margin 
-            : globalMargins.invenioToAdmin;
+        const adminMarkupVal = parseFloat(platformMargin);
+        const agentMarkupVal = parseFloat(agentMargin);
             
-        const totalWithMarkup = baseTotal * (1 + adminMarkup / 100);
+        const priceWithAdmin = baseTotal * (1 + adminMarkupVal / 100);
+        const totalWithMarkup = priceWithAdmin * (1 + agentMarkupVal / 100);
         
         let subtotal;
         let finalPrice;
@@ -377,12 +378,14 @@ export default function VillaView() {
             setClients(clientData || []);
 
             // 5. Fetch Agent's info/override
+            let agentProfileData = null;
             if (user?.id) {
                 const { data: agentProfile } = await supabase
                     .from('agents')
                     .select('admin_margin, company_name, logo_url')
                     .eq('id', user.id)
                     .maybeSingle();
+                agentProfileData = agentProfile;
                 if (agentProfile) {
                     setAgentDetails(agentProfile);
                 }
@@ -399,6 +402,13 @@ export default function VillaView() {
                     invenioToAdmin: marginData.invenio_to_admin_margin || 15,
                     ivaPercent: marginData.iva_percent || 10
                 });
+                
+                // Initialize creation margins
+                const activeAdminMargin = (role !== 'admin' && agentProfileData?.admin_margin > 0) 
+                    ? agentProfileData.admin_margin 
+                    : (marginData.invenio_to_admin_margin || 15);
+                setPlatformMargin(activeAdminMargin);
+                setAgentMargin(0); // Default villa agent margin is 0
             }
 
             // 6. Fetch iCal Availability
@@ -576,8 +586,8 @@ export default function VillaView() {
                 check_in: selectionStart,
                 check_out: selectionEnd,
                 supplier_base_price: supplierBase,
-                admin_markup: activeAdminMargin,
-                agent_markup: 0,
+                admin_markup: platformMargin,
+                agent_markup: agentMargin,
                 extra_services: extraServices,
                 stripe_fee_included: useStripeFee,
                 final_price: finalPrice,
@@ -1163,6 +1173,36 @@ export default function VillaView() {
                                             </div>
                                         </div>
                                     </div>
+                                    
+                                    {/* Profit Margin Controls - Super Admin Only */}
+                                    {role === 'super_admin' && (
+                                        <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-top-2">
+                                            <div className="bg-background/50 p-4 rounded-2xl border border-border">
+                                                <label className="text-[10px] text-text-muted font-black uppercase tracking-widest block mb-2">Platform Mark-up (%)</label>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="material-symbols-outlined notranslate text-sm text-primary">account_balance</span>
+                                                    <input 
+                                                        type="number"
+                                                        value={platformMargin}
+                                                        onChange={e => setPlatformMargin(parseFloat(e.target.value) || 0)}
+                                                        className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="bg-background/50 p-4 rounded-2xl border border-border">
+                                                <label className="text-[10px] text-text-muted font-black uppercase tracking-widest block mb-2">Agent Mark-up (%)</label>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="material-symbols-outlined notranslate text-sm text-blue-400">person</span>
+                                                    <input 
+                                                        type="number"
+                                                        value={agentMargin}
+                                                        onChange={e => setAgentMargin(parseFloat(e.target.value) || 0)}
+                                                        className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
 
 
                                     {/* Extra Services */}

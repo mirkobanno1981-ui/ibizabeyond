@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const { user, role } = useAuth();
     const [margin, setMargin] = useState(quote.agent_markup || 15);
+    const [platformMargin, setPlatformMargin] = useState(quote.admin_markup || 0);
     const [extraServices, setExtraServices] = useState(quote.extra_services || []);
     const [manualPrice, setManualPrice] = useState(quote.final_price || 0);
     const [isManual, setIsManual] = useState(quote.is_manual_price || false);
@@ -62,7 +63,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
     const calculateAutoPrice = () => {
         const base = parseFloat(quote.supplier_base_price || 0);
-        const adminMarkup = parseFloat(quote.admin_markup || 0);
+        const adminMarkup = parseFloat(platformMargin || 0);
         const agentMarkup = parseFloat(margin || 0);
         
         const priceWithAdmin = base * (1 + adminMarkup / 100);
@@ -82,7 +83,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         if (!isManual) {
             setManualPrice(calculateAutoPrice());
         }
-    }, [margin, extraServices, isManual, useStripeFee, ivaPercent]);
+    }, [margin, platformMargin, extraServices, isManual, useStripeFee, ivaPercent]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -91,10 +92,10 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             
             // Build Breakdown for saving
             const base = parseFloat(quote.supplier_base_price || 0);
-            const adminMarkup = parseFloat(quote.admin_markup || 0);
-            const agentMarkup = parseFloat(margin || 0);
-            const priceWithAdmin = base * (1 + adminMarkup / 100);
-            const priceWithAgent = priceWithAdmin * (1 + agentMarkup / 100);
+            const adminMarkupValue = parseFloat(platformMargin || 0);
+            const agentMarkupValue = parseFloat(margin || 0);
+            const priceWithAdmin = base * (1 + adminMarkupValue / 100);
+            const priceWithAgent = priceWithAdmin * (1 + agentMarkupValue / 100);
             
             const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
             const subtotal = priceWithAgent + extraTotal;
@@ -127,6 +128,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             const { error } = await supabase
                 .from('quotes')
                 .update({
+                    admin_markup: platformMargin,
                     agent_markup: margin,
                     extra_services: extraServices,
                     final_price: finalPrice,
@@ -332,17 +334,34 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     </div>
 
                     {/* Margin */}
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Agent Margin (%)</label>
-                        <div className="relative">
-                            <input 
-                                type="number" 
-                                value={margin}
-                                onChange={e => setMargin(e.target.value)}
-                                disabled={isManual}
-                                className="w-full input-theme py-2.5 text-right font-bold text-primary disabled:opacity-50"
-                            />
-                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-text-muted">%</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {role === 'super_admin' && (
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-primary uppercase tracking-widest block">Platform Profit (%)</label>
+                                <div className="relative">
+                                    <input 
+                                        type="number" 
+                                        value={platformMargin}
+                                        onChange={e => setPlatformMargin(e.target.value)}
+                                        disabled={isManual}
+                                        className="w-full input-theme py-2.5 text-right font-bold text-primary border-primary/30 disabled:opacity-50"
+                                    />
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-primary">%</span>
+                                </div>
+                            </div>
+                        )}
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Agent Margin (%)</label>
+                            <div className="relative">
+                                <input 
+                                    type="number" 
+                                    value={margin}
+                                    onChange={e => setMargin(e.target.value)}
+                                    disabled={isManual}
+                                    className="w-full input-theme py-2.5 text-right font-bold text-primary disabled:opacity-50"
+                                />
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-text-muted">%</span>
+                            </div>
                         </div>
                     </div>
                     
