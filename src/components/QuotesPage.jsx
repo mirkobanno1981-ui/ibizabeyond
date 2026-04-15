@@ -360,8 +360,8 @@ export default function QuotesPage() {
             '{{client_full_name}}': quote.clients?.full_name || 'Valued Client',
             '{{client_email}}': quote.clients?.email || '—',
             '{{client_phone}}': quote.clients?.phone || '—',
-            '{{client_address}}': quote.clients?.address || '—',
-            '{{client_passport}}': quote.clients?.passport_number || '—',
+            '{{client_address}}': quote.clients?.address || '[To be filled in registration]',
+            '{{client_passport}}': quote.clients?.passport_number || '[To be filled in registration]',
             '{{client_dob}}': quote.clients?.dob || '—',
             
             '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
@@ -371,17 +371,36 @@ export default function QuotesPage() {
             '{{agency_phone}}': agent?.phone_number || '—',
 
             '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
+            '{{property_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
             '{{villa_license}}': quote.invenio_properties?.license || '—',
             '{{villa_address}}': quote.invenio_properties?.location || 'Ibiza',
-            '{{check_in}}': quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB') : '',
-            '{{check_out}}': quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB') : '',
-            '{{final_price}}': `€${parseFloat(quote.final_price || 0).toLocaleString()}`,
-            '{{deposit}}': `€${parseFloat(quote.deposit || 0).toLocaleString()}`,
+            '{{property_location}}': quote.invenio_properties?.location || 'Ibiza',
+            '{{max_guests}}': quote.invenio_properties?.sleeps || quote.invenio_boats?.capacity_day || '—',
+            
+            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
+            '{{platform_name}}': 'Ibiza Beyond',
+            '{{today}}': new Date().toLocaleDateString('it-IT'),
+            
+            '{{check_in}}': quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB') : '—',
+            '{{check_out}}': quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB') : '—',
+            '{{final_price}}': parseFloat(quote.final_price || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' }),
+            '{{total_price}}': parseFloat(quote.final_price || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' }),
             '{{deposit_percent}}': isLastMinute ? '100' : '50',
             '{{balance_percent}}': isLastMinute ? '0' : '50',
             '{{balance_due_days}}': '30',
-            '{{security_deposit_amount}}': quote.invenio_properties?.security_deposit || quote.invenio_boats?.security_deposit || '—',
-            '{{today}}': new Date().toLocaleDateString('en-GB')
+            '{{security_deposit_amount}}': parseFloat(quote.invenio_properties?.security_deposit || quote.invenio_boats?.security_deposit || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' }),
+
+            // Explicit mappings for Italian labels in [BRACKETS]
+            '[NOME CLIENTE]': quote.clients?.full_name || 'Valued Client',
+            '[NOME AGENTE/SOCIETÀ]': agent?.company_name || 'Ibiza Beyond',
+            '[NOME VILLA]': quote.invenio_properties?.villa_name || 'Villa',
+            '[DATA CHECK-IN]': quote.check_in ? new Date(quote.check_in).toLocaleDateString('it-IT') : '—',
+            '[DATA CHECK-OUT]': quote.check_out ? new Date(quote.check_out).toLocaleDateString('it-IT') : '—',
+            '[IMPORTO TOTALE]': parseFloat(quote.final_price || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '[IMPORTO DEPOSITO]': parseFloat(quote.invenio_properties?.security_deposit || quote.invenio_boats?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '[NUMERO LICENZA ETV]': quote.invenio_properties?.license || '—',
+            '[INDIRIZZO VILLA]': quote.invenio_properties?.location || 'Ibiza',
+            '[NOME PIATTAFORMA]': 'Ibiza Beyond'
         };
 
         // Hero Image
