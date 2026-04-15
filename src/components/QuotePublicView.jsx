@@ -168,11 +168,13 @@ La piattaforma {{platform_name}} agisce come solo fornitore tecnologico e non ha
 **Firma per Accettazione:** {{client_full_name}} (Firma Digitale)`;
 
     const getProcessedTemplate = () => {
-        if (!quote) return '';
+        if (!quote) return 'Loading agreement...';
         
         let content = quote.invenio_boats 
             ? (agent?.boat_contract_template || agent?.contract_template || DEFAULT_B2C_CONTRACT) 
             : (agent?.contract_template || DEFAULT_B2C_CONTRACT);
+
+        if (!content) content = DEFAULT_B2C_CONTRACT;
 
         const isLastMinute = (() => {
             const checkInDate = new Date(quote.check_in);
@@ -214,27 +216,24 @@ La piattaforma {{platform_name}} agisce come solo fornitore tecnologico e non ha
             '{{security_deposit_due_days}}': '7',
 
             // Explicit mappings for Italian labels in [BRACKETS]
-            '\\[NOME CLIENTE\\]': quote.clients?.full_name || 'Valued Client',
-            '\\[NOME AGENTE/SOCIETÀ\\]': agent?.company_name || 'Ibiza Beyond',
-            '\\[NOME VILLA\\]': quote.invenio_properties?.villa_name || 'Villa',
-            '\\[DATA CHECK-IN\\]': quote.check_in ? new Date(quote.check_in).toLocaleDateString('it-IT') : '—',
-            '\\[DATA CHECK-OUT\\]': quote.check_out ? new Date(quote.check_out).toLocaleDateString('it-IT') : '—',
-            '\\[IMPORTO TOTALE\\]': parseFloat(quote.final_price || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
-            '\\[IMPORTO DEPOSITO\\]': parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
-            '\\[NUMERO LICENZA ETV\\]': quote.invenio_properties?.license || '—',
-            '\\[INDIRIZZO VILLA\\]': quote.invenio_properties?.location || 'Ibiza',
-            '\\[NOME PIATTAFORMA\\]': 'Ibiza Beyond'
+            '[NOME CLIENTE]': quote.clients?.full_name || 'Valued Client',
+            '[NOME AGENTE/SOCIETÀ]': agent?.company_name || 'Ibiza Beyond',
+            '[NOME VILLA]': quote.invenio_properties?.villa_name || 'Villa',
+            '[DATA CHECK-IN]': quote.check_in ? new Date(quote.check_in).toLocaleDateString('it-IT') : '—',
+            '[DATA CHECK-OUT]': quote.check_out ? new Date(quote.check_out).toLocaleDateString('it-IT') : '—',
+            '[IMPORTO TOTALE]': parseFloat(quote.final_price || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '[IMPORTO DEPOSITO]': parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '[NUMERO LICENZA ETV]': quote.invenio_properties?.license || '—',
+            '[INDIRIZZO VILLA]': quote.invenio_properties?.location || 'Ibiza',
+            '[NOME PIATTAFORMA]': 'Ibiza Beyond'
         };
 
-        // Standardize [PLACEHOLDER] to {{placeholder}} if they exist in the template
-        let processedContent = content;
-        
-        // Handle both formats: [PLACEHOLDER] and {{placeholder}}
+        let result = content;
         Object.entries(data).forEach(([key, val]) => {
-            processedContent = processedContent.replace(new RegExp(key, 'g'), val);
+            result = result.split(key).join(val || '');
         });
 
-        return processedContent;
+        return result;
     };
 
     const handleSign = async () => {
