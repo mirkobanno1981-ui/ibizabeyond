@@ -231,7 +231,8 @@ export default function QuotePublicView() {
             result = result.split(key).join(val || '');
         });
 
-        return result;
+        console.log('Processed template length:', result?.length);
+        return result || "ERROR: Rental Agreement content could not be generated. Please refresh or contact support.";
     };
 
     const handleSign = async () => {
