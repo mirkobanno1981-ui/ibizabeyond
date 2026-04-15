@@ -45,6 +45,8 @@ export default function BoatView() {
     const [savingQuote, setSavingQuote] = useState(false);
     const [agentDetails, setAgentDetails] = useState(null);
     const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 15, ivaPercent: 21 });
+    const [platformMargin, setPlatformMargin] = useState(15);
+    const [agentMargin, setAgentMargin] = useState(0);
     const [useStripeFee, setUseStripeFee] = useState(false);
     
     // Quick Client Create
@@ -85,10 +87,10 @@ export default function BoatView() {
         else amount = parseFloat(boat?.daily_price || 0);
 
         if (withMarkup) {
-            const adminMarkup = (role !== 'admin' && agentDetails?.admin_margin > 0) 
-                ? agentDetails.admin_margin 
-                : globalMargins.invenioToAdmin;
-            return Math.round(amount * (1 + adminMarkup / 100));
+            const adminMarkup = platformMargin;
+            const agentMarkup = agentMargin;
+            const priceWithAdmin = amount * (1 + adminMarkup / 100);
+            return Math.round(priceWithAdmin * (1 + agentMarkup / 100));
         }
 
         return Math.round(amount);
@@ -166,11 +168,11 @@ export default function BoatView() {
         const { total: baseTotal, items: baseItems } = getBasePriceForSelection();
         const breakdownItems = [...baseItems];
         
-        const adminMarkup = (role !== 'admin' && agentDetails?.admin_margin > 0) 
-            ? agentDetails.admin_margin 
-            : globalMargins.invenioToAdmin;
+        const adminMarkup = platformMargin;
+        const agentMarkup = agentMargin;
             
-        const totalWithMarkup = baseTotal * (1 + adminMarkup / 100);
+        const priceWithAdminMarkup = baseTotal * (1 + adminMarkup / 100);
+        const totalWithMarkup = priceWithAdminMarkup * (1 + agentMarkup / 100);
         
         let subtotal;
         let finalPrice;
@@ -308,6 +310,13 @@ export default function BoatView() {
                     invenioToAdmin: marginData.invenio_to_admin_margin || 15,
                     ivaPercent: marginData.iva_percent || 21 // Default boats VAT
                 });
+
+                // Initialize creation margins
+                const activeAdminMargin = (role !== 'admin' && agentProfileData?.admin_margin > 0) 
+                    ? agentProfileData.admin_margin 
+                    : (marginData.invenio_to_admin_margin || 15);
+                setPlatformMargin(activeAdminMargin);
+                setAgentMargin(0);
             }
 
             // 7. Fetch iCal Availability (if boats use it)
@@ -459,8 +468,8 @@ export default function BoatView() {
                 check_in: selectionStart,
                 check_out: selectionEnd,
                 supplier_base_price: supplierBase,
-                admin_markup: activeAdminMargin,
-                agent_markup: 0,
+                admin_markup: platformMargin,
+                agent_markup: agentMargin,
                 extra_services: extraServices,
                 stripe_fee_included: useStripeFee,
                 final_price: finalPrice,
@@ -873,6 +882,36 @@ export default function BoatView() {
                                             </div>
                                         </div>
                                     </div>
+
+                                    {/* Profit Margin Controls - Super Admin Only */}
+                                    {role === 'super_admin' && (
+                                        <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-top-2">
+                                            <div className="bg-background/50 p-4 rounded-2xl border border-border">
+                                                <label className="text-[10px] text-text-muted font-black uppercase tracking-widest block mb-2">Platform Mark-up (%)</label>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="material-symbols-outlined notranslate text-sm text-primary">account_balance</span>
+                                                    <input 
+                                                        type="number"
+                                                        value={platformMargin}
+                                                        onChange={e => setPlatformMargin(parseFloat(e.target.value) || 0)}
+                                                        className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="bg-background/50 p-4 rounded-2xl border border-border">
+                                                <label className="text-[10px] text-text-muted font-black uppercase tracking-widest block mb-2">Agent Mark-up (%)</label>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="material-symbols-outlined notranslate text-sm text-blue-400">person</span>
+                                                    <input 
+                                                        type="number"
+                                                        value={agentMargin}
+                                                        onChange={e => setAgentMargin(parseFloat(e.target.value) || 0)}
+                                                        className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {/* Extra Services */}
                                     <div className="space-y-4">
