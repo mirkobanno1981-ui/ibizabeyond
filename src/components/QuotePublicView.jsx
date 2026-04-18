@@ -112,7 +112,7 @@ export default function QuotePublicView() {
                     *,
                     invenio_properties(*),
                     invenio_boats(*),
-                    agents(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details),
+                    agents!quotes_agent_id_fkey(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details),
                     clients(full_name, email, phone_number, address_street, id_number, dob)
                 `);
             

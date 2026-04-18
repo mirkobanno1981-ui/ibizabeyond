@@ -94,7 +94,7 @@ export default function QuotesPage() {
                     clients(full_name, email, phone_number, dob, id_number, address_street),
                     invenio_properties(*),
                     invenio_boats(*),
-                    agents(company_name, contract_template, boat_contract_template, phone_number, agency_details)
+                    agents!quotes_agent_id_fkey(company_name, contract_template, boat_contract_template, phone_number, agency_details)
                 `)
                 .order('created_at', { ascending: false });
 
