@@ -18,12 +18,23 @@ export default function VillaView() {
     const [seasonalRates, setSeasonalRates] = useState([]);
     const [blockedDates, setBlockedDates] = useState([]);
     const [clients, setClients] = useState([]);
+    const [icalLoading, setIcalLoading] = useState(false);
+    const [icalError, setIcalError] = useState(false);
     
     // UI states
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [activePhotoIndex, setActivePhotoIndex] = useState(0);
     const [showPhotoModal, setShowPhotoModal] = useState(false);
+
+    const handleSyncRefresh = async () => {
+        if (!villa?.ical_url) return;
+        setIcalLoading(true);
+        import('../lib/calendar').then(({ clearICalCache }) => {
+            clearICalCache(villa.ical_url);
+            fetchVillaData(); 
+        });
+    };
 
     // Keyboard navigation for gallery
     useEffect(() => {
@@ -422,10 +433,23 @@ export default function VillaView() {
 
             // 6. Fetch iCal Availability
             if (villaData.ical_url) {
-                const icalData = await fetchICal(villaData.ical_url);
-                if (icalData) {
-                    const events = parseICal(icalData);
-                    setBlockedDates(getBlockedDates(events));
+                setIcalLoading(true);
+                setIcalError(false);
+                try {
+                    const icalData = await fetchICal(villaData.ical_url);
+                    if (icalData) {
+                        const events = parseICal(icalData);
+                        const blocked = getBlockedDates(events);
+                        setBlockedDates(blocked);
+                        console.log(`iCal Sync: ${blocked.length} dates blocked for ${villaData.villa_name}`);
+                    } else {
+                        setIcalError(true);
+                    }
+                } catch (err) {
+                    console.error('iCal fetch error:', err);
+                    setIcalError(true);
+                } finally {
+                    setIcalLoading(false);
                 }
             }
         } catch (err) {
@@ -847,21 +871,35 @@ export default function VillaView() {
 
                     {/* Calendar / Availability */}
                     <div className="glass-card p-6 md:p-8">
-                        <div className="flex items-center justify-between mb-8">
-                            <div>
-                                <h2 className="text-xl font-bold text-text-primary flex items-center gap-2">
-                                    <span className="material-symbols-outlined notranslate text-primary text-[24px]">calendar_today</span>
-                                    Availability & Prices
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+                            <div className="space-y-1">
+                                <h2 className="text-xl font-extrabold text-text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined notranslate text-primary text-[24px]">calendar_month</span>
+                                    Availability & Pricing
                                 </h2>
-                                <p className="text-xs text-text-muted mt-1">Select dates to calculate a quote</p>
+                                <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-1 px-2 py-0.5 bg-primary/10 rounded text-[9px] font-black uppercase text-primary border border-primary/20">
+                                        <span className="material-symbols-outlined notranslate text-[12px]">sync</span>
+                                        {icalLoading ? 'Syncing...' : 'iCal Connected'}
+                                    </div>
+                                    <button 
+                                        onClick={handleSyncRefresh}
+                                        disabled={icalLoading}
+                                        className="text-[9px] font-bold text-text-muted hover:text-primary transition-colors flex items-center gap-1 uppercase tracking-widest"
+                                    >
+                                        <span className={`material-symbols-outlined notranslate text-[12px] ${icalLoading ? 'animate-spin' : ''}`}>refresh</span>
+                                        Sync Now
+                                    </button>
+                                </div>
                             </div>
 
-                            {/* Dynamic Booking Guidance Banner */}
-                            <div className="hidden md:flex items-center gap-4 py-2 px-4 bg-primary/5 border border-primary/20 rounded-xl animate-in fade-in slide-in-from-right-3">
-                                <span className="material-symbols-outlined notranslate text-primary text-sm">info</span>
-                                <div className="flex gap-4 text-[10px] font-bold uppercase tracking-wider">
-                                    <span className="text-text-secondary">Min Stay: <b className="text-primary">{selectionStart ? getRuleForDate(selectionStart).minimum_nights : (villa.minimum_nights || 7)} nights</b></span>
-                                    <span className="text-text-secondary">Check-in: <b className="text-primary text-nowrap">{villa.allowed_checkin_days || 'Flexible'}</b></span>
+                            <div className="flex flex-col items-end gap-2">
+                                <div className="flex items-start gap-2 p-3 bg-surface border border-border rounded-xl">
+                                    <span className="material-symbols-outlined notranslate text-primary text-sm">info</span>
+                                    <div className="flex gap-4 text-[10px] font-bold uppercase tracking-wider">
+                                        <span className="text-text-secondary">Min Stay: <b className="text-primary">{selectionStart ? getRuleForDate(selectionStart).minimum_nights : (villa.minimum_nights || 7)} nights</b></span>
+                                        <span className="text-text-secondary">Check-in: <b className="text-primary text-nowrap">{villa.allowed_checkin_days || 'Flexible'}</b></span>
+                                    </div>
                                 </div>
                             </div>
 

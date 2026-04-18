@@ -58,6 +58,8 @@ export default function QuotePublicView() {
     const [error, setError] = useState(null);
     const [activePhotoIndex, setActivePhotoIndex] = useState(0);
     const [showPhotoModal, setShowPhotoModal] = useState(false);
+    const [multiQuotes, setMultiQuotes] = useState([]);
+    const [activeQuoteIndex, setActiveQuoteIndex] = useState(0);
     const [agent, setAgent] = useState(null);
     const [owner, setOwner] = useState(null);
     const [processingPayment, setProcessingPayment] = useState(false);
@@ -96,30 +98,44 @@ export default function QuotePublicView() {
 
     useEffect(() => {
         if (id) fetchQuoteData();
-    }, [id]);
+    }, [id, activeQuoteIndex]);
 
     async function fetchQuoteData() {
+        if (!id) return;
         setLoading(true);
         try {
-            const { data: quoteData, error: quoteErr } = await supabase
+            const ids = id.split(',');
+            
+            let query = supabase
                 .from('quotes')
                 .select(`
                     *,
                     invenio_properties(*),
                     invenio_boats(*),
-                    agents(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details, email),
-                    clients(full_name, email, phone, address, passport_number, dob)
-                `)
-                .eq('id', id)
-                .single();
+                    agents(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details),
+                    clients(full_name, email, phone_number, address_street, id_number, dob)
+                `);
+            
+            if (ids.length > 1) {
+                query = query.in('id', ids);
+            } else {
+                query = query.eq('id', id);
+            }
+
+            const { data: quotesData, error: quoteErr } = await query;
             
             if (quoteErr) throw quoteErr;
-            if (!quoteData) throw new Error('Quote not found');
+            if (!quotesData || quotesData.length === 0) throw new Error('Quote not found');
 
-            setQuote(quoteData);
-            setVilla(quoteData.invenio_properties);
-            setBoat(quoteData.invenio_boats);
-            setAgent(quoteData.agents);
+            setMultiQuotes(quotesData);
+            
+            // If comma-separated IDs, initialize with the current index or first
+            const currentQuote = quotesData[activeQuoteIndex] || quotesData[0];
+            
+            setQuote(currentQuote);
+            setVilla(currentQuote.invenio_properties);
+            setBoat(currentQuote.invenio_boats);
+            setAgent(currentQuote.agents);
 
             // Fetch Photos
             let allPhotos = [];
@@ -127,14 +143,14 @@ export default function QuotePublicView() {
             const { data: photoData } = await supabase
                 .from('invenio_photos')
                 .select('url, thumbnail_url, sort_order')
-                .or(`v_uuid.eq.${quoteData.v_uuid || '00000000-0000-0000-0000-000000000000'},boat_uuid.eq.${quoteData.boat_uuid || '00000000-0000-0000-0000-000000000000'}`)
+                .or(`v_uuid.eq.${currentQuote.v_uuid || '00000000-0000-0000-0000-000000000000'},boat_uuid.eq.${currentQuote.boat_uuid || '00000000-0000-0000-0000-000000000000'}`)
                 .order('sort_order', { ascending: true });
             
             if (photoData) allPhotos = [...photoData];
 
             // Add photos from comma-separated field if it's a boat
-            if (quoteData.invenio_boats?.photo_urls) {
-                const manualPhotos = quoteData.invenio_boats.photo_urls
+            if (currentQuote.invenio_boats?.photo_urls) {
+                const manualPhotos = currentQuote.invenio_boats.photo_urls
                     .split(',')
                     .map(url => url.trim())
                     .filter(url => url.length > 5) // simple check for valid looking URL
@@ -149,7 +165,7 @@ export default function QuotePublicView() {
             setPhotos(allPhotos);
 
             // Fetch Owner Info
-            const ownerId = quoteData.invenio_properties?.owner_id || quoteData.invenio_boats?.owner_id;
+            const ownerId = currentQuote.invenio_properties?.owner_id || currentQuote.invenio_boats?.owner_id;
             if (ownerId) {
                 const { data: ownerData } = await supabase
                     .from('owners')
@@ -162,6 +178,8 @@ export default function QuotePublicView() {
         } catch (err) {
             console.error('Fetch error:', err);
             setError(err.message);
+        } finally {
+            setLoading(false);
         }
     }
 
@@ -184,9 +202,9 @@ export default function QuotePublicView() {
         const data = {
             '{{client_full_name}}': quote.clients?.full_name || 'Valued Client',
             '{{client_email}}': quote.clients?.email || '—',
-            '{{client_phone}}': quote.clients?.phone || '—',
-            '{{client_address}}': quote.clients?.address || '[To be filled in registration]',
-            '{{client_passport}}': quote.clients?.passport_number || '[To be filled in registration]',
+            '{{client_phone}}': quote.clients?.phone_number || '—',
+            '{{client_address}}': quote.clients?.address_street || '[To be filled in registration]',
+            '{{client_passport}}': quote.clients?.id_number || '[To be filled in registration]',
             '{{client_dob}}': quote.clients?.dob || '—',
             
             '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
@@ -381,6 +399,31 @@ export default function QuotePublicView() {
             </nav>
 
             <main className="max-w-[1400px] mx-auto p-4 md:p-12 space-y-12 pb-32">
+                {/* Multi-Proposal Selection */}
+                {multiQuotes.length > 1 && (
+                    <div className="bg-surface-2 p-2 rounded-[2rem] border border-border flex flex-wrap gap-2 sticky top-24 z-40 backdrop-blur-xl shadow-xl">
+                        {multiQuotes.map((q, idx) => (
+                            <button
+                                key={q.id}
+                                onClick={() => setActiveQuoteIndex(idx)}
+                                className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all flex items-center gap-3 ${
+                                    activeQuoteIndex === idx 
+                                    ? 'bg-primary text-background-dark shadow-lg shadow-primary/20 scale-105' 
+                                    : 'text-text-muted hover:text-text-primary hover:bg-white/5'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined notranslate text-[18px]">
+                                    {q.invenio_boats ? 'directions_boat' : 'home'}
+                                </span>
+                                {q.invenio_properties?.villa_name || q.invenio_boats?.boat_name || `Proposal ${idx + 1}`}
+                                {activeQuoteIndex === idx && (
+                                    <span className="flex size-2 rounded-full bg-background-dark/20 animate-pulse"></span>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {/* Hero Section */}
                 <section className="space-y-6">
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">

@@ -67,6 +67,8 @@ export default function QuotesPage() {
     const [editQuote, setEditQuote] = useState(null);
     const [assignQuote, setAssignQuote] = useState(null);
     const [viewMode, setViewMode] = useState('list');
+    const [selectedQuotes, setSelectedQuotes] = useState([]);
+    const [groupByClient, setGroupByClient] = useState(true);
 
     // --- Data Queries ---
     const { data: quotes = [], isLoading: quotesLoading } = useQuery({
@@ -89,10 +91,10 @@ export default function QuotesPage() {
                     price_breakdown,
                     documenso_document_id,
                     group_details,
-                    clients(full_name, phone_number),
+                    clients(full_name, email, phone_number, dob, id_number, address_street),
                     invenio_properties(*),
                     invenio_boats(*),
-                    agents(company_name, contract_template, boat_contract_template, address, tax_id, phone_number, agency_details)
+                    agents(company_name, contract_template, boat_contract_template, phone_number, agency_details)
                 `)
                 .order('created_at', { ascending: false });
 
@@ -359,9 +361,9 @@ export default function QuotesPage() {
         const data = {
             '{{client_full_name}}': quote.clients?.full_name || 'Valued Client',
             '{{client_email}}': quote.clients?.email || '—',
-            '{{client_phone}}': quote.clients?.phone || '—',
-            '{{client_address}}': quote.clients?.address || '[To be filled in registration]',
-            '{{client_passport}}': quote.clients?.passport_number || '[To be filled in registration]',
+            '{{client_phone}}': quote.clients?.phone_number || '—',
+            '{{client_address}}': quote.clients?.address_street || '[To be filled in registration]',
+            '{{client_passport}}': quote.clients?.id_number || '[To be filled in registration]',
             '{{client_dob}}': quote.clients?.dob || '—',
             
             '{{agency_name}}': agent?.company_name || 'Ibiza Beyond',
@@ -607,6 +609,14 @@ export default function QuotesPage() {
                             Kanban
                         </button>
                     </div>
+                    
+                    <button 
+                        onClick={() => setGroupByClient(!groupByClient)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-widest border transition-all flex items-center gap-2 ${groupByClient ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-surface-2 border-border text-text-muted hover:text-text-primary'}`}
+                    >
+                        <span className="material-symbols-outlined notranslate text-[18px]">{groupByClient ? 'group_work' : 'list'}</span>
+                        {groupByClient ? 'Grouped by Client' : 'Flat List'}
+                    </button>
                 </div>
             </div>
 
@@ -626,7 +636,18 @@ export default function QuotesPage() {
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                             <thead>
-                                <tr className="border-b border-border bg-surface-2/30">
+                                <tr>
+                                    <th className="w-10 px-5 py-4">
+                                        <input 
+                                            type="checkbox" 
+                                            className="rounded border-border bg-surface text-primary focus:ring-primary"
+                                            onChange={(e) => {
+                                                if (e.target.checked) setSelectedQuotes(quotes.map(q => q.id));
+                                                else setSelectedQuotes([]);
+                                            }}
+                                            checked={selectedQuotes.length === quotes.length && quotes.length > 0}
+                                        />
+                                    </th>
                                     <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Listing</th>
                                     <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Client</th>
                                     {(role === 'admin' || role === 'super_admin' || role === 'agency_admin') && (
@@ -645,174 +666,265 @@ export default function QuotesPage() {
                                     <th className="text-left text-[10px] text-text-muted font-black px-5 py-4 uppercase tracking-[0.2em]">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-border/30">
-                                {quotes.map(q => (
-                                    <tr key={q.id} className="hover:bg-primary/5 transition-colors group">
-                                        <td className="px-5 py-4 font-bold text-text-primary max-w-[180px] truncate">
-                                            <div className="flex flex-col">
-                                                <span className="truncate">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name || '—'}</span>
-                                                <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">
-                                                    {q.invenio_properties ? 'Villa' : q.invenio_boats ? 'Boat' : 'Unknown'}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <td className="px-5 py-4 text-text-secondary font-medium">{q.clients?.full_name || '—'}</td>
-                                        {(role === 'admin' || role === 'super_admin' || role === 'agency_admin') && (
+                            <tbody>
+                                {(() => {
+                                    const renderQuoteRow = (q, isNested = false) => (
+                                        <tr key={q.id} className={`hover:bg-primary/5 transition-colors group ${selectedQuotes.includes(q.id) ? 'bg-primary/5' : ''} ${isNested ? 'bg-surface/30' : ''}`}>
                                             <td className="px-5 py-4">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="rounded border-border bg-surface text-primary focus:ring-primary"
+                                                    checked={selectedQuotes.includes(q.id)}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) setSelectedQuotes([...selectedQuotes, q.id]);
+                                                        else setSelectedQuotes(selectedQuotes.filter(id => id !== q.id));
+                                                    }}
+                                                />
+                                            </td>
+                                            <td className="px-5 py-4 font-bold text-text-primary max-w-[180px] truncate">
                                                 <div className="flex flex-col">
-                                                    <span className="text-text-primary font-bold text-xs">{q.agent_id === user.id ? 'You' : (q.agents?.company_name || 'Individual Agent')}</span>
-                                                    <span className="text-[9px] text-text-muted uppercase tracking-tighter">ID: {q.agent_id?.slice(0,8) || '—'}</span>
+                                                    <span className="truncate">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name || '—'}</span>
+                                                    <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">
+                                                        {q.invenio_properties ? 'Villa' : q.invenio_boats ? 'Boat' : 'Unknown'}
+                                                    </span>
                                                 </div>
                                             </td>
-                                        )}
-                                        <td className="px-5 py-4 text-text-muted text-xs whitespace-nowrap">
-                                            {q.check_in ? `${new Date(q.check_in).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} → ${new Date(q.check_out).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}` : '—'}
-                                        </td>
-                                        
-                                         {(role === 'admin' || role === 'super_admin') && (
-                                             <>
-                                                 <td className="px-5 py-4 text-right">
-                                                     <p className="font-mono text-[13px] text-text-primary">€{parseFloat(q.supplier_base_price || 0).toLocaleString()}</p>
-                                                     <span className="text-[8px] text-text-muted uppercase font-black">Owner Net</span>
-                                                 </td>
-                                                 <td className="px-5 py-4 text-right">
-                                                     <p className="font-mono text-[13px] text-amber-500/90 font-bold">€{Math.round(parseFloat(q.supplier_base_price || 0) * (parseFloat(q.admin_markup || 0) / 100)).toLocaleString()}</p>
-                                                     <span className="text-[8px] text-amber-600/60 uppercase font-black">Platform Profit</span>
-                                                 </td>
-                                             </>
-                                         )}
- 
-                                         <td className="px-5 py-4 text-right">
-                                             {(() => {
-                                                 const base = parseFloat(q.supplier_base_price || 0);
-                                                 const adminMarkup = parseFloat(q.admin_markup || 0);
-                                                 const agentMarkup = parseFloat(q.agent_markup || 0);
-                                                 const priceWithAdmin = base * (1 + adminMarkup / 100);
-                                                 
-                                                 const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
-                                                 const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : 0;
-                                                 const finalNet = parseFloat(q.final_price || 0) - ivaAmount;
-                                                 
-                                                 let agentProfit = 0;
-                                                 if (q.is_manual_price) {
-                                                     agentProfit = finalNet - priceWithAdmin;
-                                                 } else {
-                                                     agentProfit = priceWithAdmin * (agentMarkup / 100);
-                                                 }
- 
-                                                 const isB2C = !q.agent_id || q.agent_id === '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
-                                                 return (
-                                                     <div className="flex flex-col items-end">
-                                                         <span className={`font-mono text-[13px] font-bold ${isB2C ? 'text-cyan-400' : 'text-emerald-400'}`}>
-                                                             €{Math.round(agentProfit).toLocaleString()}
-                                                         </span>
-                                                         <span className={`text-[8px] uppercase font-black ${isB2C ? 'text-cyan-600/60' : 'text-emerald-600/60'}`}>
-                                                             {isB2C ? 'B2C Commission' : 'Agency Comm'}
-                                                         </span>
-                                                     </div>
-                                                 );
-                                             })()}
-                                         </td>
- 
-                                         <td className="px-5 py-4 text-right">
-                                             <div className="flex flex-col items-end">
-                                                 <span className="font-mono text-[15px] text-primary font-black">
-                                                     €{parseFloat(q.final_price || 0).toLocaleString()}
-                                                 </span>
-                                                 <span className="text-[8px] text-primary/60 uppercase font-black">{q.is_manual_price ? 'Manual Total' : 'Gross Total'}</span>
-                                             </div>
-                                         </td>
- 
-                                         <td className="px-5 py-4 min-w-[120px]">
-                                             {q.group_details ? (
-                                                 <div className="flex flex-col gap-1">
-                                                     <div className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-widest w-fit ${
-                                                         q.group_details.type === 'family' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-primary/10 text-primary'
-                                                     }`}>
-                                                         {q.group_details.type}
-                                                     </div>
-                                                     <div className="flex items-center gap-1">
-                                                        <div className="h-1 w-8 bg-background rounded-full overflow-hidden border border-border/30">
-                                                            <div className={`h-full ${q.group_details.type === 'family' ? 'w-[90%] bg-emerald-500' : 'w-[60%] bg-primary'} opacity-50`}></div>
-                                                        </div>
-                                                        <span className="text-[8px] text-text-muted font-bold uppercase">Rel</span>
-                                                     </div>
-                                                 </div>
-                                             ) : (
-                                                 <span className="text-[10px] text-text-muted italic">No profile</span>
+                                            <td className="px-5 py-4 text-text-secondary font-medium">
+                                                {isNested ? (
+                                                    <span className="text-[10px] text-text-muted uppercase tracking-tighter italic">Proposal Item</span>
+                                                ) : (
+                                                    q.clients?.full_name || '—'
+                                                )}
+                                            </td>
+                                            
+                                            {(role === 'admin' || role === 'super_admin' || role === 'agency_admin') && (
+                                                <td className="px-5 py-4">
+                                                    <div className="flex flex-col">
+                                                        <span className="text-text-primary font-bold text-xs">{q.agent_id === user.id ? 'You' : (q.agents?.company_name || 'Individual Agent')}</span>
+                                                        <span className="text-[9px] text-text-muted uppercase tracking-tighter">ID: {q.agent_id?.slice(0,8) || '—'}</span>
+                                                    </div>
+                                                </td>
+                                            )}
+                                            <td className="px-5 py-4 text-text-muted text-xs whitespace-nowrap">
+                                                {q.check_in ? `${new Date(q.check_in).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} → ${new Date(q.check_out).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}` : '—'}
+                                            </td>
+                                            
+                                             {(role === 'admin' || role === 'super_admin') && (
+                                                 <>
+                                                     <td className="px-5 py-4 text-right">
+                                                         <p className="font-mono text-[13px] text-text-primary">€{parseFloat(q.supplier_base_price || 0).toLocaleString()}</p>
+                                                         <span className="text-[8px] text-text-muted uppercase font-black">Owner Net</span>
+                                                     </td>
+                                                     <td className="px-5 py-4 text-right">
+                                                         <p className="font-mono text-[13px] text-amber-500/90 font-bold">€{Math.round(parseFloat(q.supplier_base_price || 0) * (parseFloat(q.admin_markup || 0) / 100)).toLocaleString()}</p>
+                                                         <span className="text-[8px] text-amber-600/60 uppercase font-black">Platform Profit</span>
+                                                     </td>
+                                                 </>
                                              )}
-                                         </td>
-                                        <td className="px-5 py-4">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest mr-2 ${STATUS_COLORS[q.status] || ''}`}>
-                                                    {q.status?.replace(/_/g, ' ')}
-                                                </span>
-                                                <div className="flex items-center gap-1">
-                                                    <button 
-                                                        onClick={() => setEditQuote(q)}
-                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
-                                                        title="Edit Quote"
-                                                    >
-                                                        <span className="material-symbols-outlined notranslate text-[18px]">edit</span>
-                                                    </button>
-                                                    {(role === 'admin' || role === 'super_admin') && (
-                                                        <button 
-                                                            onClick={() => setAssignQuote(q)}
-                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
-                                                            title="Assign Agent"
-                                                        >
-                                                            <span className="material-symbols-outlined notranslate text-[18px]">person_add</span>
-                                                        </button>
-                                                    )}
-                                                    <button 
-                                                        onClick={() => handleWhatsAppShare(q)}
-                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-[#25D366] transition-all"
-                                                        title="Share via WhatsApp"
-                                                    >
-                                                        <svg className="size-4 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.634 1.437h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => {
-                                                            const url = `${window.location.origin}/quote/${q.id}`;
-                                                            navigator.clipboard.writeText(url);
-                                                            alert('Public link copied to clipboard!');
-                                                        }}
-                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
-                                                        title="Copy public link"
-                                                    >
-                                                        <span className="material-symbols-outlined notranslate text-[18px]">share</span>
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => generatePDF(q)}
-                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
-                                                        title="Download PDF"
-                                                    >
-                                                        <span className="material-symbols-outlined notranslate text-[18px]">picture_as_pdf</span>
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => handleDeleteQuote(q.id)}
-                                                        className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-red-500 transition-all"
-                                                        title="Delete Quote"
-                                                    >
-                                                        <span className="material-symbols-outlined notranslate text-[18px]">delete</span>
-                                                    </button>
-                                                    
-                                                    {(role === 'admin' || role === 'super_admin') && (q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
-                                                        <button 
-                                                            onClick={() => handleAskAvailability(q)}
-                                                            className="size-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/20 transition-all"
-                                                            title="Ask Owner Availability (WhatsApp)"
-                                                        >
-                                                            <span className="material-symbols-outlined notranslate text-[18px]">chat</span>
-                                                        </button>
-                                                    )}
-                                                    
 
+                                             <td className="px-5 py-4 text-right">
+                                                 {(() => {
+                                                     const base = parseFloat(q.supplier_base_price || 0);
+                                                     const adminMarkup = parseFloat(q.admin_markup || 0);
+                                                     const agentMarkup = parseFloat(q.agent_markup || 0);
+                                                     const priceWithAdmin = base * (1 + adminMarkup / 100);
+                                                     
+                                                     const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
+                                                     const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : 0;
+                                                     const finalNet = parseFloat(q.final_price || 0) - ivaAmount;
+                                                     
+                                                     let agentProfit = 0;
+                                                     if (q.is_manual_price) {
+                                                         agentProfit = finalNet - priceWithAdmin;
+                                                     } else {
+                                                         agentProfit = priceWithAdmin * (agentMarkup / 100);
+                                                     }
+
+                                                     const isB2C = !q.agent_id || q.agent_id === '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
+                                                     return (
+                                                         <div className="flex flex-col items-end">
+                                                             <span className={`font-mono text-[13px] font-bold ${isB2C ? 'text-cyan-400' : 'text-emerald-400'}`}>
+                                                                 €{Math.round(agentProfit).toLocaleString()}
+                                                             </span>
+                                                             <span className={`text-[8px] uppercase font-black ${isB2C ? 'text-cyan-600/60' : 'text-emerald-600/60'}`}>
+                                                                 {isB2C ? 'B2C Commission' : 'Agency Comm'}
+                                                             </span>
+                                                         </div>
+                                                     );
+                                                 })()}
+                                             </td>
+
+                                             <td className="px-5 py-4 text-right">
+                                                 <div className="flex flex-col items-end">
+                                                     <span className="font-mono text-[15px] text-primary font-black">
+                                                         €{parseFloat(q.final_price || 0).toLocaleString()}
+                                                     </span>
+                                                     <span className="text-[8px] text-primary/60 uppercase font-black">{q.is_manual_price ? 'Manual Total' : 'Gross Total'}</span>
+                                                 </div>
+                                             </td>
+
+                                             <td className="px-5 py-4 min-w-[120px]">
+                                                 {q.group_details ? (
+                                                     <div className="flex flex-col gap-1">
+                                                         <div className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-widest w-fit ${
+                                                             q.group_details.type === 'family' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-primary/10 text-primary'
+                                                         }`}>
+                                                             {q.group_details.type}
+                                                         </div>
+                                                         <div className="flex items-center gap-1">
+                                                            <div className="h-1 w-8 bg-background rounded-full overflow-hidden border border-border/30">
+                                                                <div className={`h-full ${q.group_details.type === 'family' ? 'w-[90%] bg-emerald-500' : 'w-[60%] bg-primary'} opacity-50`}></div>
+                                                            </div>
+                                                            <span className="text-[8px] text-text-muted font-bold uppercase">Rel</span>
+                                                         </div>
+                                                     </div>
+                                                 ) : (
+                                                     <span className="text-[10px] text-text-muted italic">No profile</span>
+                                                 )}
+                                             </td>
+                                            <td className="px-5 py-4">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest mr-2 ${STATUS_COLORS[q.status] || ''}`}>
+                                                        {q.status?.replace(/_/g, ' ')}
+                                                    </span>
+                                                    <div className="flex items-center gap-1">
+                                                        <button 
+                                                            onClick={() => setEditQuote(q)}
+                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                            title="Edit Quote"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">edit</span>
+                                                        </button>
+                                                        {(role === 'admin' || role === 'super_admin') && (
+                                                            <button 
+                                                                onClick={() => setAssignQuote(q)}
+                                                                className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                                title="Assign Agent"
+                                                            >
+                                                                <span className="material-symbols-outlined notranslate text-[18px]">person_add</span>
+                                                            </button>
+                                                        )}
+                                                        <button 
+                                                            onClick={() => handleWhatsAppShare(q)}
+                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-[#25D366] transition-all"
+                                                            title="Share via WhatsApp"
+                                                        >
+                                                            <svg className="size-4 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.634 1.437h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => {
+                                                                const url = `${window.location.origin}/quote/${q.id}`;
+                                                                navigator.clipboard.writeText(url);
+                                                                alert('Public link copied to clipboard!');
+                                                            }}
+                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                            title="Copy public link"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">share</span>
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => generatePDF(q)}
+                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-primary transition-all"
+                                                            title="Download PDF"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">picture_as_pdf</span>
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handleDeleteQuote(q.id)}
+                                                            className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-red-500 transition-all"
+                                                            title="Delete Quote"
+                                                        >
+                                                            <span className="material-symbols-outlined notranslate text-[18px]">delete</span>
+                                                        </button>
+                                                        
+                                                        {(role === 'admin' || role === 'super_admin') && (q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
+                                                            <button 
+                                                                onClick={() => handleAskAvailability(q)}
+                                                                className="size-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/20 transition-all"
+                                                                title="Ask Owner Availability (WhatsApp)"
+                                                            >
+                                                                <span className="material-symbols-outlined notranslate text-[18px]">chat</span>
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
+                                            </td>
+                                        </tr>
+                                    );
+
+                                    if (!groupByClient) {
+                                        return quotes.map(q => renderQuoteRow(q));
+                                    }
+
+                                    // Grouping Logic
+                                    const groups = quotes.reduce((acc, q) => {
+                                        const cId = q.client_id || 'unassigned';
+                                        if (!acc[cId]) acc[cId] = {
+                                            client: q.clients,
+                                            quotes: []
+                                        };
+                                        acc[cId].quotes.push(q);
+                                        return acc;
+                                    }, {});
+
+                                    return Object.entries(groups).map(([clientId, group]) => (
+                                        <React.Fragment key={clientId}>
+                                            <tr className="bg-surface-2/40">
+                                                <td colSpan={role === 'admin' || role === 'super_admin' ? 12 : 10} className="px-5 py-4">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="size-10 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-inner border border-primary/20">
+                                                                <span className="material-symbols-outlined notranslate">person_search</span>
+                                                            </div>
+                                                            <div>
+                                                                <p className="font-black text-sm uppercase tracking-[0.1em] text-text-primary">
+                                                                    {group.client?.full_name || 'Individual Inquiry'}
+                                                                </p>
+                                                                <div className="flex items-center gap-2 mt-0.5">
+                                                                    <span className="text-[10px] bg-primary text-black px-2 py-0.5 rounded font-black uppercase">
+                                                                        {group.quotes.length} Options
+                                                                    </span>
+                                                                    <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Unified Quote</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="flex bg-background rounded-xl p-1 border border-border shadow-sm">
+                                                                <button 
+                                                                    onClick={() => {
+                                                                        const ids = group.quotes.map(q => q.id);
+                                                                        const url = `${window.location.origin}/quote/${ids.join(',')}`;
+                                                                        navigator.clipboard.writeText(url);
+                                                                        alert('Unified portal link copied!');
+                                                                    }}
+                                                                    className="px-4 py-2 hover:bg-surface-2 rounded-lg text-[10px] font-black uppercase tracking-widest text-text-primary transition-all flex items-center gap-2"
+                                                                >
+                                                                    <span className="material-symbols-outlined notranslate text-[16px]">content_copy</span>
+                                                                    Link
+                                                                </button>
+                                                                <button 
+                                                                    onClick={() => {
+                                                                        const ids = group.quotes.map(q => q.id);
+                                                                        const url = `${window.location.origin}/quote/${ids.join(',')}`;
+                                                                        const firstQuote = group.quotes[0];
+                                                                        const message = `Hello ${firstQuote.clients?.full_name || 'there'}! Here are your yacht & villa proposals for Ibiza: ${url}`;
+                                                                        const whatsappUrl = `https://wa.me/${firstQuote.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
+                                                                        window.open(whatsappUrl, '_blank');
+                                                                    }}
+                                                                    className="px-4 py-2 hover:bg-[#25D366]/10 hover:text-[#25D366] rounded-lg text-[10px] font-black uppercase tracking-widest text-text-primary transition-all flex items-center gap-2"
+                                                                >
+                                                                    <svg className="size-3 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.634 1.437h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                                                                    WhatsApp
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {group.quotes.map(q => renderQuoteRow(q, true))}
+                                        </React.Fragment>
+                                    ));
+                                })()}
                             </tbody>
                         </table>
                     </div>
@@ -834,6 +946,57 @@ export default function QuotesPage() {
                         alert('Public link copied to clipboard!');
                     }}
                 />
+            )}
+
+            {selectedQuotes.length > 0 && (
+                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-8 duration-300">
+                    <div className="bg-surface-2 border border-primary/30 p-4 rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center gap-6 backdrop-blur-2xl">
+                        <div className="flex items-center gap-3 pl-2">
+                            <div className="size-8 bg-primary rounded-full flex items-center justify-center text-background-dark font-black text-xs">
+                                {selectedQuotes.length}
+                            </div>
+                            <span className="text-xs font-bold text-text-primary uppercase tracking-widest italic">Quotes Selected</span>
+                        </div>
+                        
+                        <div className="h-8 w-px bg-border"></div>
+                        
+                        <div className="flex items-center gap-2">
+                            <button 
+                                onClick={() => {
+                                    const url = `${window.location.origin}/quote/${selectedQuotes.join(',')}`;
+                                    navigator.clipboard.writeText(url);
+                                    alert('Unified portal link copied!');
+                                }}
+                                className="px-5 py-2.5 bg-primary text-background-dark rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 transition-all shadow-lg shadow-primary/20 flex items-center gap-2"
+                            >
+                                <span className="material-symbols-outlined notranslate text-[18px]">share</span>
+                                Copy Portal Link
+                            </button>
+                            
+                            <button 
+                                onClick={() => {
+                                    const qList = quotes.filter(q => selectedQuotes.includes(q.id));
+                                    const firstQuote = qList[0];
+                                    const url = `${window.location.origin}/quote/${selectedQuotes.join(',')}`;
+                                    const message = `Hello ${firstQuote.clients?.full_name || 'there'}! Here are your bespoke villa proposals for Ibiza: ${url}`;
+                                    const whatsappUrl = `https://wa.me/${firstQuote.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
+                                    window.open(whatsappUrl, '_blank');
+                                }}
+                                className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 transition-all shadow-lg shadow-green-500/20 flex items-center gap-2"
+                            >
+                                <svg className="size-4 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.634 1.437h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                                WhatsApp Portal Link
+                            </button>
+                            
+                            <button 
+                                onClick={() => setSelectedQuotes([])}
+                                className="size-10 flex items-center justify-center text-text-muted hover:text-red-400 transition-colors"
+                            >
+                                <span className="material-symbols-outlined notranslate">close</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {assignQuote && (
