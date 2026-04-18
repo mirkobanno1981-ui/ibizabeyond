@@ -59,6 +59,7 @@ export default function QuotePublicView() {
     const [activePhotoIndex, setActivePhotoIndex] = useState(0);
     const [showPhotoModal, setShowPhotoModal] = useState(false);
     const [multiQuotes, setMultiQuotes] = useState([]);
+    const [qPhotosMap, setQPhotosMap] = useState({});
     const [activeQuoteIndex, setActiveQuoteIndex] = useState(0);
     const [agent, setAgent] = useState(null);
     const [owner, setOwner] = useState(null);
@@ -127,44 +128,52 @@ export default function QuotePublicView() {
             if (quoteErr) throw quoteErr;
             if (!quotesData || quotesData.length === 0) throw new Error('Quote not found');
 
+            // Fetch Photos for ALL quotes
+            const vUuids = quotesData.map(q => q.v_uuid).filter(Boolean);
+            const bUuids = quotesData.map(q => q.boat_uuid).filter(Boolean);
+            
+            let allPhotoData = [];
+            if (vUuids.length > 0 || bUuids.length > 0) {
+                const filters = [];
+                if (vUuids.length > 0) filters.push(`v_uuid.in.(${vUuids.join(',')})`);
+                if (bUuids.length > 0) filters.push(`boat_uuid.in.(${bUuids.join(',')})`);
+                
+                const { data } = await supabase
+                    .from('invenio_photos')
+                    .select('*')
+                    .or(filters.join(','))
+                    .order('sort_order', { ascending: true });
+                allPhotoData = data || [];
+            }
+
+            const photosMap = {};
+            quotesData.forEach(q => {
+                const qPhotos = (allPhotoData || []).filter(p => 
+                    (q.v_uuid && p.v_uuid === q.v_uuid) || 
+                    (q.boat_uuid && p.boat_uuid === q.boat_uuid)
+                );
+                
+                // Add manual boat photos if any
+                if (q.invenio_boats?.photo_urls) {
+                    const manual = q.invenio_boats.photo_urls.split(',')
+                        .map(url => ({ url: url.trim(), thumbnail_url: url.trim(), sort_order: 1000 }));
+                    qPhotos.push(...manual);
+                }
+                
+                photosMap[q.id] = qPhotos;
+            });
+
+            setQPhotosMap(photosMap);
             setMultiQuotes(quotesData);
             
-            // If comma-separated IDs, initialize with the current index or first
             const currentQuote = quotesData[activeQuoteIndex] || quotesData[0];
-            
             setQuote(currentQuote);
             setVilla(currentQuote.invenio_properties);
             setBoat(currentQuote.invenio_boats);
             setAgent(currentQuote.agents);
+            setPhotos(photosMap[currentQuote.id] || []);
 
-            // Fetch Photos
-            let allPhotos = [];
-            
-            const { data: photoData } = await supabase
-                .from('invenio_photos')
-                .select('url, thumbnail_url, sort_order')
-                .or(`v_uuid.eq.${currentQuote.v_uuid || '00000000-0000-0000-0000-000000000000'},boat_uuid.eq.${currentQuote.boat_uuid || '00000000-0000-0000-0000-000000000000'}`)
-                .order('sort_order', { ascending: true });
-            
-            if (photoData) allPhotos = [...photoData];
-
-            // Add photos from comma-separated field if it's a boat
-            if (currentQuote.invenio_boats?.photo_urls) {
-                const manualPhotos = currentQuote.invenio_boats.photo_urls
-                    .split(',')
-                    .map(url => url.trim())
-                    .filter(url => url.length > 5) // simple check for valid looking URL
-                    .map((url, index) => ({
-                        url,
-                        thumbnail_url: url,
-                        sort_order: 1000 + index
-                    }));
-                allPhotos = [...allPhotos, ...manualPhotos];
-            }
-            
-            setPhotos(allPhotos);
-
-            // Fetch Owner Info
+            // Fetch Owner Info for the first one (or all?)
             const ownerId = currentQuote.invenio_properties?.owner_id || currentQuote.invenio_boats?.owner_id;
             if (ownerId) {
                 const { data: ownerData } = await supabase
@@ -253,16 +262,17 @@ export default function QuotePublicView() {
         return result || "ERROR: Rental Agreement content could not be generated. Please refresh or contact support.";
     };
 
-    const handleSign = async () => {
+    const handleContractSigning = async (targetId = id) => {
         if (!acceptTerms) {
             alert('Please accept the rental agreement to proceed.');
             return;
         }
-
+        const actualId = targetId.includes(',') ? multiQuotes[activeQuoteIndex]?.id : targetId;
+        
         setProcessingPayment(true);
         try {
             const { data, error: functionErr } = await supabase.functions.invoke('documenso-contract', {
-                body: { quoteId: id, type: 'guest' }
+                body: { quoteId: actualId, type: 'guest' }
             });
 
             if (functionErr) throw functionErr;
@@ -279,11 +289,13 @@ export default function QuotePublicView() {
         }
     };
 
-    const handlePayment = async () => {
+    const handlePayment = async (targetId = id) => {
+        const actualId = targetId.includes(',') ? multiQuotes[activeQuoteIndex]?.id : targetId;
+        
         setProcessingPayment(true);
         try {
             const { data, error: functionErr } = await supabase.functions.invoke('stripe-checkout', {
-                body: { quoteId: id, type: 'deposit', method: paymentMethod }
+                body: { quoteId: actualId, type: 'deposit', method: paymentMethod }
             });
 
             if (functionErr) throw functionErr;
@@ -300,11 +312,13 @@ export default function QuotePublicView() {
         }
     };
 
-    const handleSecurityDeposit = async () => {
+    const handleSecurityDeposit = async (targetId = id) => {
+        const actualId = targetId.includes(',') ? multiQuotes[activeQuoteIndex]?.id : targetId;
+        
         setProcessingPayment(true);
         try {
             const { data, error: functionErr } = await supabase.functions.invoke('stripe-checkout', {
-                body: { quoteId: id, type: 'security_deposit' }
+                body: { quoteId: actualId, type: 'security_deposit' }
             });
 
             if (functionErr) throw functionErr;
@@ -365,14 +379,14 @@ export default function QuotePublicView() {
                 <div className="flex items-center gap-3">
                     {agent?.agent_type === 'collaborator' ? (
                         owner?.logo_url ? (
-                            <img src={owner?.logo_url} alt={owner?.company_name || owner?.name} className="h-10 w-auto object-contain" />
+                            <img src={owner.logo_url} alt={owner.company_name || owner.name} className="h-10 w-auto object-contain" />
                         ) : (
                             <div className="size-10 bg-primary rounded-xl flex items-center justify-center">
                                 <span className="material-symbols-outlined notranslate text-background-dark font-black">diamond</span>
                             </div>
                         )
                     ) : agent?.logo_url ? (
-                        <img src={agent?.logo_url} alt={agent?.company_name} className="h-10 w-auto object-contain" />
+                        <img src={agent.logo_url} alt={agent.company_name} className="h-10 w-auto object-contain" />
                     ) : (
                         <div className="size-10 bg-primary rounded-xl flex items-center justify-center">
                             <span className="material-symbols-outlined notranslate text-background-dark font-black">diamond</span>
@@ -393,528 +407,351 @@ export default function QuotePublicView() {
                 {agent?.phone_number && (
                     <div className="hidden sm:flex items-center gap-2 text-text-muted">
                         <span className="material-symbols-outlined notranslate text-sm">phone</span>
-                        <span className="text-xs font-bold">{agent?.phone_number}</span>
+                        <span className="text-xs font-bold">{agent.phone_number}</span>
                     </div>
                 )}
             </nav>
 
-            <main className="max-w-[1400px] mx-auto p-4 md:p-12 space-y-12 pb-32">
-                {/* Multi-Proposal Selection */}
-                {multiQuotes.length > 1 && (
-                    <div className="bg-surface-2 p-2 rounded-[2rem] border border-border flex flex-wrap gap-2 sticky top-24 z-40 backdrop-blur-xl shadow-xl">
-                        {multiQuotes.map((q, idx) => (
-                            <button
-                                key={q.id}
-                                onClick={() => setActiveQuoteIndex(idx)}
-                                className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all flex items-center gap-3 ${
-                                    activeQuoteIndex === idx 
-                                    ? 'bg-primary text-background-dark shadow-lg shadow-primary/20 scale-105' 
-                                    : 'text-text-muted hover:text-text-primary hover:bg-white/5'
-                                }`}
-                            >
-                                <span className="material-symbols-outlined notranslate text-[18px]">
-                                    {q.invenio_boats ? 'directions_boat' : 'home'}
-                                </span>
-                                {q.invenio_properties?.villa_name || q.invenio_boats?.boat_name || `Proposal ${idx + 1}`}
-                                {activeQuoteIndex === idx && (
-                                    <span className="flex size-2 rounded-full bg-background-dark/20 animate-pulse"></span>
-                                )}
-                            </button>
-                        ))}
+            <main className="max-w-[1440px] mx-auto p-4 md:p-12 space-y-32 pb-32">
+                {/* Unified Welcome Header */}
+                <header className="text-center space-y-6 pt-8 pb-12 animate-in fade-in zoom-in duration-1000">
+                    <div className="inline-flex items-center gap-3 px-6 py-2 rounded-full border border-primary/30 bg-primary/5 text-primary text-[10px] font-black uppercase tracking-[0.3em]">
+                        <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                        </span>
+                        Exclusive Proposal
                     </div>
-                )}
+                    <h1 className="text-5xl md:text-7xl font-black text-text-primary tracking-tighter leading-[0.9]">
+                        Your Personalized<br/>
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-primary-light to-primary/50">Ibiza Experience</span>
+                    </h1>
+                    <p className="text-text-muted max-w-2xl mx-auto text-sm md:text-lg font-medium leading-relaxed">
+                        Hello {quote.clients?.full_name || 'Valued Client'}, we have curated a selection of the finest properties and vessels for your stay in Ibiza. Below you will find all the details to help you choose your ideal match.
+                    </p>
+                </header>
 
-                {/* Hero Section */}
-                <section className="space-y-6">
-                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                        <div>
-                            <h1 className="text-4xl md:text-5xl font-black text-text-primary tracking-tight">
-                                {villa?.villa_name || boat?.boat_name}
-                            </h1>
-                            <div className="flex flex-wrap items-center gap-4 mt-2">
-                                <div className="flex items-center gap-2 text-primary font-bold">
-                                    <span className="material-symbols-outlined notranslate text-sm">location_on</span>
-                                    <span className="text-sm uppercase tracking-widest">
-                                        {villa ? (villa.areaname || villa.district) : (boat?.location_base_port || 'Ibiza')}
-                                    </span>
-                                </div>
-                                {villa?.license && (
-                                    <div className="flex items-center gap-2 px-3 py-1 bg-surface-2 border border-border rounded-lg">
-                                        <span className="text-[10px] font-black text-text-muted uppercase tracking-widest">License:</span>
-                                        <span className="text-[10px] font-bold text-text-primary uppercase tracking-widest">{villa?.license}</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                        <div className="hidden md:block text-right">
-                            <p className="text-[10px] text-text-muted font-black uppercase tracking-widest mb-1">Presented to</p>
-                            <p className="text-xl font-bold text-text-primary">{quote.clients?.full_name || 'Valued Client'}</p>
-                        </div>
-                    </div>
+                {multiQuotes.map((q, idx) => {
+                    const qVilla = q.invenio_properties;
+                    const qBoat = q.invenio_boats;
+                    const qPhotos = qPhotosMap[q.id] || [];
+                    const qMainPhoto = qPhotos[0]?.url || FALLBACK_IMG;
+                    
+                    const qTotal = parseFloat(q.final_price || 0);
+                    const qBase = parseFloat(q.supplier_base_price || 0);
+                    const qExtrasTotal = (q.extra_services || []).reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
+                    
+                    // Specific timing check for this quote
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const qCheckInDate = new Date(q.check_in);
+                    qCheckInDate.setHours(0, 0, 0, 0);
+                    const qDiffTime = qCheckInDate.getTime() - today.getTime();
+                    const qIsLastMinute = Math.round(qDiffTime / (1000 * 60 * 60 * 24)) <= 49;
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[400px] md:h-[650px]">
-                        {/* Main Image (Left) */}
-                        <div className="relative rounded-[2rem] overflow-hidden bg-surface group cursor-pointer shadow-2xl border border-border" onClick={() => { setActivePhotoIndex(0); setShowPhotoModal(true); }}>
-                            <img src={mainPhoto} className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-[2000ms] ease-out" alt={villa?.villa_name || boat?.boat_name} />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-40 group-hover:opacity-20 transition-opacity"></div>
-                            <div className="absolute top-6 right-6 bg-surface-2/80 backdrop-blur-xl border border-white/20 px-4 py-2 rounded-2xl text-text-primary text-xs font-bold flex items-center gap-2 shadow-xl">
-                                <span className="material-symbols-outlined notranslate text-[18px]">photo_library</span>
-                                {photos.length} Photos
-                            </div>
-                        </div>
+                    const qUpfrontStayPart = qIsLastMinute ? qBase : (qBase * 0.5);
+                    const qUpfront = (qTotal - qBase) + qUpfrontStayPart;
 
-                        {/* 2x2 Grid (Right) */}
-                        <div className="hidden lg:grid grid-cols-2 grid-rows-2 gap-4">
-                            {photos.slice(1, 5).map((p, i) => (
-                                <div 
-                                    key={i} 
-                                    className="relative rounded-[1.5rem] overflow-hidden bg-surface border border-border cursor-pointer group shadow-lg"
-                                    onClick={() => { setActivePhotoIndex(i + 1); setShowPhotoModal(true); }}
-                                >
-                                    <img src={p.url} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000" alt="" />
-                                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                    {i === 3 && photos.length > 5 && (
-                                        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center backdrop-blur-md">
-                                            <span className="text-text-primary font-black text-3xl tracking-tighter">+{photos.length - 4}</span>
-                                            <span className="text-[10px] text-text-primary/70 uppercase font-black tracking-widest">View Gallery</span>
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </section>
-
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-12 items-start">
-                    {/* Details Column */}
-                    <div className="xl:col-span-2 space-y-12">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            {villa ? [
-                                { i: 'bed', v: villa.bedrooms, l: 'Bedrooms' },
-                                { i: 'shower', v: villa.bathrooms, l: 'Bathrooms' },
-                                { i: 'groups', v: villa.sleeps, l: 'Sleeps' },
-                                { i: 'straighten', v: villa.district || 'Ibiza', l: 'Area' }
-                            ].map((item, i) => (
-                                <div key={i} className="glass-card p-6 flex flex-col items-center justify-center text-center space-y-2">
-                                    <span className="material-symbols-outlined notranslate text-primary text-3xl">{item.i}</span>
-                                    <div>
-                                        <p className="text-2xl font-bold text-text-primary">{item.v}</p>
-                                        <p className="text-[10px] uppercase font-bold text-text-muted tracking-widest">{item.l}</p>
-                                    </div>
-                                </div>
-                            )) : boat ? [
-                                { i: 'directions_boat', v: `${boat.length_m}m`, l: 'Length' },
-                                { i: 'groups', v: boat.capacity_day, l: 'Cap. Day' },
-                                { i: 'bed', v: boat.cabins || '—', l: 'Cabins' },
-                                { i: 'anchor', v: boat.location_base_port || 'Ibiza', l: 'Base Port' }
-                            ].map((item, i) => (
-                                <div key={i} className="glass-card p-6 flex flex-col items-center justify-center text-center space-y-2">
-                                    <span className="material-symbols-outlined notranslate text-primary text-3xl">{item.i}</span>
-                                    <div>
-                                        <p className="text-2xl font-bold text-text-primary">{item.v}</p>
-                                        <p className="text-[10px] uppercase font-bold text-text-muted tracking-widest">{item.l}</p>
-                                    </div>
-                                </div>
-                            )) : null}
-                        </div>
-
-                        <div className="space-y-6">
-                            <h2 className="text-2xl font-bold text-text-primary flex items-center gap-3">
-                                <div className="h-6 w-1 bg-primary rounded-full"></div>
-                                {villa ? 'The Property' : 'The Vessel'}
-                            </h2>
-                            <div className="text-text-muted leading-relaxed text-lg whitespace-pre-line font-light">
-                                {villa?.description || boat?.description}
-                            </div>
-                        </div>
-
-                        {(villa?.features || boat?.features) && (
-                            <div className="space-y-6">
-                                <h2 className="text-2xl font-bold text-text-primary flex items-center gap-3">
-                                    <div className="h-6 w-1 bg-primary rounded-full"></div>
-                                    Amenities & Features
-                                </h2>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                    {(villa?.features || boat?.features || []).map(f => (
-                                        <div key={f} className="flex items-center gap-4 group p-2">
-                                            <div className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center">
-                                                <span className="material-symbols-outlined notranslate text-[18px] text-primary/60">star</span>
+                    return (
+                        <section key={q.id} id={q.id} className="pt-24 first:pt-0 border-t border-border/50 first:border-0">
+                            <div className="flex flex-col lg:grid lg:grid-cols-12 gap-12">
+                                {/* Left Column: Info & Media */}
+                                <div className="lg:col-span-8 space-y-12">
+                                    {/* Option Header */}
+                                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-3">
+                                                <span className="bg-primary text-black px-3 py-1 rounded text-[10px] font-black uppercase">Option {idx + 1}</span>
+                                                <span className="text-text-muted font-black text-[10px] uppercase tracking-widest">{qVilla ? 'Villa' : 'Boat'}</span>
                                             </div>
-                                            <span className="text-sm font-medium text-text-secondary">{f}</span>
+                                            <h2 className="text-4xl md:text-6xl font-black text-text-primary tracking-tight">
+                                                {qVilla?.villa_name || qBoat?.boat_name}
+                                            </h2>
+                                            <div className="flex items-center gap-2 text-primary font-bold">
+                                                <span className="material-symbols-outlined notranslate text-sm">location_on</span>
+                                                <span className="text-sm uppercase tracking-widest">
+                                                    {qVilla ? (qVilla.areaname || qVilla.district) : (qBoat?.location_base_port || 'Ibiza')}
+                                                </span>
+                                            </div>
                                         </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {quote.status === 'booked' || quote.status === 'check_in_ready' || quote.status === 'completed' ? (
-                            <div className="bg-primary/5 border border-primary/20 rounded-3xl p-8 md:p-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                    <div className="space-y-2">
-                                        <h2 className="text-2xl font-bold text-text-primary flex items-center gap-3">
-                                            <span className="material-symbols-outlined notranslate text-primary">how_to_reg</span>
-                                            Guest Registration
-                                        </h2>
-                                        <p className="text-sm text-text-muted max-w-xl">
-                                            {villa 
-                                                ? 'As per Spanish Law 4/2015, all travelers staying in holiday rentals must be registered with the authorities prior to arrival.'
-                                                : 'Maritime regulations require a manifest of all passengers on board prior to departure.'
-                                            }
-                                        </p>
                                     </div>
-                                    {!quote.guest_form_filled ? (
+
+                                    {/* Gallery Preview */}
+                                    <div className="relative h-[400px] md:h-[600px] rounded-[3rem] overflow-hidden group shadow-2xl border border-border">
+                                        <img 
+                                            src={qMainPhoto} 
+                                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-[3000ms] ease-out" 
+                                            alt={qVilla?.villa_name || qBoat?.boat_name} 
+                                        />
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
+                                        <div className="absolute bottom-10 left-10 text-white space-y-2">
+                                             <div className="flex items-center gap-4">
+                                                {qVilla ? [
+                                                    { i: 'groups', v: qVilla.sleeps, l: 'Sleeps' },
+                                                    { i: 'bed', v: qVilla.bedrooms, l: 'Beds' },
+                                                    { i: 'bathtub', v: qVilla.bathrooms, l: 'Baths' }
+                                                ].map((item, i) => (
+                                                    <div key={i} className="flex items-center gap-2 bg-black/40 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/10">
+                                                        <span className="material-symbols-outlined notranslate text-[20px]">{item.i}</span>
+                                                        <span className="text-sm font-bold">{item.v}</span>
+                                                    </div>
+                                                )) : [
+                                                    { i: 'directions_boat', v: qBoat?.length_m + 'm', l: 'Length' },
+                                                    { i: 'groups', v: qBoat?.capacity_day, l: 'Pax' }
+                                                ].map((item, i) => (
+                                                    <div key={i} className="flex items-center gap-2 bg-black/40 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/10">
+                                                        <span className="material-symbols-outlined notranslate text-[20px]">{item.i}</span>
+                                                        <span className="text-sm font-bold">{item.v}</span>
+                                                    </div>
+                                                ))}
+                                             </div>
+                                        </div>
                                         <button 
-                                            onClick={() => window.location.href = `/guest-info/${quote.guest_form_token}`}
-                                            className="bg-primary text-background-dark px-8 py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-105 transition-all flex items-center gap-3"
+                                            onClick={() => {
+                                                setQuote(q);
+                                                setVilla(qVilla);
+                                                setBoat(qBoat);
+                                                setPhotos(qPhotos);
+                                                setActivePhotoIndex(0);
+                                                setShowPhotoModal(true);
+                                            }}
+                                            className="absolute bottom-10 right-10 bg-primary/95 text-black px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all shadow-2xl flex items-center gap-2"
                                         >
-                                            <span className="material-symbols-outlined notranslate">edit_document</span>
-                                            Register Guests
+                                            <span className="material-symbols-outlined notranslate text-sm">grid_view</span>
+                                            View {qPhotos.length} Photos
                                         </button>
-                                    ) : (
-                                        <div className="flex items-center gap-3 text-emerald-400 bg-emerald-500/10 px-6 py-4 rounded-2xl border border-emerald-500/20">
-                                            <span className="material-symbols-outlined notranslate">check_circle</span>
-                                            <span className="text-[10px] font-black uppercase tracking-[0.2em]">Registration Complete</span>
+                                    </div>
+
+                                    {/* Essential Info Grid */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                        <div className="bg-surface-2/30 p-8 rounded-[2.5rem] border border-border">
+                                            <h3 className="text-xs font-black text-text-muted uppercase tracking-widest border-b border-border pb-4 mb-6">Booking Details</h3>
+                                            <div className="grid grid-cols-2 gap-8">
+                                                <div>
+                                                    <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-1">{qVilla ? 'Check-in' : 'Boarding'}</p>
+                                                    <p className="text-lg font-black text-text-primary">
+                                                        {new Date(q.check_in).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })}
+                                                    </p>
+                                                    <p className="text-[10px] text-text-muted font-bold">{qVilla ? '4:00 PM' : (qBoat?.times_checkin || '10:00 AM')}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-1">{qVilla ? 'Check-out' : 'Disembark'}</p>
+                                                    <p className="text-lg font-black text-text-primary">
+                                                        {new Date(q.check_out).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })}
+                                                    </p>
+                                                    <p className="text-[10px] text-text-muted font-bold">{qVilla ? '10:00 AM' : (qBoat?.times_checkout || '7:00 PM')}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-surface-2/30 p-8 rounded-[2.5rem] border border-border">
+                                            <h3 className="text-xs font-black text-text-muted uppercase tracking-widest border-b border-border pb-4 mb-6">Features</h3>
+                                            <div className="flex flex-wrap gap-2">
+                                                {(qVilla?.features_and_amenities || qBoat?.features || '').split(',').slice(0, 6).map((tag, i) => (
+                                                    <span key={i} className="px-3 py-1 bg-surface-2 rounded-lg text-[10px] font-bold text-text-muted uppercase tracking-tighter">
+                                                        {tag.trim()}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Map Preview */}
+                                    {(qVilla || qBoat) && (
+                                        <div className="space-y-4">
+                                            <div className="flex items-center justify-between">
+                                                <h3 className="text-xs font-black text-text-primary uppercase tracking-[0.2em]">Location</h3>
+                                                <span className="text-[10px] text-primary font-bold uppercase">{qVilla?.location || qBoat?.location_base_port}</span>
+                                            </div>
+                                            <div className="h-[300px] rounded-[2.5rem] overflow-hidden border border-border grayscale-[0.5] hover:grayscale-0 transition-all duration-1000">
+                                                <VillaMap 
+                                                    villa={qVilla} 
+                                                    isBoat={!!qBoat} 
+                                                    boatData={qBoat}
+                                                />
+                                            </div>
                                         </div>
                                     )}
                                 </div>
-                            </div>
-                        ) : null}
 
-                        {villa?.gps && (
-                            <div className="space-y-6">
-                                <h2 className="text-2xl font-bold text-text-primary flex items-center gap-3">
-                                    <div className="h-6 w-1 bg-primary rounded-full"></div>
-                                    {quote.deposit_paid ? 'Precise Location' : 'Indicative Location'}
-                                </h2>
-                                <div className="rounded-3xl overflow-hidden h-[450px] border border-border relative group shadow-2xl">
-                                    <VillaMap locations={[{ gps: villa?.gps, name: villa?.villa_name }]} radius={quote.deposit_paid ? 0 : 2000} />
-                                </div>
-                                {!quote.deposit_paid && (
-                                    <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest text-center mt-2 italic">
-                                        Precise address will be revealed once the booking deposit is settled.
-                                    </p>
-                                )}
-                            </div>
-                        )}
-                        
-                        <div className="bg-surface/40 border border-border rounded-3xl p-8 md:p-12">
-                            <h2 className="text-2xl font-bold text-text-primary mb-8">{villa ? 'Stay Policies' : 'Charter Policies'}</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                                <div className="space-y-6">
-                                    <h3 className="text-xs font-black text-text-muted uppercase tracking-widest border-b border-border pb-2">{villa ? 'House Rules' : 'Boat Rules'}</h3>
-                                    <p className="text-sm leading-relaxed text-text-muted">{villa?.house_rules || boat?.policies || "Policy items follow standard luxury guidelines."}</p>
-                                </div>
-                                <div className="space-y-4">
-                                    <h3 className="text-xs font-black text-text-muted uppercase tracking-widest border-b border-border pb-2">Essential Info</h3>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <p className="text-[10px] font-bold text-text-muted uppercase tracking-tighter">{villa ? 'Check-in' : 'Boarding'}</p>
-                                            <p className="text-sm font-medium text-text-primary">{villa ? '4:00 PM' : (boat?.times_checkin || '10:00 AM')}</p>
+                                {/* Right Column: Pricing & Payment (Sticky) */}
+                                <aside className="lg:col-span-4">
+                                    <div className="sticky top-32 bg-surface-2 p-8 md:p-10 rounded-[3rem] border border-border shadow-2xl space-y-8">
+                                        <div className="text-center pb-8 border-b border-border">
+                                            <p className="text-[10px] font-black text-text-muted uppercase tracking-[0.3em] mb-2">Investment</p>
+                                            <div className="flex items-center justify-center gap-1">
+                                                <span className="text-2xl font-black text-primary/50 self-start mt-1">€</span>
+                                                <span className="text-6xl font-black text-text-primary tracking-tighter">{qTotal.toLocaleString('it-IT')}</span>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <p className="text-[10px] font-bold text-text-muted uppercase tracking-tighter">{villa ? 'Check-out' : 'Disembark'}</p>
-                                            <p className="text-sm font-medium text-text-primary">{villa ? '10:00 AM' : (boat?.times_checkout || '7:00 PM')}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
-                    {/* Sidebar */}
-                    <aside className="space-y-6 xl:sticky xl:top-32">
-                        <div className="glass-card p-10 border-primary/40 relative overflow-hidden bg-gradient-to-br from-primary/5 to-transparent">
-                            <div className="relative space-y-8">
-                                <div className="text-center pb-6 border-b border-border">
-                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest mb-2">Quote Summary</p>
-                                    <h3 className="text-3xl font-black text-text-primary">Your Proposal</h3>
-                                </div>
+                                        <div className="space-y-6">
+                                            <div className="space-y-4">
+                                                <div className="flex items-start justify-between">
+                                                    <div>
+                                                        <span className="text-[10px] font-black uppercase text-text-primary block">Step 1: Secure Booking</span>
+                                                        <span className="text-[9px] text-text-muted font-bold uppercase tracking-widest">
+                                                            Due Today ({qIsLastMinute ? 'Full Amount' : '50% Deposit'})
+                                                        </span>
+                                                    </div>
+                                                    <span className="font-bold text-text-primary">€{qUpfront.toLocaleString('it-IT')}</span>
+                                                </div>
 
-                                <div className="space-y-6">
-                                    <div className="flex items-start gap-4">
-                                        <div className="size-10 rounded-xl bg-surface-2 flex items-center justify-center text-primary border border-border">
-                                            <span className="material-symbols-outlined notranslate">{villa ? 'calendar_month' : 'directions_boat'}</span>
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] font-bold text-text-muted uppercase">Reservation Dates</p>
-                                            <p className="text-sm font-bold text-text-primary">
-                                                {new Date(quote.check_in).toLocaleDateString()} &rarr; {new Date(quote.check_out).toLocaleDateString()}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <div className="pt-6 border-t border-border space-y-4">
-                                        <p className="text-[10px] font-black text-text-muted uppercase">Payment Schedule</p>
-                                        <div className="space-y-4">
-                                            {(quote.extra_services || []).length > 0 && (
-                                                <div className="space-y-2 mb-4 pb-4 border-b border-border/50">
-                                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest text-left">Additional Services</p>
-                                                    {quote.extra_services.filter(s => parseFloat(s.price) > 0).map((s, idx) => (
-                                                        <div key={idx} className="flex justify-between items-center text-[11px]">
-                                                            <span className="text-text-secondary font-medium">{s.name}</span>
-                                                            <span className="font-bold text-text-primary">€{parseFloat(s.price).toLocaleString()}</span>
+                                                {!qIsLastMinute && (
+                                                    <div className="flex items-start justify-between text-text-muted">
+                                                        <div>
+                                                            <span className="text-[10px] font-black uppercase block">Step 2: Remaining Balance</span>
+                                                            <span className="text-[8px] font-bold uppercase tracking-widest">
+                                                                Due {(() => {
+                                                                    const d = new Date(q.check_in);
+                                                                    d.setDate(d.getDate() - 30);
+                                                                    return d.toLocaleDateString();
+                                                                })()}
+                                                            </span>
                                                         </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            
-                                            {/* Payment Method Selector */}
-                                            {!quote.deposit_paid && (
-                                                <div className="space-y-3 pb-4 border-b border-border/50">
-                                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest text-left">Select Payment Method</p>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <button 
-                                                            onClick={() => setPaymentMethod('card')}
-                                                            className={`p-3 rounded-xl border-2 text-left transition-all flex flex-col items-start gap-1 ${paymentMethod === 'card' ? 'border-primary bg-primary/10' : 'border-border bg-surface-2/30 grayscale hover:grayscale-0 hover:border-primary/50'}`}
-                                                        >
-                                                            <span className="material-symbols-outlined notranslate text-xl text-primary">credit_card</span>
-                                                            <div>
-                                                                <span className="block text-[10px] font-black text-text-primary uppercase tracking-tight">Credit Card</span>
-                                                                <span className="block text-[8px] text-text-muted font-bold">+2% Processing Fee</span>
-                                                            </div>
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => setPaymentMethod('bank_transfer')}
-                                                            className={`p-3 rounded-xl border-2 text-left transition-all flex flex-col items-start gap-1 ${paymentMethod === 'bank_transfer' ? 'border-primary bg-primary/10' : 'border-border bg-surface-2/30 grayscale hover:grayscale-0 hover:border-primary/50'}`}
-                                                        >
-                                                            <span className="material-symbols-outlined notranslate text-xl text-primary">account_balance</span>
-                                                            <div>
-                                                                <span className="block text-[10px] font-black text-text-primary uppercase tracking-tight">Bank Transfer</span>
-                                                                <span className="block text-[8px] text-emerald-500 font-bold">No extra fees</span>
-                                                            </div>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {/* Step 1: Booking Payment */}
-                                            <div className="flex flex-col p-4 bg-primary/10 rounded-2xl border border-primary/20 gap-2">
-                                                <div className="flex items-center justify-between">
-                                                    <div className="text-left">
-                                                        <span className="text-[10px] font-black text-primary uppercase block leading-none mb-1">
-                                                            {isLastMinute ? 'Full Payment (Last Minute Booking)' : '1st Payment (Confirm Booking)'}
-                                                        </span>
-                                                        <span className="text-[8px] text-text-muted font-bold uppercase tracking-widest">
-                                                            {isLastMinute ? 'Required for stays within 7 weeks' : 'Due Today'}
-                                                        </span>
-                                                    </div>
-                                                    <span className="font-black text-primary text-xl">€{upfront.toLocaleString()}</span>
-                                                </div>
-                                                {paymentMethod === 'card' && !quote.deposit_paid && (
-                                                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-primary/10">
-                                                        <span className="text-text-muted font-bold">Credit Card Fee (2%)</span>
-                                                        <span className="font-bold text-text-primary">€{(upfront * 0.02).toLocaleString()}</span>
+                                                        <span className="font-bold">€{(qTotal - qUpfront).toLocaleString('it-IT')}</span>
                                                     </div>
                                                 )}
-                                                {paymentMethod === 'card' && !quote.deposit_paid && (
-                                                    <div className="flex items-center justify-between pt-1">
-                                                        <span className="text-[10px] font-black text-text-primary uppercase">Total Due Today</span>
-                                                        <span className="font-black text-primary text-xl">€{(upfront * 1.02).toLocaleString()}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {/* Step 2: Final Balance */}
-                                            {!isLastMinute && (
-                                                <div className="flex items-center justify-between p-4 bg-surface-2/30 rounded-2xl border border-border">
+
+                                                <div className="flex items-center justify-between p-4 bg-background/50 rounded-2xl border border-border border-dashed">
                                                     <div className="text-left">
-                                                        <span className="text-[10px] font-bold text-text-primary uppercase block leading-none mb-1">2nd Payment (Final Balance)</span>
-                                                        <span className="text-[8px] text-text-muted font-bold uppercase tracking-widest">
-                                                            Due {(() => {
-                                                                const checkIn = new Date(quote.check_in);
-                                                                const due = new Date(checkIn);
-                                                                due.setDate(due.getDate() - 30);
-                                                                return due.toLocaleDateString();
-                                                            })()} (30 days before stay)
-                                                        </span>
+                                                        <span className="text-[10px] font-bold text-text-primary uppercase block mb-1">Security Deposit</span>
+                                                        <span className="text-[8px] text-text-muted font-bold uppercase italic">Refundable on Arrival</span>
                                                     </div>
-                                                    <span className="font-bold text-text-secondary text-lg">€{(total - upfront).toLocaleString()}</span>
+                                                    <span className="font-bold text-text-muted shrink-0 ml-4">€{parseFloat(qVilla?.deposit || qBoat?.security_deposit || 0).toLocaleString('it-IT')}</span>
                                                 </div>
-                                            )}
-                                            {/* Step 3: Security Deposit */}
-                                            <div className="flex items-center justify-between p-4 bg-surface-2/30 rounded-2xl border border-border border-dashed">
-                                                <div className="text-left">
-                                                    <span className="text-[10px] font-bold text-text-primary uppercase block leading-none mb-1">Refundable Security Deposit</span>
-                                                    <span className="text-[8px] text-text-muted font-bold uppercase tracking-widest italic">Authorized (Frozen) On Arrival</span>
-                                                </div>
-                                                <span className="font-bold text-text-secondary text-lg">€{parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString()}</span>
                                             </div>
-                                        </div>
-                                    </div>
 
-                                    <div className="text-center pt-6">
-                                        <p className="text-3xl font-black text-primary mb-4">
-                                             €{paymentMethod === 'card' && !quote.deposit_paid ? (parseFloat(quote.final_price) + (upfront * 0.02)).toLocaleString() : parseFloat(quote.final_price).toLocaleString()}
-                                        </p>
-                                        <p className="text-[10px] font-black text-text-muted uppercase tracking-[0.2em] -mt-2 mb-6">Total Reservation Value</p>
-                                        
-                                        {/* Terms & Conditions Checkbox */}
-                                        <div className="flex items-start gap-3 text-left bg-primary/5 p-4 rounded-2xl border border-primary/10 mb-6">
-                                            <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} className="mt-1 w-5 h-5 rounded accent-primary" id="agree" />
-                                            <label htmlFor="agree" className="text-[10px] font-medium text-text-muted leading-relaxed cursor-pointer">
-                                                I have read and accept the <button onClick={() => setShowAgreementModal(true)} className="text-primary font-bold underline">Rental Agreement & Terms</button>. By proceeding with payment I confirm that this constitutes a legally binding digital signature of the contract.
-                                            </label>
-                                        </div>
+                                            {/* Terms & CTA */}
+                                            <div className="space-y-4 pt-4">
+                                                <div className="flex items-start gap-3 bg-primary/5 p-4 rounded-2xl border border-primary/10">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={acceptTerms} 
+                                                        onChange={(e) => setAcceptTerms(e.target.checked)} 
+                                                        className="mt-1 w-5 h-5 rounded accent-primary bg-background" 
+                                                        id={`agree-${q.id}`} 
+                                                    />
+                                                    <label htmlFor={`agree-${q.id}`} className="text-[10px] font-medium text-text-muted leading-relaxed cursor-pointer">
+                                                        I accept the <button onClick={() => { setQuote(q); setShowAgreementModal(true); }} className="text-primary font-bold underline">Rental Agreement</button>. This action constitutes a digital signature.
+                                                    </label>
+                                                </div>
 
-                                        {/* Status Messaging & Payment Flow */}
-                                        {!quote.deposit_paid ? (
-                                            quote.status === 'sent' ? (
-                                                <div className="space-y-3">
+                                                {!q.deposit_paid ? (
                                                     <button 
-                                                        onClick={handlePayment}
+                                                        onClick={() => {
+                                                            setActiveQuoteIndex(idx);
+                                                            handlePayment(q.id);
+                                                        }}
                                                         disabled={processingPayment || !acceptTerms}
-                                                        className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest transition-all ${acceptTerms ? 'bg-primary text-background-dark shadow-xl shadow-primary/20 hover:scale-105' : 'bg-surface-2 text-text-muted grayscale cursor-not-allowed'}`}
+                                                        className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest transition-all ${acceptTerms ? 'bg-primary text-background-dark shadow-xl hover:scale-[1.02] active:scale-95' : 'bg-surface-3 text-text-muted grayscale cursor-not-allowed border border-border'}`}
                                                     >
-                                                        {processingPayment ? "Redirecting to Stripe..." : (isLastMinute ? "Confirm & Pay Full Amount" : "Confirm & Pay Deposit")}
+                                                        {processingPayment ? "Processing..." : (qIsLastMinute ? "Confirm & Pay Full" : "Confirm & Pay Deposit")}
                                                     </button>
-                                                    {!acceptTerms && (
-                                                        <p className="text-[9px] text-text-muted font-bold uppercase tracking-widest text-center animate-pulse">
-                                                            Accept the agreement above to proceed
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            ) : quote.status === 'waiting_owner' ? (
-                                                <div className="bg-amber-500/5 border border-amber-500/10 p-6 rounded-2xl space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                                                    <div className="flex justify-center">
-                                                        <div className="size-16 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500 relative">
-                                                            <span className="material-symbols-outlined notranslate text-3xl">hourglass_empty</span>
-                                                            <div className="absolute inset-0 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin"></div>
-                                                        </div>
-                                                    </div>
-                                                    <div className="text-center space-y-2">
-                                                        <p className="text-[12px] font-black uppercase text-amber-500 tracking-[0.2em]">Verifying Availability</p>
-                                                        <p className="text-[10px] text-text-muted leading-relaxed max-w-[240px] mx-auto font-medium">
-                                                            The owner has been notified and is currently verifying the schedule for your stay. 
-                                                            <span className="block mt-2 text-primary">The booking option will be enabled immediately upon confirmation.</span>
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <div className="bg-surface-2 p-6 rounded-2xl border border-border text-center grayscale opacity-60">
-                                                    <span className="material-symbols-outlined notranslate text-text-muted text-2xl mb-2">pending_actions</span>
-                                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Proposal Under Review</p>
-                                                    <p className="text-[9px] text-text-muted mt-1">This quote is currently being finalized by our agents.</p>
-                                                </div>
-                                            )
-                                        ) : (
-                                            <div className="space-y-3">
-                                                <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl flex items-center justify-center gap-3 text-emerald-400">
-                                                    <span className="material-symbols-outlined notranslate text-sm font-black">check_circle</span>
-                                                    <span className="text-[10px] font-black uppercase tracking-widest">Deposit Paid · Agreement Signed</span>
-                                                </div>
-                                                
-                                                {!quote.security_deposit_authorized ? (
-                                                    <div className="space-y-4">
-                                                        <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/10 space-y-2">
-                                                            <div className="flex items-center gap-2 text-amber-500">
-                                                                <span className="material-symbols-outlined notranslate text-[18px]">security</span>
-                                                                <span className="text-[10px] font-black uppercase tracking-widest">Required Step</span>
-                                                            </div>
-                                                            <p className="text-[10px] text-text-muted leading-relaxed">
-                                                                A security deposit of <span className="text-text-primary font-bold">€{parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString()}</span> is required to finalize booking. 
-                                                                Funds will be <span className="text-amber-500 font-bold italic underline">authorized only (frozen)</span> and released after {villa ? 'checkout' : 'charter'} if no damage occurs.
-                                                            </p>
-                                                        </div>
-                                                        <button 
-                                                            onClick={handleSecurityDeposit}
-                                                            disabled={processingPayment}
-                                                            className="w-full py-5 rounded-2xl font-black uppercase tracking-widest bg-white/10 text-text-primary hover:bg-white/20 border border-white/10 shadow-xl transition-all hover:scale-105"
-                                                        >
-                                                            {processingPayment ? "Connecting..." : "2. Freeze Security Deposit"}
-                                                        </button>
-                                                    </div>
                                                 ) : (
-                                                    <div className="bg-emerald-500/20 border-2 border-emerald-500 p-5 rounded-2xl flex flex-col items-center gap-2 text-emerald-400 animate-in zoom-in-95 duration-500 shadow-[0_0_30px_rgba(16,185,129,0.3)]">
-                                                        <span className="material-symbols-outlined notranslate text-4xl">verified</span>
-                                                        <span className="text-[11px] font-black uppercase tracking-[0.2em]">All Steps Complete</span>
-                                                        <p className="text-[9px] text-emerald-400/80 font-bold uppercase text-center mt-1">
-                                                            Your stay is fully secured. Welcome to Ibiza!
-                                                        </p>
+                                                    <div className="space-y-3">
+                                                        <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl flex items-center justify-center gap-3 text-emerald-400">
+                                                            <span className="material-symbols-outlined notranslate text-sm font-black">check_circle</span>
+                                                            <span className="text-[10px] font-black uppercase tracking-widest">Deposit Paid</span>
+                                                        </div>
+                                                        {!q.security_deposit_authorized ? (
+                                                            <button 
+                                                                onClick={() => {
+                                                                    setActiveQuoteIndex(idx);
+                                                                    handleSecurityDeposit(q.id);
+                                                                }}
+                                                                className="w-full py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest bg-white/5 border border-white/10 hover:bg-white/10 transition-all"
+                                                            >
+                                                                Secure Deposit Auth
+                                                            </button>
+                                                        ) : (
+                                                            <div className="bg-emerald-500/20 border-2 border-emerald-500 p-4 rounded-2xl flex flex-col items-center gap-1 text-emerald-400">
+                                                                <span className="material-symbols-outlined notranslate text-2xl">verified</span>
+                                                                <span className="text-[10px] font-black uppercase">Fully Secured</span>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
-                                        )}
+                                        </div>
                                     </div>
-                                </div>
+                                </aside>
                             </div>
-                        </div>
-                    </aside>
-                </div>
+                        </section>
+                    );
+                })}
             </main>
 
-            {/* Agreement Modal */}
+            {/* Modals are globally defined below */}
             {showAgreementModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-md p-4 animate-in fade-in duration-300">
                     <div className="bg-background rounded-3xl max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl p-8 md:p-12 border border-border">
                         <div className="flex justify-between items-center mb-8">
-                            <h2 className="text-2xl font-black uppercase text-text-primary">Rental Agreement & Terms [v2.0]</h2>
-                            <button onClick={() => setShowAgreementModal(false)} className="bg-surface-2 p-2 rounded-full"><span className="material-symbols-outlined notranslate">close</span></button>
+                            <h2 className="text-2xl font-black uppercase text-text-primary tracking-tighter">Rental Agreement</h2>
+                            <button onClick={() => setShowAgreementModal(false)} className="bg-surface-2 p-2 rounded-full hover:bg-white/10 transition-colors">
+                                <span className="material-symbols-outlined notranslate">close</span>
+                            </button>
                         </div>
-                        <div className="prose text-text-muted bg-surface/50 p-8 rounded-2xl whitespace-pre-line italic font-serif leading-relaxed border border-border/50">
+                        <div className="prose prose-invert text-text-muted bg-surface/30 p-8 rounded-2xl whitespace-pre-line italic font-serif leading-relaxed border border-border/50 max-h-[50vh] overflow-y-auto">
                             {getProcessedTemplate()}
                         </div>
-                        <button onClick={() => { setAcceptTerms(true); setShowAgreementModal(false); }} className="w-full mt-8 bg-primary text-background-dark py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl">Accept Agreement</button>
+                        <button 
+                            onClick={() => { setAcceptTerms(true); setShowAgreementModal(false); }} 
+                            className="w-full mt-8 bg-primary text-background-dark py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl hover:scale-[1.02] transition-all"
+                        >
+                            Accept Agreement
+                        </button>
                     </div>
                 </div>
             )}
 
-                    {/* Immersive Photo Modal */}
-                    {showPhotoModal && (
-                        <div className="fixed inset-0 z-[100] flex flex-col bg-black/98 backdrop-blur-2xl animate-in fade-in duration-300 select-none">
-                            {/* Top Bar */}
-                            <div className="p-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/50 to-transparent">
-                                <div className="flex flex-col">
-                                    <span className="text-text-primary font-bold text-sm tracking-tight">{villa?.villa_name || boat?.boat_name}</span>
-                                    <span className="text-primary/50 text-[10px] font-black uppercase tracking-[0.2em]">{activePhotoIndex + 1} / {photos.length}</span>
-                                </div>
-                                <button 
-                                    onClick={() => setShowPhotoModal(false)} 
-                                    className="size-12 rounded-full bg-surface-2/20 border border-white/10 flex items-center justify-center text-text-primary hover:bg-white/20 transition-all hover:scale-110 active:scale-95 shadow-xl"
-                                >
-                                    <span className="material-symbols-outlined notranslate">close</span>
-                                </button>
-                            </div>
-
-                            {/* Main Viewport */}
-                            <div className="flex-1 relative flex items-center justify-center p-4 overflow-hidden">
-                                {/* Navigation Arrows */}
-                                <button 
-                                    className="absolute left-4 md:left-8 z-20 size-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-text-primary hover:bg-white/20 disabled:opacity-0 transition-all hover:scale-110 active:scale-90 shadow-2xl backdrop-blur-md"
-                                    disabled={activePhotoIndex === 0}
-                                    onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(p => p - 1); }}
-                                >
-                                    <span className="material-symbols-outlined notranslate text-4xl font-light">chevron_left</span>
-                                </button>
-
-                        <div className="w-full h-full flex items-center justify-center">
-                            <img 
-                                key={activePhotoIndex}
-                                src={photos[activePhotoIndex]?.url} 
-                                className="max-w-full max-h-full object-contain rounded-lg shadow-[0_0_100px_rgba(0,0,0,0.8)] animate-in fade-in zoom-in-95 duration-500" 
-                                alt="" 
-                            />
+            {showPhotoModal && (
+                <div className="fixed inset-0 z-[100] flex flex-col bg-black/98 backdrop-blur-2xl animate-in fade-in duration-300 select-none">
+                    <div className="p-6 flex justify-between items-center z-10">
+                        <div className="flex flex-col">
+                            <span className="text-text-primary font-bold text-sm tracking-tight">{villa?.villa_name || boat?.boat_name}</span>
+                            <span className="text-primary/50 text-[10px] font-black uppercase tracking-[0.2em]">{activePhotoIndex + 1} / {photos.length}</span>
                         </div>
-
-                        <button 
-                            className="absolute right-4 md:right-8 z-20 size-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-text-primary hover:bg-white/20 disabled:opacity-0 transition-all hover:scale-110 active:scale-90 shadow-2xl backdrop-blur-md"
-                            disabled={activePhotoIndex === photos.length - 1}
-                            onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(p => p + 1); }}
-                        >
-                            <span className="material-symbols-outlined notranslate text-4xl font-light">chevron_right</span>
+                        <button onClick={() => setShowPhotoModal(false)} className="size-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-text-primary hover:bg-white/20 transition-all">
+                            <span className="material-symbols-outlined notranslate">close</span>
                         </button>
                     </div>
 
-                        {/* Thumbnail Strip */}
-                        <div className="p-8 flex gap-3 overflow-x-auto pb-6 justify-center items-center bg-gradient-to-t from-black/50 to-transparent">
-                        <div className="flex gap-2 mx-auto">
-                            {photos.slice(0, 15).map((p, i) => (
-                                <div 
-                                    key={i} 
-                                    className={`size-16 flex-shrink-0 rounded-xl overflow-hidden cursor-pointer transition-all duration-300 ${activePhotoIndex === i ? 'ring-2 ring-primary ring-offset-4 ring-offset-black scale-110 opacity-100 shadow-xl' : 'opacity-30 hover:opacity-100 grayscale hover:grayscale-0'}`}
-                                    onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(i); }}
-                                >
-                                    <img src={p.url} className="w-full h-full object-cover" alt="" />
-                                </div>
-                            ))}
-                        </div>
+                    <div className="flex-1 relative flex items-center justify-center p-4">
+                        <button 
+                            className="absolute left-4 md:left-8 z-20 size-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-text-primary hover:bg-white/20 disabled:opacity-0 transition-all"
+                            disabled={activePhotoIndex === 0}
+                            onClick={() => setActivePhotoIndex(p => p - 1)}
+                        >
+                            <span className="material-symbols-outlined notranslate text-4xl">chevron_left</span>
+                        </button>
+
+                        <img 
+                            key={activePhotoIndex}
+                            src={photos[activePhotoIndex]?.url} 
+                            className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-2xl animate-in zoom-in-95 duration-500" 
+                            alt="" 
+                        />
+
+                        <button 
+                            className="absolute right-4 md:right-8 z-20 size-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-text-primary hover:bg-white/20 disabled:opacity-0 transition-all"
+                            disabled={activePhotoIndex === photos.length - 1}
+                            onClick={() => setActivePhotoIndex(p => p + 1)}
+                        >
+                            <span className="material-symbols-outlined notranslate text-4xl">chevron_right</span>
+                        </button>
+                    </div>
+
+                    <div className="p-8 flex gap-3 overflow-x-auto justify-center">
+                        {photos.slice(0, 20).map((p, i) => (
+                            <div 
+                                key={i} 
+                                className={`size-16 flex-shrink-0 rounded-xl overflow-hidden cursor-pointer transition-all ${activePhotoIndex === i ? 'ring-2 ring-primary ring-offset-4 ring-offset-black scale-110' : 'opacity-40 hover:opacity-100'}`}
+                                onClick={() => setActivePhotoIndex(i)}
+                            >
+                                <img src={p.url} className="w-full h-full object-cover" alt="" />
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}
