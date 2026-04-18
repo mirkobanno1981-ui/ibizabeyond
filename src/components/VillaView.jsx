@@ -114,21 +114,30 @@ export default function VillaView() {
 
     const isGapBooking = () => {
         if (!selectionStart || !selectionEnd) return false;
-        const diffTime = Math.abs(new Date(selectionEnd) - new Date(selectionStart));
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const start = new Date(selectionStart);
+        const end = new Date(selectionEnd);
+        start.setHours(0,0,0,0);
+        end.setHours(0,0,0,0);
+        
+        const diffDays = Math.round(Math.abs(end - start) / (1000 * 60 * 60 * 24));
         const blocked = blockedDates.sort();
-        let prevBooking = null;
-        let nextBooking = null;
+        
+        let prevBookingEnd = null;
+        let nextBookingStart = null;
+        
         for (const d of blocked) {
-            if (d < selectionStart) prevBooking = d;
-            if (d > selectionEnd && !nextBooking) nextBooking = d;
+            if (d < selectionStart) prevBookingEnd = d;
+            if (d > selectionEnd && !nextBookingStart) nextBookingStart = d;
         }
-        if (prevBooking && nextBooking) {
-            const gapStart = new Date(prevBooking);
-            gapStart.setDate(gapStart.getDate() + 1);
-            const gapEnd = new Date(nextBooking);
-            gapEnd.setDate(gapEnd.getDate() - 1);
-            const gapNights = Math.ceil((gapEnd - gapStart) / (1000 * 60 * 60 * 24)) + 1;
+        
+        if (prevBookingEnd && nextBookingStart) {
+            // A gap exists between two bookings
+            const gapStart = new Date(prevBookingEnd);
+            gapStart.setDate(gapStart.getDate() + 1); // After previous checkout
+            
+            const gapEnd = new Date(nextBookingStart); // Until next checkin
+            
+            const gapNights = Math.round((gapEnd - gapStart) / (1000 * 60 * 60 * 24));
             return (gapNights >= 3 && diffDays >= 3);
         }
         return false;
@@ -470,7 +479,11 @@ export default function VillaView() {
     };
 
     const handleDateClick = (dStr, isBlocked) => {
-        if (isBlocked) return;
+        // We only prevent clicking if it's past OR if we are trying to START a booking on a blocked NIGHT.
+        // We allow clicking a blocked date if we are selecting the end date (checkout).
+        if (!selectionStart || (selectionStart && selectionEnd)) {
+            if (isBlocked) return;
+        }
         
         const rule = getRuleForDate(dStr);
         const isStrictlySat = rule.allowed_checkin_days === 'Strictly Saturday-Saturday';
@@ -490,11 +503,15 @@ export default function VillaView() {
             
             if (end < start) {
                 // If clicked date is before start, make it the new start
+                if (isBlocked) return;
                 if (isStrictlySat && !getIsSat(dStr)) {
                     alert("This villa requires Saturday check-in.");
                     return;
                 }
                 setSelectionStart(dStr);
+            } else if (end.getTime() === start.getTime()) {
+                // Deselect if same day
+                setSelectionStart(null);
             } else {
                 // Verify end date is a Saturday if strictly Sat-Sat
                 if (isStrictlySat && !getIsSat(dStr)) {
@@ -502,11 +519,13 @@ export default function VillaView() {
                     return;
                 }
 
-                // Check if any blocked dates in between
+                // Check if any blocked dates in between (EXCLUDING the checkout day)
                 let hasBlocked = false;
                 let current = new Date(start);
-                while (current <= end) {
-                    const checkStr = current.toISOString().split('T')[0];
+                while (current < end) {
+                    const checkStr = current.getFullYear() + '-' + 
+                                   String(current.getMonth() + 1).padStart(2, '0') + '-' + 
+                                   String(current.getDate()).padStart(2, '0');
                     if (blockedDates.includes(checkStr)) {
                         hasBlocked = true;
                         break;
@@ -515,11 +534,17 @@ export default function VillaView() {
                 }
 
                 if (hasBlocked) {
-                    if (isStrictlySat && !getIsSat(dStr)) {
-                        alert("This villa requires Saturday check-in.");
-                        return;
+                    // If we hit blocked dates, start new selection from here (if not blocked)
+                    if (isBlocked) {
+                        setSelectionStart(null);
+                    } else {
+                        if (isStrictlySat && !getIsSat(dStr)) {
+                            // Can't start here
+                            setSelectionStart(null);
+                        } else {
+                            setSelectionStart(dStr);
+                        }
                     }
-                    setSelectionStart(dStr);
                 } else {
                     setSelectionEnd(dStr);
                     
@@ -882,21 +907,51 @@ export default function VillaView() {
                                                         key={d}
                                                         onClick={() => handleDateClick(dStr, isBlocked)}
                                                         className={`
-                                                            relative aspect-square flex flex-col items-center justify-center rounded-xl transition-all cursor-pointer group
-                                                            ${isBlocked ? 'bg-red-500/10 border-red-500/20 grayscale opacity-60 cursor-not-allowed' : 'bg-surface border border-border hover:border-primary/50'}
-                                                            ${isSelected ? 'bg-primary border-primary ring-2 ring-primary/20 ring-offset-2 ring-offset-background scale-105 z-10' : ''}
-                                                            ${(isIllegalDay && !isSelected && !isBlocked) ? 'opacity-30' : ''}
-                                                            ${isPast ? 'opacity-20 cursor-not-allowed border-none bg-transparent' : ''}
+                                                            relative aspect-square flex flex-col items-center justify-center rounded-xl transition-all cursor-pointer group overflow-hidden
+                                                            ${isBlocked ? 'bg-red-500/5 border-red-500/10' : 'bg-surface border border-border hover:border-primary/50 shadow-sm'}
+                                                            ${isSelected ? 'bg-primary border-primary ring-2 ring-primary/20 ring-offset-2 ring-offset-background scale-105 z-10 shadow-xl' : ''}
+                                                            ${(isIllegalDay && !isSelected && !isBlocked) ? 'bg-slate-50/50' : ''}
+                                                            ${isPast ? 'opacity-10 cursor-not-allowed border-none bg-transparent' : ''}
                                                         `}
                                                     >
-                                                        <span className={`text-sm font-bold ${isSelected ? 'text-[#0f1117]' : (isIllegalDay ? 'text-text-muted' : 'text-text-primary')} ${isPast ? 'text-text-muted/30' : ''}`}>{d}</span>
-                                                        {!isPast && (
-                                                            <span className={`text-[10px] font-bold mt-0.5 ${isSelected ? 'text-[#0f1117]/80' : (isIllegalDay ? 'text-text-muted/50' : 'text-primary')}`}>€{price}</span>
-                                                        )}
+                                                        {/* Blocked Pattern */}
                                                         {isBlocked && !isPast && (
-                                                            <div className="absolute inset-0 flex items-center justify-center">
-                                                                <div className="w-[80%] h-[1px] bg-red-500/30 rotate-45"></div>
+                                                            <div className="absolute inset-0 opacity-[0.15]" style={{ 
+                                                                backgroundImage: `repeating-linear-gradient(45deg, #ef4444, #ef4444 1px, transparent 1px, transparent 10px)` 
+                                                            }}></div>
+                                                        )}
+
+                                                        {/* Sat-Sat Restriction Indicator */}
+                                                        {isIllegalDay && !isBlocked && !isPast && !isSelected && (
+                                                            <div className="absolute top-1 right-1">
+                                                                <div className="size-1 rounded-full bg-slate-300"></div>
                                                             </div>
+                                                        )}
+
+                                                        <span className={`
+                                                            relative z-10 text-sm font-bold transition-colors
+                                                            ${isSelected ? 'text-[#0f1117]' : (isBlocked ? 'text-red-900/40' : (isIllegalDay ? 'text-text-muted/60' : 'text-text-primary'))}
+                                                        `}>
+                                                            {d}
+                                                        </span>
+
+                                                        <div className="flex flex-col items-center">
+                                                            {!isPast && !isBlocked && (
+                                                                <span className={`
+                                                                    relative z-10 text-[9px] font-black mt-0.5 tracking-tighter transition-colors
+                                                                    ${isSelected ? 'text-[#0f1117]/70' : (isIllegalDay ? 'text-text-muted/40' : 'text-primary/80')}
+                                                                `}>
+                                                                    €{price}
+                                                                </span>
+                                                            )}
+                                                            {isBlocked && !isPast && (
+                                                                <span className="relative z-10 text-[8px] font-black uppercase tracking-widest text-red-500/40 mt-0.5">Booked</span>
+                                                            )}
+                                                        </div>
+
+                                                        {/* Selected Range Connector Logic (Subtle) */}
+                                                        {isSelected && selectionStart && selectionEnd && dStr !== selectionStart && dStr !== selectionEnd && (
+                                                            <div className="absolute inset-0 bg-primary/20 -z-10"></div>
                                                         )}
                                                     </div>
                                                 );
