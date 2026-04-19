@@ -481,6 +481,34 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                 className={`w-full bg-primary/5 border-2 ${isManual ? 'border-primary' : 'border-primary/20'} rounded-2xl py-6 px-10 text-3xl font-black text-primary outline-none transition-all`}
                             />
                         </div>
+
+                        {/* Live Breakdown Preview */}
+                        {!isManual && (
+                            <div className="p-4 rounded-2xl bg-surface-2 border border-border space-y-3 animate-in fade-in slide-in-from-top-2">
+                                <p className="text-[9px] font-black text-text-muted uppercase tracking-widest border-b border-border pb-2">Live Calculation Breakdown</p>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-[11px]">
+                                        <span className="text-text-secondary">Base ({quote.invenio_properties ? 'Villa' : 'Boat'} cost)</span>
+                                        <span className="font-bold text-text-primary">€{Math.round(parseFloat(quote.supplier_base_price || 0)).toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between text-[11px]">
+                                        <span className="text-text-secondary">Total Margins ({parseFloat(margin) + parseFloat(platformMargin)}%)</span>
+                                        <span className="font-bold text-primary">+ €{Math.round(calculateAutoPrice() - parseFloat(quote.supplier_base_price || 0) - extraServices.reduce((sum, s) => sum + (s.price || 0), 0)).toLocaleString()}</span>
+                                    </div>
+                                    {extraServices.filter(s => s.price > 0).map((s, i) => (
+                                        <div key={i} className="flex justify-between text-[11px]">
+                                            <span className="text-text-secondary">Extra: {s.name || 'Service'}</span>
+                                            <span className="font-bold text-text-primary">+ €{Math.round(s.price).toLocaleString()}</span>
+                                        </div>
+                                    ))}
+                                    <div className="pt-2 mt-2 border-t border-border flex justify-between text-xs font-black text-primary uppercase">
+                                        <span>Estimated Final Total</span>
+                                        <span>€{calculateAutoPrice().toLocaleString()}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         <p className="text-[10px] text-text-muted italic text-center">
                             {isManual ? 'Warning: Automatic calculations are suspended in manual mode.' : 'Calculated automatically based on subtotal, margin, and extras.'}
                         </p>

@@ -153,6 +153,7 @@ export default function AgentsPage() {
                 .upsert([{
                     id: newId,
                     company_name: newAgent.agent_type === 'agency' ? newAgent.company_name : fullName,
+                    email: newAgent.email,
                     agent_type: newAgent.agent_type,
                     status: 'approved',
                     is_active: true,
@@ -184,6 +185,7 @@ export default function AgentsPage() {
                 .upsert({
                     id: editAgent.id,
                     company_name: editAgent.company_name,
+                    email: editAgent.email,
                     agency_details: editAgent.agency_details,
                     phone_number: editAgent.phone_number,
                     admin_margin: (editAgent.admin_margin !== null && editAgent.admin_margin !== undefined && editAgent.admin_margin !== '') ? parseFloat(editAgent.admin_margin) : 0,
@@ -424,7 +426,26 @@ export default function AgentsPage() {
                                                 )}
                                             </div>
                                         </div>
-                                        <p className="text-[10px] text-text-muted truncate">ID: {agent.user_id}</p>
+                                        {agent.profile?.email ? (
+                                            <p className="text-xs text-primary font-medium truncate flex items-center gap-1.5 mt-1 bg-primary/5 px-2 py-1 rounded-lg w-fit">
+                                                <span className="material-symbols-outlined notranslate text-[14px]">mail</span>
+                                                {agent.profile.email}
+                                            </p>
+                                        ) : (
+                                            <p className="text-[10px] text-amber-500/70 italic flex items-center gap-1 mt-1 font-medium">
+                                                <span className="material-symbols-outlined notranslate text-[12px]">warning</span>
+                                                Email not synced (Run SQL fix)
+                                            </p>
+                                        )}
+                                        <div className="flex items-center gap-2 mt-1.5">
+                                            <p className="text-[9px] text-text-muted/40 font-mono">ID: {agent.user_id}</p>
+                                            {agent.profile?.phone_number && (
+                                                <p className="text-[9px] text-text-muted/40 flex items-center gap-1">
+                                                    · <span className="material-symbols-outlined notranslate text-[10px]">call</span>
+                                                    {agent.profile.phone_number}
+                                                </p>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="flex gap-2">
                                         <button onClick={() => fetchAgentHistory(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-primary transition-all">
@@ -463,7 +484,13 @@ export default function AgentsPage() {
                                                         {sub.profile?.status}
                                                     </span>
                                                 </div>
-                                                <p className="text-[9px] text-text-muted/60">ID: {sub.user_id}</p>
+                                                {sub.profile?.email && (
+                                                    <p className="text-[9px] text-text-muted/60 flex items-center gap-1">
+                                                        <span className="material-symbols-outlined notranslate text-[10px]">mail</span>
+                                                        {sub.profile.email}
+                                                    </p>
+                                                )}
+                                                <p className="text-[8px] text-text-muted/40">ID: {sub.user_id}</p>
                                             </div>
                                             <div className="flex gap-1">
                                                 <button onClick={() => fetchAgentHistory(sub.user_id)} className="p-1.5 rounded-md hover:bg-surface-2 text-text-muted transition-all">
@@ -514,6 +541,21 @@ export default function AgentsPage() {
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">Phone</label>
                                     <input className="input-theme w-full" value={editAgent.phone_number || ''} onChange={e => setEditAgent({...editAgent, phone_number: e.target.value})} />
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs text-text-muted mb-1.5 font-medium">Email Address</label>
+                                <div className="relative">
+                                    <span className="material-symbols-outlined notranslate absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-[16px]">mail</span>
+                                    <input 
+                                        type="email"
+                                        className="input-theme w-full pl-10" 
+                                        value={editAgent.email || ''} 
+                                        onChange={e => setEditAgent({...editAgent, email: e.target.value})} 
+                                        placeholder="agent@example.com"
+                                    />
+                                </div>
+                                <p className="text-[9px] text-text-muted/50 mt-1 italic ml-1">This is the contact email visible to admins. Login email cannot be changed here.</p>
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">

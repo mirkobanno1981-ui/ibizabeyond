@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import VillaEditModal from './VillaEditModal';
-import { fetchICal, parseICal, isAvailable, getBlockedDates } from '../lib/calendar';
+// iCal availability is now resolved via the villa_blocked_dates table,
+// populated server-side by the sync-ical edge function (see supabase/functions/sync-ical).
 import VillaMap from './VillaMap';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=400&q=60';
@@ -35,6 +36,7 @@ export default function VillasTable() {
     const [bathroomsFilter, setBathroomsFilter] = useState('Any');
     const [checkInRule, setCheckInRule] = useState('Any');
     const [minStayFilter, setMinStayFilter] = useState('Any');
+    const [destinationFilter, setDestinationFilter] = useState('Any');
     
     const [viewMode, setViewMode] = useState('grid');
     const featuresMenuRef = useRef(null);
@@ -80,7 +82,7 @@ export default function VillasTable() {
     const margins = marginDataObj || { invenioToAdmin: 0, adminToAgent: 0, ivaPercent: 21 };
 
     const { data: villasData = { list: [], total: 0 }, isLoading: loading, error: queryError } = useQuery({
-        queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, sortBy],
+        queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, destinationFilter, sortBy],
         queryFn: async () => {
             // 1. Fetch Villas (All matching base filters)
             let query = supabase.from('invenio_properties').select('*');
@@ -129,6 +131,9 @@ export default function VillasTable() {
             if (minStayFilter !== 'Any') {
                 query = query.eq('minimum_nights', parseInt(minStayFilter));
             }
+            if (destinationFilter !== 'Any') {
+                query = query.eq('destination', destinationFilter);
+            }
 
             const { data: villasRaw, error: vErr } = await query;
             if (vErr) throw vErr;
@@ -161,19 +166,27 @@ export default function VillasTable() {
                 });
             }
 
-            // 4. Availability check (iCal)
+            // 4. Availability check via villa_blocked_dates (server-synced from iCals).
+            //    Single indexed query replaces per-villa iCal fetches through CORS proxies.
             let processedVillas = villasRaw;
+            const blockedByVilla = {};
             if (checkIn && checkOut) {
-                const availabilityResults = await Promise.all(
-                    processedVillas.map(async villa => {
-                        if (!villa.ical_url) return true;
-                        const icalData = await fetchICal(villa.ical_url);
-                        if (!icalData) return true;
-                        const events = parseICal(icalData);
-                        return isAvailable(events, checkIn, checkOut);
-                    })
-                );
-                processedVillas = processedVillas.filter((_, idx) => availabilityResults[idx]);
+                const { data: blockedRows } = await supabase
+                    .from('villa_blocked_dates')
+                    .select('v_uuid, start_date, end_date')
+                    .in('v_uuid', villaUuids);
+
+                blockedRows?.forEach(b => {
+                    if (!blockedByVilla[b.v_uuid]) blockedByVilla[b.v_uuid] = [];
+                    blockedByVilla[b.v_uuid].push(b);
+                });
+
+                // Stay is unavailable if any block overlaps the [checkIn, checkOut) range.
+                // Stored end_date is inclusive; the stay's checkout day itself is not an occupied night.
+                processedVillas = processedVillas.filter(villa => {
+                    const blocks = blockedByVilla[villa.v_uuid] || [];
+                    return !blocks.some(b => b.start_date < checkOut && b.end_date >= checkIn);
+                });
             }
 
             // 5. Price Calculation Logic
@@ -195,25 +208,22 @@ export default function VillasTable() {
                     const villaRates = seasonalRatesMap[villa.v_uuid] || [];
                     let stayRule = { minimum_nights: villa.minimum_nights || 7, allowed_checkin_days: villa.allowed_checkin_days || 'Flexible' };
 
-                    // Gap Logic
+                    // Gap Logic — use pre-fetched blocks from villa_blocked_dates.
+                    // The nearest blocked day before checkIn comes from the block whose end_date is greatest and < checkIn.
+                    // The nearest blocked day after checkOut comes from the block whose start_date is smallest and > checkOut.
                     let isGapBooking = false;
-                    if (villa.ical_url) {
-                        const icalData = await fetchICal(villa.ical_url);
-                        if (icalData) {
-                            const events = parseICal(icalData);
-                            const blocked = getBlockedDates(events).sort();
-                            let prevBooking = null; let nextBooking = null;
-                            for (const d of blocked) {
-                                if (d < checkIn) prevBooking = d;
-                                if (d > checkOut && !nextBooking) nextBooking = d;
-                            }
-                            if (prevBooking && nextBooking) {
-                                const gapStart = new Date(prevBooking); gapStart.setDate(gapStart.getDate() + 1);
-                                const gapEnd = new Date(nextBooking); gapEnd.setDate(gapEnd.getDate() - 1);
-                                const gapNights = Math.ceil((gapEnd - gapStart) / 86400000) + 1;
-                                if (gapNights >= 3 && diffDays >= 3) isGapBooking = true;
-                            }
-                        }
+                    const villaBlocks = blockedByVilla[villa.v_uuid] || [];
+                    let prevBooking = null;
+                    let nextBooking = null;
+                    for (const b of villaBlocks) {
+                        if (b.end_date < checkIn && (!prevBooking || b.end_date > prevBooking)) prevBooking = b.end_date;
+                        if (b.start_date > checkOut && (!nextBooking || b.start_date < nextBooking)) nextBooking = b.start_date;
+                    }
+                    if (prevBooking && nextBooking) {
+                        const gapStart = new Date(prevBooking); gapStart.setDate(gapStart.getDate() + 1);
+                        const gapEnd = new Date(nextBooking); gapEnd.setDate(gapEnd.getDate() - 1);
+                        const gapNights = Math.ceil((gapEnd - gapStart) / 86400000) + 1;
+                        if (gapNights >= 3 && diffDays >= 3) isGapBooking = true;
                     }
 
                     for (let i = 0; i < diffDays; i++) {
@@ -315,10 +325,10 @@ export default function VillasTable() {
                 <div>
                     <h1 className="text-2xl font-bold text-text-primary">Villa Inventory</h1>
                     <p className="text-text-muted text-sm mt-0.5">
-                        {loading ? 'Loading...' : `${totalCount} exclusive properties in Ibiza`}
+                        {loading ? 'Loading...' : `${totalCount} exclusive properties${destinationFilter !== 'Any' ? ` in ${destinationFilter}` : ''}`}
                     </p>
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent' || role === 'owner') && (
+                {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
                     <button 
                         onClick={() => setEditVilla({ 
                             v_uuid: null, 
@@ -402,6 +412,20 @@ export default function VillasTable() {
 
                             <div className="w-full md:w-auto flex flex-wrap gap-4">
                                 <div className="w-44 space-y-2">
+                                    <label className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] ml-1">Destination</label>
+                                    <select
+                                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-primary/40 rounded-2xl px-5 py-4 text-sm text-slate-800 outline-none transition-all cursor-pointer"
+                                        value={destinationFilter}
+                                        onChange={e => setDestinationFilter(e.target.value)}
+                                    >
+                                        <option value="Any">Any Destination</option>
+                                        <option value="Ibiza">Ibiza</option>
+                                        <option value="Mykonos">Mykonos</option>
+                                        <option value="Marbella">Marbella</option>
+                                    </select>
+                                </div>
+
+                                <div className="w-44 space-y-2">
                                     <label className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] ml-1">Check-in</label>
                                     <input
                                         type="date"
@@ -413,6 +437,7 @@ export default function VillasTable() {
                                             setCheckIn(val);
                                             if (checkOut && val >= checkOut) {
                                                 setCheckOut('');
+                                                setBudgetFilter('');
                                             }
                                         }}
                                     />
@@ -447,18 +472,30 @@ export default function VillasTable() {
                                 </select>
                             </div>
 
-                            <div className="w-36 space-y-1.5">
-                                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-widest ml-1">Budget</label>
+                            <div className="w-40 space-y-1.5">
+                                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-widest ml-1">
+                                    Total Budget
+                                </label>
                                 <div className="relative">
-                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">€</span>
+                                    <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-[10px] ${checkIn && checkOut ? 'text-slate-400' : 'text-slate-300'}`}>€</span>
                                     <input
                                         type="number"
-                                        className="w-full bg-white border border-slate-200 hover:border-slate-300 rounded-xl pl-6 pr-3 py-2 text-xs text-slate-800 outline-none transition-all"
-                                        placeholder="Max Budget"
+                                        className={`w-full border rounded-xl pl-6 pr-3 py-2 text-xs outline-none transition-all ${checkIn && checkOut ? 'bg-white border-slate-200 hover:border-slate-300 text-slate-800' : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'}`}
+                                        placeholder={checkIn && checkOut ? 'Max total stay' : 'Select dates first'}
                                         value={budgetFilter}
                                         onChange={e => setBudgetFilter(e.target.value)}
+                                        disabled={!checkIn || !checkOut}
                                     />
                                 </div>
+                                {checkIn && checkOut && budgetFilter && (
+                                    <p className="text-[9px] text-emerald-500 font-medium ml-1 flex items-center gap-1">
+                                        <span className="material-symbols-outlined notranslate text-[10px]">filter_alt</span>
+                                        Showing villas ≤ €{parseInt(budgetFilter).toLocaleString()}
+                                    </p>
+                                )}
+                                {(!checkIn || !checkOut) && (
+                                    <p className="text-[9px] text-slate-400 ml-1">Set dates to filter by budget</p>
+                                )}
                             </div>
 
                             <div className="flex-1 min-w-[200px] space-y-1.5 relative" ref={featuresMenuRef}>
@@ -552,20 +589,21 @@ export default function VillasTable() {
 
                              <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-100">
                                 <div className="flex items-center gap-4">
-                                    {(search || guestsFilter !== 'Any' || budgetFilter || checkIn || checkOut || selectedFeatures.length > 0 || bedroomsFilter !== 'Any' || bathroomsFilter !== 'Any' || checkInRule !== 'Any' || minStayFilter !== 'Any') && (
+                                    {(search || guestsFilter !== 'Any' || budgetFilter || checkIn || checkOut || selectedFeatures.length > 0 || bedroomsFilter !== 'Any' || bathroomsFilter !== 'Any' || checkInRule !== 'Any' || minStayFilter !== 'Any' || destinationFilter !== 'Any') && (
                                         <button
                                             className="h-10 px-4 text-[10px] font-black uppercase tracking-widest text-[#ff4b4b] hover:bg-[#ff4b4b]/5 transition-all flex items-center gap-2 rounded-xl"
-                                            onClick={() => { 
-                                                setSearch(''); 
-                                                setGuestsFilter('Any'); 
-                                                setBudgetFilter(''); 
-                                                setCheckIn(''); 
-                                                setCheckOut(''); 
+                                            onClick={() => {
+                                                setSearch('');
+                                                setGuestsFilter('Any');
+                                                setBudgetFilter('');
+                                                setCheckIn('');
+                                                setCheckOut('');
                                                 setSelectedFeatures([]);
                                                 setBedroomsFilter('Any');
                                                 setBathroomsFilter('Any');
                                                 setCheckInRule('Any');
                                                 setMinStayFilter('Any');
+                                                setDestinationFilter('Any');
                                                 setSelectedVillaIds([]);
                                             }}
                                         >
@@ -714,13 +752,20 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                     onError={e => { e.currentTarget.src = FALLBACK_IMG; }}
                     loading="lazy"
                 />
-                <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-sm border border-border px-2.5 py-1 rounded-lg">
-                    <span className="text-primary font-bold text-sm">
-                        {villa.displayPrice > 0 ? `€${villa.displayPrice.toLocaleString()}` : 'POA'}
-                    </span>
-                    <span className="text-text-muted text-[10px] ml-1">
-                        {villa.priceType === 'total' ? 'total' : '/wk'}
-                    </span>
+                <div className="absolute bottom-3 left-3 bg-background/90 backdrop-blur-md border border-border px-3 py-1.5 rounded-xl shadow-xl">
+                    <div className="flex flex-col">
+                        <span className="text-[9px] font-black text-text-muted uppercase tracking-wider leading-none mb-1">
+                            {villa.priceType === 'total' ? 'Stay Total' : 'From'}
+                        </span>
+                        <div className="flex items-baseline gap-1">
+                            <span className="text-primary font-black text-base leading-none">
+                                {villa.displayPrice > 0 ? `€${Math.round(villa.displayPrice).toLocaleString()}` : 'POA'}
+                            </span>
+                            {villa.priceType !== 'total' && (
+                                <span className="text-text-muted text-[10px] font-bold">/wk</span>
+                            )}
+                        </div>
+                    </div>
                 </div>
                 {villa.allow_shortstays === 'yes' && (
                     <div className="absolute top-3 right-3 bg-primary/90 text-background-dark text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
@@ -754,7 +799,7 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                 </div>
 
                 <div className="mt-3 flex gap-2">
-                    {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent' || (role === 'owner' && villa.owner_id === user?.id)) ? (
+                    {(role === 'admin' || role === 'super_admin' || (role === 'owner' && villa.owner_id === user?.id)) ? (
                         <>
                             <button
                                 onClick={onEdit}

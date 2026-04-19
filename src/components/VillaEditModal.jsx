@@ -131,6 +131,14 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
 
             let result;
             if (villa.v_uuid) {
+                // Permission Check: Only admin/super_admin (or the villa owner themselves) can modify existing records
+                const isAdmin = role === 'admin' || role === 'super_admin';
+                const isOwner = role === 'owner' && villa.owner_id === user?.id;
+
+                if (!isAdmin && !isOwner) {
+                    throw new Error('Permission denied: Agents and editors are allowed to add new villas, but only administrators can modify existing ones.');
+                }
+
                 result = await supabase
                     .from('invenio_properties')
                     .update(villaData)
@@ -138,6 +146,13 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                     .select()
                     .single();
             } else {
+                // Permission Check: Admins and users with specifically assigned 'editor' role can add new villas
+                const canAdd = role === 'admin' || role === 'super_admin' || role === 'editor';
+
+                if (!canAdd) {
+                    throw new Error('Permission denied: You need the "editor" role to add new villas.');
+                }
+
                 result = await supabase
                     .from('invenio_properties')
                     .insert([villaData])

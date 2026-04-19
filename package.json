@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node server.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.96.1",
+    "express": "^4.22.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.0",
     "react": "^19.2.0",

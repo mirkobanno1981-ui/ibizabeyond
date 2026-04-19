@@ -69,6 +69,7 @@ export default function QuotesPage() {
     const [viewMode, setViewMode] = useState('list');
     const [selectedQuotes, setSelectedQuotes] = useState([]);
     const [groupByClient, setGroupByClient] = useState(true);
+    const [expandedGroups, setExpandedGroups] = useState({});
 
     // --- Data Queries ---
     const { data: quotes = [], isLoading: quotesLoading } = useQuery({
@@ -128,9 +129,23 @@ export default function QuotesPage() {
         staleTime: 1000 * 60 * 60, // 1 hour
     });
 
-    // Helper to refresh data
     const refreshData = () => {
         queryClient.invalidateQueries({ queryKey: ['quotes'] });
+    };
+
+    const toggleGroup = (clientId) => {
+        setExpandedGroups(prev => ({ ...prev, [clientId]: !prev[clientId] }));
+    };
+
+    const setGroupQualification = async (groupQuotes, qualType) => {
+        await Promise.all(
+            groupQuotes.map(q =>
+                supabase.from('quotes').update({
+                    group_details: { ...(q.group_details || {}), type: qualType }
+                }).eq('id', q.id)
+            )
+        );
+        refreshData();
     };
 
 
@@ -165,7 +180,7 @@ export default function QuotesPage() {
 
         const url = `${window.location.origin}/quote/${quote.id}`;
         const propertyName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'your stay in Ibiza';
-        const message = `Hello ${quote.clients?.full_name || 'there'}! Here is your bespoke quote for ${propertyName}: ${url}`;
+        const message = `Hello ${quote.clients?.full_name || 'there'}! This exclusive proposal was prepared specifically for you: ${url}\n\nPlease note this offer is valid for 3 days, as properties can be booked by others at any time.`;
         const whatsappUrl = `https://wa.me/${quote.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
         window.open(whatsappUrl, '_blank');
     };
@@ -867,12 +882,32 @@ export default function QuotesPage() {
                                         return acc;
                                     }, {});
 
-                                    return Object.entries(groups).map(([clientId, group]) => (
+                                    const QUAL_OPTIONS = [
+                                        { value: 'family', label: 'Family', color: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' },
+                                        { value: 'couple', label: 'Couple', color: 'bg-pink-500/10 text-pink-400 border-pink-500/20' },
+                                        { value: 'friends', label: 'Friends', color: 'bg-primary/10 text-primary border-primary/20' },
+                                        { value: 'business', label: 'Business', color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' },
+                                        { value: 'group', label: 'Group', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+                                        { value: 'vip', label: 'VIP', color: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
+                                    ];
+
+                                    return Object.entries(groups).map(([clientId, group]) => {
+                                        const isExpanded = !!expandedGroups[clientId];
+                                        const currentQual = group.quotes[0]?.group_details?.type || null;
+                                        const qualOption = QUAL_OPTIONS.find(o => o.value === currentQual);
+
+                                        return (
                                         <React.Fragment key={clientId}>
-                                            <tr className="bg-surface-2/40">
+                                            <tr
+                                                className="bg-surface-2/40 cursor-pointer hover:bg-surface-2/60 transition-colors"
+                                                onClick={() => toggleGroup(clientId)}
+                                            >
                                                 <td colSpan={role === 'admin' || role === 'super_admin' ? 12 : 10} className="px-5 py-4">
                                                     <div className="flex items-center justify-between">
                                                         <div className="flex items-center gap-4">
+                                                            <span className={`material-symbols-outlined notranslate text-text-muted transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>
+                                                                chevron_right
+                                                            </span>
                                                             <div className="size-10 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-inner border border-primary/20">
                                                                 <span className="material-symbols-outlined notranslate">person_search</span>
                                                             </div>
@@ -882,15 +917,31 @@ export default function QuotesPage() {
                                                                 </p>
                                                                 <div className="flex items-center gap-2 mt-0.5">
                                                                     <span className="text-[10px] bg-primary text-black px-2 py-0.5 rounded font-black uppercase">
-                                                                        {group.quotes.length} Options
+                                                                        {group.quotes.length} {group.quotes.length === 1 ? 'Option' : 'Options'}
                                                                     </span>
-                                                                    <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Unified Quote</span>
+                                                                    {qualOption && (
+                                                                        <span className={`text-[9px] px-2 py-0.5 rounded border font-black uppercase ${qualOption.color}`}>
+                                                                            {qualOption.label}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                         </div>
-                                                        <div className="flex items-center gap-3">
+                                                        <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                                                            {/* Qualification selector */}
+                                                            <select
+                                                                value={currentQual || ''}
+                                                                onChange={e => setGroupQualification(group.quotes, e.target.value)}
+                                                                className="input-theme text-[10px] py-1 px-2 rounded-lg font-black uppercase tracking-widest"
+                                                            >
+                                                                <option value="">— Qualifica —</option>
+                                                                {QUAL_OPTIONS.map(o => (
+                                                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                                                ))}
+                                                            </select>
+
                                                             <div className="flex bg-background rounded-xl p-1 border border-border shadow-sm">
-                                                                <button 
+                                                                <button
                                                                     onClick={() => {
                                                                         const ids = group.quotes.map(q => q.id);
                                                                         const url = `${window.location.origin}/quote/${ids.join(',')}`;
@@ -902,12 +953,12 @@ export default function QuotesPage() {
                                                                     <span className="material-symbols-outlined notranslate text-[16px]">content_copy</span>
                                                                     Link
                                                                 </button>
-                                                                <button 
+                                                                <button
                                                                     onClick={() => {
                                                                         const ids = group.quotes.map(q => q.id);
                                                                         const url = `${window.location.origin}/quote/${ids.join(',')}`;
                                                                         const firstQuote = group.quotes[0];
-                                                                        const message = `Hello ${firstQuote.clients?.full_name || 'there'}! Here are your yacht & villa proposals for Ibiza: ${url}`;
+                                                                        const message = `Hello ${firstQuote.clients?.full_name || 'there'}! These customized proposals for Ibiza have been curated for you: ${url}\n\nPlease note this offer is valid for 3 days, as properties can be booked by others at any time.`;
                                                                         const whatsappUrl = `https://wa.me/${firstQuote.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
                                                                         window.open(whatsappUrl, '_blank');
                                                                     }}
@@ -921,9 +972,10 @@ export default function QuotesPage() {
                                                     </div>
                                                 </td>
                                             </tr>
-                                            {group.quotes.map(q => renderQuoteRow(q, true))}
+                                            {isExpanded && group.quotes.map(q => renderQuoteRow(q, true))}
                                         </React.Fragment>
-                                    ));
+                                        );
+                                    });
                                 })()}
                             </tbody>
                         </table>
@@ -1066,7 +1118,7 @@ export default function QuotesPage() {
                             onClick={() => {
                                 const url = `${window.location.origin}/quote/${selectedQuotes.join(',')}`;
                                 const q = quotes.find(quote => quote.id === selectedQuotes[0]);
-                                const message = `Hello ${q.clients?.full_name || 'there'}! Here are your proposals for Ibiza: ${url}`;
+                                const message = `Hello ${q.clients?.full_name || 'there'}! These customized proposals for Ibiza have been curated for you: ${url}\n\nPlease note this offer is valid for 3 days, as properties can be booked by others at any time.`;
                                 const whatsappUrl = `https://wa.me/${q.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
                                 window.open(whatsappUrl, '_blank');
                             }}

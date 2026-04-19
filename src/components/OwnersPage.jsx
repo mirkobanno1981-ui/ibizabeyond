@@ -264,24 +264,43 @@ export default function OwnersPage() {
                                 <div className="size-12 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
                                     <span className="material-symbols-outlined notranslate">person</span>
                                 </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="font-bold text-text-primary text-base">{owner.name || 'Unnamed Owner'}</span>
-                                        <div className="flex gap-1.5 font-black uppercase text-[9px] tracking-widest">
-                                            {owner.is_active !== false ? (
-                                                <span className="px-2 py-0.5 bg-green-500/10 text-green-400 border border-green-500/20 rounded-full">Active</span>
-                                            ) : (
-                                                <span className="px-2 py-0.5 bg-red-500 text-text-primary rounded-full">Suspended</span>
-                                            )}
-                                            {owner.stripe_account_id ? (
-                                                <span className="px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded-full">Stripe Linked</span>
-                                            ) : (
-                                                <span className="px-2 py-0.5 bg-surface-2 text-text-muted border border-border rounded-full">No Stripe</span>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="font-bold text-text-primary text-base">{owner.name || 'Unnamed Owner'}</span>
+                                            <div className="flex gap-1.5 font-black uppercase text-[9px] tracking-widest">
+                                                {owner.is_active !== false ? (
+                                                    <span className="px-2 py-0.5 bg-green-500/10 text-green-400 border border-green-500/20 rounded-full">Active</span>
+                                                ) : (
+                                                    <span className="px-2 py-0.5 bg-red-500 text-text-primary rounded-full">Suspended</span>
+                                                )}
+                                                {owner.stripe_account_id ? (
+                                                    <span className="px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded-full">Stripe Linked</span>
+                                                ) : (
+                                                    <span className="px-2 py-0.5 bg-surface-2 text-text-muted border border-border rounded-full">No Stripe</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {owner.email ? (
+                                            <p className="text-xs text-primary font-medium truncate flex items-center gap-1.5 mt-1 bg-primary/5 px-2 py-1 rounded-lg w-fit">
+                                                <span className="material-symbols-outlined notranslate text-[14px]">mail</span>
+                                                {owner.email}
+                                            </p>
+                                        ) : (
+                                            <p className="text-[10px] text-amber-500/70 italic flex items-center gap-1 mt-1 font-medium">
+                                                <span className="material-symbols-outlined notranslate text-[12px]">warning</span>
+                                                Email not synced (Run SQL fix)
+                                            </p>
+                                        )}
+                                        <div className="flex items-center gap-2 mt-1.5">
+                                            <p className="text-[9px] text-text-muted/40 font-mono">ID: {owner.id}</p>
+                                            {owner.phone_number && (
+                                                <p className="text-[9px] text-text-muted/40 flex items-center gap-1">
+                                                    · <span className="material-symbols-outlined notranslate text-[10px]">call</span>
+                                                    {owner.phone_number}
+                                                </p>
                                             )}
                                         </div>
                                     </div>
-                                    <p className="text-[11px] text-text-muted truncate mt-0.5 font-medium">{owner.email || 'No email provided'} {owner.phone_number && `· ${owner.phone_number}`}</p>
-                                </div>
                                 <div className="flex gap-2">
                                     <button 
                                         onClick={() => setEditOwner({ ...owner })}
@@ -329,12 +348,16 @@ export default function OwnersPage() {
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Email Address</label>
-                                    <input 
-                                        className="input-theme w-full h-12" 
-                                        value={editOwner.email || ''} 
-                                        onChange={e => setEditOwner({...editOwner, email: e.target.value})} 
-                                        placeholder="owner@example.com"
-                                    />
+                                    <div className="relative">
+                                        <span className="material-symbols-outlined notranslate absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-[16px]">mail</span>
+                                        <input 
+                                            className="input-theme w-full h-12 pl-10" 
+                                            value={editOwner.email || ''} 
+                                            onChange={e => setEditOwner({...editOwner, email: e.target.value})} 
+                                            placeholder="owner@example.com"
+                                        />
+                                    </div>
+                                    <p className="text-[8px] text-text-muted/50 mt-1 italic ml-1">Contact email for proposals and notifications.</p>
                                 </div>
                                  <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Company Name (Branding)</label>
