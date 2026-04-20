@@ -181,3 +181,24 @@ export function clearICalCache(url) {
     if (url) icalCache.delete(url);
     else icalCache.clear();
 }
+
+// Expand [{start_date, end_date}] rows from villa_blocked_dates into
+// unique YYYY-MM-DD day strings — same shape as getBlockedDates(events).
+export function expandBlockedRanges(rows) {
+    const blocked = new Set();
+    for (const row of rows || []) {
+        const curr = new Date(row.start_date);
+        const end = new Date(row.end_date);
+        curr.setHours(0, 0, 0, 0);
+        end.setHours(0, 0, 0, 0);
+        while (curr <= end) {
+            blocked.add(
+                curr.getFullYear() + '-' +
+                String(curr.getMonth() + 1).padStart(2, '0') + '-' +
+                String(curr.getDate()).padStart(2, '0')
+            );
+            curr.setDate(curr.getDate() + 1);
+        }
+    }
+    return Array.from(blocked);
+}

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { fetchICal, parseICal, getBlockedDates } from '../lib/calendar';
+import { expandBlockedRanges } from '../lib/calendar';
 import VillaMap from './VillaMap';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1200&q=80';
@@ -28,12 +28,9 @@ export default function VillaView() {
     const [showPhotoModal, setShowPhotoModal] = useState(false);
 
     const handleSyncRefresh = async () => {
-        if (!villa?.ical_url) return;
+        if (!villa?.v_uuid) return;
         setIcalLoading(true);
-        import('../lib/calendar').then(({ clearICalCache }) => {
-            clearICalCache(villa.ical_url);
-            fetchVillaData(); 
-        });
+        await fetchVillaData();
     };
 
     // Keyboard navigation for gallery
@@ -431,26 +428,21 @@ export default function VillaView() {
                 setAgentMargin(0); // Default villa agent margin is 0
             }
 
-            // 6. Fetch iCal Availability
-            if (villaData.ical_url) {
-                setIcalLoading(true);
-                setIcalError(false);
-                try {
-                    const icalData = await fetchICal(villaData.ical_url);
-                    if (icalData) {
-                        const events = parseICal(icalData);
-                        const blocked = getBlockedDates(events);
-                        setBlockedDates(blocked);
-                        console.log(`iCal Sync: ${blocked.length} dates blocked for ${villaData.villa_name}`);
-                    } else {
-                        setIcalError(true);
-                    }
-                } catch (err) {
-                    console.error('iCal fetch error:', err);
-                    setIcalError(true);
-                } finally {
-                    setIcalLoading(false);
-                }
+            // 6. Availability from villa_blocked_dates (server-synced from iCal).
+            setIcalLoading(true);
+            setIcalError(false);
+            try {
+                const { data: blockRows, error: blockErr } = await supabase
+                    .from('villa_blocked_dates')
+                    .select('start_date, end_date')
+                    .eq('v_uuid', id);
+                if (blockErr) throw blockErr;
+                setBlockedDates(expandBlockedRanges(blockRows));
+            } catch (err) {
+                console.error('Availability fetch error:', err);
+                setIcalError(true);
+            } finally {
+                setIcalLoading(false);
             }
         } catch (err) {
             console.error('Error:', err);
