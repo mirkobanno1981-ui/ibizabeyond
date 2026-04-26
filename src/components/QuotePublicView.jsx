@@ -429,7 +429,7 @@ export default function QuotePublicView() {
             const checkInDate = new Date(quote.check_in);
             const today = new Date();
             const diffTime = checkInDate.getTime() - today.getTime();
-            return Math.round(diffTime / (1000 * 60 * 60 * 24)) <= 49;
+            return Math.round(diffTime / (1000 * 60 * 60 * 24)) <= 42;
         })();
 
         const data = {
@@ -586,13 +586,150 @@ export default function QuotePublicView() {
     today.setHours(0, 0, 0, 0);
 
     const daysUntilCheckIn = Math.round((checkInDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    const isLastMinute = daysUntilCheckIn <= 49; // 7 weeks
+    const isLastMinute = daysUntilCheckIn <= 42; // 6 weeks
 
     const diffDays = Math.round((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24));
 
     const upfrontStayPart = isLastMinute ? base : (base * 0.5);
     const upfront = (total - base) + upfrontStayPart;
     // -------------------------------------
+
+    if (paymentSuccess || securitySuccess) {
+        const listingName = villa?.villa_name || boat?.boat_name || 'your reservation';
+        const checkInStr = quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+        const checkOutStr = quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+        const clientName = quote.clients?.full_name || '';
+        const brandName = owner?.company_name || owner?.name || 'Ibiza Beyond';
+        const brandLogo = owner?.logo_url;
+        const agentEmail = agent?.email;
+        const agentPhone = agent?.phone_number;
+
+        return (
+            <div className="min-h-screen bg-background text-text-secondary font-sans">
+                <nav className="h-20 border-b border-border flex items-center justify-between px-6 md:px-12 bg-background/80 backdrop-blur-xl">
+                    <div className="flex items-center gap-3">
+                        {brandLogo ? (
+                            <img src={brandLogo} alt={brandName} className="h-10 w-auto object-contain" />
+                        ) : (
+                            <div className="size-10 bg-primary rounded-xl flex items-center justify-center">
+                                <span className="text-white font-black text-lg">IB</span>
+                            </div>
+                        )}
+                        <span className="font-black uppercase tracking-widest text-sm text-text-primary">{brandName}</span>
+                    </div>
+                </nav>
+
+                <main className="max-w-3xl mx-auto px-6 py-16 md:py-24">
+                    <div className="flex flex-col items-center text-center space-y-8">
+                        <div className="relative">
+                            <div className="size-24 md:size-28 rounded-full bg-primary/10 border-2 border-primary/30 flex items-center justify-center animate-[scale-in_0.4s_ease-out]">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="size-12 md:size-14 text-primary">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            <p className="text-xs md:text-sm font-black uppercase tracking-[0.3em] text-primary">
+                                {securitySuccess ? 'Security Deposit Authorized' : 'Payment Confirmed'}
+                            </p>
+                            <h1 className="text-4xl md:text-6xl font-black text-text-primary leading-tight">
+                                Thank you{clientName ? `, ${clientName.split(' ')[0]}` : ''}.
+                            </h1>
+                            <p className="text-base md:text-lg text-text-muted max-w-xl mx-auto leading-relaxed">
+                                {securitySuccess
+                                    ? `Your security deposit has been pre-authorized on your card. No charge has been made yet — we'll release the hold after your stay at ${listingName}.`
+                                    : `Your reservation at ${listingName} is now confirmed. A receipt has been sent to your email. Our concierge will be in touch shortly.`}
+                            </p>
+                        </div>
+
+                        <div className="w-full bg-surface-1 border border-border rounded-2xl p-6 md:p-8 text-left space-y-4">
+                            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-text-muted">Reservation summary</h2>
+                            <div className="space-y-3 divide-y divide-border">
+                                <div className="flex justify-between items-center pb-3">
+                                    <span className="text-sm text-text-muted font-medium">Property</span>
+                                    <span className="text-sm font-bold text-text-primary text-right">{listingName}</span>
+                                </div>
+                                {checkInStr && (
+                                    <div className="flex justify-between items-center py-3">
+                                        <span className="text-sm text-text-muted font-medium">Check-in</span>
+                                        <span className="text-sm font-bold text-text-primary">{checkInStr}</span>
+                                    </div>
+                                )}
+                                {checkOutStr && (
+                                    <div className="flex justify-between items-center py-3">
+                                        <span className="text-sm text-text-muted font-medium">Check-out</span>
+                                        <span className="text-sm font-bold text-text-primary">{checkOutStr}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between items-center pt-3">
+                                    <span className="text-sm text-text-muted font-medium">Reference</span>
+                                    <span className="text-xs font-mono text-text-primary">{quote.id?.slice(0, 8).toUpperCase()}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="w-full bg-primary/5 border border-primary/20 rounded-2xl p-6 md:p-8 text-left">
+                            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-primary mb-4">What happens next</h2>
+                            <ol className="space-y-3 text-sm text-text-secondary">
+                                <li className="flex gap-3">
+                                    <span className="font-black text-primary">1.</span>
+                                    <span>You'll receive a confirmation email with the invoice and booking details.</span>
+                                </li>
+                                <li className="flex gap-3">
+                                    <span className="font-black text-primary">2.</span>
+                                    <span>{securitySuccess
+                                        ? 'The hold on your card will be released automatically after check-out, provided no damage claim is raised.'
+                                        : 'Our team will send you the rental agreement and arrival instructions within 24 hours.'}</span>
+                                </li>
+                                <li className="flex gap-3">
+                                    <span className="font-black text-primary">3.</span>
+                                    <span>Your dedicated concierge will contact you to finalize transfers, provisions, and bespoke services.</span>
+                                </li>
+                            </ol>
+                        </div>
+
+                        {(agentEmail || agentPhone) && (
+                            <div className="w-full text-center space-y-2">
+                                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-text-muted">Need assistance?</p>
+                                <div className="flex flex-wrap justify-center gap-x-6 gap-y-1 text-sm">
+                                    {agentEmail && (
+                                        <a href={`mailto:${agentEmail}`} className="text-primary font-bold hover:underline">{agentEmail}</a>
+                                    )}
+                                    {agentPhone && (
+                                        <a href={`tel:${agentPhone}`} className="text-primary font-bold hover:underline">{agentPhone}</a>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                            <button
+                                onClick={() => { window.history.replaceState({}, '', `/quote/${id}`); setPaymentSuccess(false); setSecuritySuccess(false); }}
+                                className="px-8 py-3 bg-primary text-white font-black uppercase tracking-widest text-xs rounded-xl hover:bg-primary/90 transition-colors"
+                            >
+                                View reservation
+                            </button>
+                            <a
+                                href="/"
+                                className="px-8 py-3 border border-border text-text-primary font-black uppercase tracking-widest text-xs rounded-xl hover:bg-surface-1 transition-colors text-center"
+                            >
+                                Back to home
+                            </a>
+                        </div>
+                    </div>
+                </main>
+
+                <footer className="border-t border-border mt-16">
+                    <div className="max-w-3xl mx-auto px-6 py-8 text-center">
+                        <p className="text-xs text-text-muted uppercase tracking-widest">
+                            © {new Date().getFullYear()} {brandName} — Luxury Villa & Yacht Experiences, Ibiza
+                        </p>
+                    </div>
+                </footer>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-background text-text-secondary font-sans">
@@ -1061,7 +1198,7 @@ export default function QuotePublicView() {
                                     <div className="h-6 w-1 bg-primary rounded-full"></div>
                                     {quote.deposit_paid ? 'Precise Location' : 'Indicative Location'}
                                 </h2>
-                                <div className="rounded-3xl overflow-hidden h-[450px] border border-border relative group shadow-2xl">
+                                <div className="rounded-3xl overflow-hidden h-[600px] border border-primary/20 relative group shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
                                     <VillaMap locations={[{ gps: villa?.gps, name: villa?.villa_name }]} radius={quote.deposit_paid ? 0 : 2000} />
                                 </div>
                                 {!quote.deposit_paid && (
@@ -1120,34 +1257,36 @@ export default function QuotePublicView() {
 
                                     <div className="pt-6 border-t border-border space-y-6">
                                         <div className="flex items-center justify-between">
-                                            <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Price Breakdown</p>
+                                            <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Rate Details</p>
                                             <div className="px-2 py-0.5 rounded-md bg-primary/10 border border-primary/20">
                                                 <span className="text-[9px] font-black text-primary uppercase">Guaranteed Rate</span>
                                             </div>
                                         </div>
                                         
                                         <div className="space-y-3">
-                                            {/* Accommodation Base */}
-                                            <div className="flex justify-between items-center text-sm">
-                                                <span className="text-text-secondary font-medium">{villa ? 'Villa Stay' : 'Charter Duration'}</span>
-                                                <span className="font-bold text-text-primary">€{base.toLocaleString()}</span>
-                                            </div>
+                                            {/* Simplified Client Breakdown */}
+                                            {(() => {
+                                                const total = parseFloat(quote.final_price || 0);
+                                                const extrasTotal = (quote.extra_services || []).reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
+                                                
+                                                const stayTotal = total - extrasTotal;
 
-                                            {/* Commissions / Fees included in one line for client */}
-                                            {((total - base - extrasTotal) > 1) && (
-                                                <div className="flex justify-between items-center text-sm">
-                                                    <span className="text-text-secondary font-medium">Service & Admin Fees</span>
-                                                    <span className="font-bold text-text-primary">€{Math.round(total - base - extrasTotal).toLocaleString()}</span>
-                                                </div>
-                                            )}
+                                                return (
+                                                    <>
+                                                        <div className="flex justify-between items-center text-sm">
+                                                            <span className="text-text-secondary font-medium">{villa ? 'Villa Stay' : 'Charter Duration'}</span>
+                                                            <span className="font-bold text-text-primary">€{Math.round(stayTotal).toLocaleString()}</span>
+                                                        </div>
 
-                                            {/* Extra Services Breakdown */}
-                                            {(quote.extra_services || []).filter(s => parseFloat(s.price) > 0).map((s, idx) => (
-                                                <div key={idx} className="flex justify-between items-center text-sm">
-                                                    <span className="text-text-secondary font-medium">{s.name}</span>
-                                                    <span className="font-bold text-text-primary">€{parseFloat(s.price).toLocaleString()}</span>
-                                                </div>
-                                            ))}
+                                                        {(quote.extra_services || []).filter(s => parseFloat(s.price) > 0).map((s, idx) => (
+                                                            <div key={idx} className="flex justify-between items-center text-sm">
+                                                                <span className="text-text-secondary font-medium">{s.name}</span>
+                                                                <span className="font-bold text-text-primary">€{parseFloat(s.price).toLocaleString()}</span>
+                                                            </div>
+                                                        ))}
+                                                    </>
+                                                );
+                                            })()}
                                         </div>
 
                                         <div className="pt-6 border-t border-border space-y-4">
@@ -1157,49 +1296,65 @@ export default function QuotePublicView() {
                                                     <div className="h-px bg-primary/20 w-8"></div>
                                                 </div>
                                                 <p className="text-5xl font-black text-primary tracking-tighter">
-                                                     €{paymentMethod === 'card' && !quote.deposit_paid ? (total + (upfront * 0.02)).toLocaleString() : total.toLocaleString()}
+                                                    €{total.toLocaleString()}
                                                 </p>
                                                 <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest mt-2 flex items-center gap-2">
                                                     <span className="material-symbols-outlined notranslate text-[14px]">event_repeat</span>
                                                     Total for {diffDays} {diffDays === 1 ? 'night' : 'nights'} stay
                                                 </p>
                                             </div>
-                                            
+
                                             {/* Payment Method Selector */}
                                             {!quote.deposit_paid && (
                                                 <div className="space-y-3 pt-4 border-t border-border/50">
-                                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest text-left">Confirm Payment Method</p>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <button 
+                                                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest text-left">Choose Payment Method</p>
+                                                    <div className="flex flex-col gap-3">
+                                                        {/* Card — Instant Booking */}
+                                                        <button
                                                             onClick={() => setPaymentMethod('card')}
-                                                            className={`p-3 rounded-2xl border-2 text-left transition-all flex flex-col items-start gap-1 group/btn ${paymentMethod === 'card' ? 'border-primary bg-primary/10' : 'border-border bg-surface-2/30 grayscale hover:grayscale-0 hover:border-primary/50'}`}
+                                                            className={`w-full p-4 rounded-2xl border-2 text-left transition-all flex items-center gap-4 ${paymentMethod === 'card' ? 'border-primary bg-primary/10' : 'border-border bg-surface-2/30 hover:border-primary/50'}`}
                                                         >
-                                                            <div className="flex items-center justify-between w-full">
-                                                                <span className="material-symbols-outlined notranslate text-xl text-primary">credit_card</span>
-                                                                {paymentMethod === 'card' && <span className="size-2 rounded-full bg-primary animate-pulse"></span>}
+                                                            <div className="size-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shrink-0 shadow-md">
+                                                                <span className="material-symbols-outlined notranslate text-white text-xl">bolt</span>
                                                             </div>
-                                                            <div>
-                                                                <span className="block text-[10px] font-black text-text-primary uppercase tracking-tight">Credit Card</span>
-                                                                <span className="block text-[8px] text-text-muted font-bold">+2% Processing Fee</span>
+                                                            <div className="flex-1 min-w-0">
+                                                                <span className="block text-[11px] font-black text-text-primary uppercase tracking-tight">Instant Booking — Credit Card</span>
+                                                                <span className="block text-[9px] text-primary font-bold mt-0.5">Confirmed immediately · Visa, Mastercard, Amex</span>
                                                             </div>
+                                                            {paymentMethod === 'card' && <span className="size-2.5 rounded-full bg-primary animate-pulse shrink-0"></span>}
                                                         </button>
-                                                        <button 
-                                                            onClick={() => setPaymentMethod('bank_transfer')}
-                                                            className={`p-3 rounded-2xl border-2 text-left transition-all flex flex-col items-start gap-1 group/btn ${paymentMethod === 'bank_transfer' ? 'border-primary bg-primary/10' : 'border-border bg-surface-2/30 grayscale hover:grayscale-0 hover:border-primary/50'}`}
+                                                        {/* Revolut Pay */}
+                                                        <button
+                                                            onClick={() => setPaymentMethod('revolut')}
+                                                            className={`w-full p-4 rounded-2xl border-2 text-left transition-all flex items-center gap-4 ${paymentMethod === 'revolut' ? 'border-[#191C1F] bg-[#191C1F]/10' : 'border-border bg-surface-2/30 hover:border-[#191C1F]/60'}`}
                                                         >
-                                                            <div className="flex items-center justify-between w-full">
-                                                                <span className="material-symbols-outlined notranslate text-xl text-primary">account_balance</span>
-                                                                {paymentMethod === 'bank_transfer' && <span className="size-2 rounded-full bg-primary animate-pulse"></span>}
+                                                            <div className="size-10 rounded-xl bg-[#191C1F] flex items-center justify-center shrink-0 shadow-md">
+                                                                <span className="text-white font-black text-xl leading-none" style={{ fontFamily: 'sans-serif', letterSpacing: '-0.05em' }}>R</span>
                                                             </div>
-                                                            <div>
-                                                                <span className="block text-[10px] font-black text-text-primary uppercase tracking-tight">Bank Transfer</span>
-                                                                <span className="block text-[8px] text-emerald-500 font-bold tracking-tight">Zero Additional Fees</span>
+                                                            <div className="flex-1 min-w-0">
+                                                                <span className="block text-[11px] font-black text-text-primary uppercase tracking-tight">Revolut Pay</span>
+                                                                <span className="block text-[9px] text-text-muted font-bold mt-0.5">Fast · Secure · No card details needed</span>
                                                             </div>
+                                                            {paymentMethod === 'revolut' && <span className="size-2.5 rounded-full bg-[#191C1F] animate-pulse shrink-0"></span>}
+                                                        </button>
+                                                        {/* Bank Transfer */}
+                                                        <button
+                                                            onClick={() => setPaymentMethod('bank_transfer')}
+                                                            className={`w-full p-4 rounded-2xl border-2 text-left transition-all flex items-center gap-4 ${paymentMethod === 'bank_transfer' ? 'border-primary bg-primary/10' : 'border-border bg-surface-2/30 hover:border-primary/50'}`}
+                                                        >
+                                                            <div className="size-10 rounded-xl bg-surface-2 border border-border flex items-center justify-center shrink-0">
+                                                                <span className="material-symbols-outlined notranslate text-primary text-xl">account_balance</span>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <span className="block text-[11px] font-black text-text-primary uppercase tracking-tight">Bank Transfer (SEPA)</span>
+                                                                <span className="block text-[9px] text-text-muted font-bold mt-0.5">Processing time 1–3 business days</span>
+                                                            </div>
+                                                            {paymentMethod === 'bank_transfer' && <span className="size-2.5 rounded-full bg-primary animate-pulse shrink-0"></span>}
                                                         </button>
                                                     </div>
                                                 </div>
                                             )}
-                                            
+
                                             <p className="text-[9px] text-text-muted/60 font-medium italic text-center max-w-[200px] mx-auto">
                                                 Prices include Taxes and VAT as per Spanish regulations.
                                             </p>
@@ -1217,23 +1372,13 @@ export default function QuotePublicView() {
                                                             {isLastMinute ? 'Full Payment (Last Minute Booking)' : '1st Payment (Confirm Booking)'}
                                                         </span>
                                                         <span className="text-[8px] text-text-muted font-bold uppercase tracking-widest">
-                                                            {isLastMinute ? 'Required for stays within 7 weeks' : 'Due Today'}
+                                                            {isLastMinute ? 'Required for stays within 6 weeks' : 'Due Today'}
                                                         </span>
                                                     </div>
-                                                    <span className="font-black text-primary text-xl">€{upfront.toLocaleString()}</span>
+                                                    <span className="font-black text-primary text-xl">
+                                                        €{Math.round(upfront).toLocaleString()}
+                                                    </span>
                                                 </div>
-                                                {paymentMethod === 'card' && !quote.deposit_paid && (
-                                                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-primary/10">
-                                                        <span className="text-text-muted font-bold">Credit Card Fee (2%)</span>
-                                                        <span className="font-bold text-text-primary">€{(upfront * 0.02).toLocaleString()}</span>
-                                                    </div>
-                                                )}
-                                                {paymentMethod === 'card' && !quote.deposit_paid && (
-                                                    <div className="flex items-center justify-between pt-1">
-                                                        <span className="text-[10px] font-black text-text-primary uppercase">Total Due Today</span>
-                                                        <span className="font-black text-primary text-xl">€{(upfront * 1.02).toLocaleString()}</span>
-                                                    </div>
-                                                )}
                                             </div>
                                             {/* Step 2: Final Balance */}
                                             {!isLastMinute && (
@@ -1244,9 +1389,9 @@ export default function QuotePublicView() {
                                                             Due {(() => {
                                                                 const checkIn = new Date(quote.check_in);
                                                                 const due = new Date(checkIn);
-                                                                due.setDate(due.getDate() - 30);
+                                                                due.setDate(due.getDate() - 42);
                                                                 return due.toLocaleDateString();
-                                                            })()} (30 days before stay)
+                                                            })()} (6 weeks before stay)
                                                         </span>
                                                     </div>
                                                     <span className="font-bold text-text-secondary text-lg">€{(total - upfront).toLocaleString()}</span>
@@ -1265,7 +1410,7 @@ export default function QuotePublicView() {
 
                                     <div className="text-center pt-6">
                                         <p className="text-3xl font-black text-primary mb-4">
-                                             €{paymentMethod === 'card' && !quote.deposit_paid ? (parseFloat(quote.final_price) + (upfront * 0.02)).toLocaleString() : parseFloat(quote.final_price).toLocaleString()}
+                                            €{parseFloat(quote.final_price).toLocaleString()}
                                         </p>
                                         <p className="text-[10px] font-black text-text-muted uppercase tracking-[0.2em] -mt-2 mb-6">Total Reservation Value</p>
                                         

@@ -1,6 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import {
+    uploadVillaPhoto,
+    deleteVillaPhotoFromStorage,
+    validatePhoto,
+    ALLOWED_MIME,
+    MAX_SIZE_MB,
+} from '../lib/villaPhotoUpload';
+import GpsMapPicker from './GpsMapPicker';
+import SeasonalPricingCalendar from './SeasonalPricingCalendar';
 
 const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = false }) => (
     <div className={fullWidth ? 'col-span-2' : ''}>
@@ -24,7 +34,7 @@ const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = fa
 );
 
 export default function VillaEditModal({ villa, onClose, onSaved }) {
-    const { role, user } = useAuth();
+    const { role, user, agentData } = useAuth();
     const [owners, setOwners] = useState([]);
     const [form, setForm] = useState({
         villa_name: villa.villa_name || '',
@@ -49,16 +59,56 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
         features: villa.features || [],
         owner_id: villa.owner_id || '',
         ses_establishment_code: villa.ses_establishment_code || '',
+        is_active: villa.is_active !== false, // default true
+        editor_markup_percent: villa.editor_markup_percent ?? 0,
     });
     const [newFeature, setNewFeature] = useState('');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
 
+    // Photos state: loaded rows from DB + pending local files added in this session
+    const [photos, setPhotos] = useState([]);
+    const [pendingFiles, setPendingFiles] = useState([]); // { id, file, previewUrl }
+    const [deletedPhotoIds, setDeletedPhotoIds] = useState([]); // invenio_photos.id list
+    const [photoError, setPhotoError] = useState(null);
+    const [uploadProgress, setUploadProgress] = useState(null); // { done, total }
+
+    // Seasonal rates (saved + pending for unsaved villa)
+    const [seasonalRates, setSeasonalRates] = useState([]);
+    const [pendingRates, setPendingRates] = useState([]);
+
+    const RENTAL_TYPE_DEFAULTS = {
+        daily:    { enabled: true,  commission_pct: 15, platform_retention_pct: 33 },
+        monthly:  { enabled: false, commission_pct: 10, platform_retention_pct: 30 },
+        seasonal: { enabled: false, commission_pct: 12, platform_retention_pct: 30 },
+        annual:   { enabled: false, commission_pct:  8, platform_retention_pct: 25 },
+    };
+    const [rentalTypeConfigs, setRentalTypeConfigs] = useState(() => {
+        const saved = villa.rental_type_configs || {};
+        const merged = {};
+        for (const t of Object.keys(RENTAL_TYPE_DEFAULTS)) {
+            merged[t] = { ...RENTAL_TYPE_DEFAULTS[t], ...(saved[t] || {}) };
+        }
+        return merged;
+    });
+
+    const isManual = (villa.source || form.__source) === 'manual' || !villa.v_uuid;
+
     useEffect(() => {
         if (role === 'admin' || role === 'super_admin' || role === 'editor') {
             fetchOwners();
         }
-    }, [role]);
+        if (villa.v_uuid) {
+            fetchPhotos();
+            fetchSeasonalRates();
+        }
+    }, [role, villa.v_uuid]);
+
+    useEffect(() => {
+        return () => {
+            pendingFiles.forEach(p => URL.revokeObjectURL(p.previewUrl));
+        };
+    }, [pendingFiles]);
 
     const fetchOwners = async () => {
         try {
@@ -66,34 +116,139 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 .from('owners')
                 .select('id, name')
                 .eq('is_active', true);
-            
-            if (role === 'agent') {
-                // Get agent profile id
-                const { data: agentData } = await supabase
-                    .from('agents')
-                    .select('id')
-                    .eq('user_id', user.id)
-                    .single();
-                
-                if (agentData) {
-                    query = query.eq('agent_id', agentData.id);
-                } else {
-                    setOwners([]);
-                    return;
-                }
+
+            if (role === 'agent' || role === 'editor') {
+                const agentId = agentData?.id || user.id;
+                query = query.eq('agent_id', agentId);
             }
 
             const { data, error } = await query.order('name');
-            
-            if (!error && data) {
-                setOwners(data);
-            }
+            if (!error && data) setOwners(data);
         } catch (err) {
-            console.error("Fetch owners error:", err);
+            console.error('Fetch owners error:', err);
         }
     };
 
+    const fetchPhotos = async () => {
+        const { data, error } = await supabase
+            .from('invenio_photos')
+            .select('id, url, thumbnail_url, sort_order, storage_path, caption')
+            .eq('v_uuid', villa.v_uuid)
+            .order('sort_order', { ascending: true });
+        if (!error && data) setPhotos(data);
+    };
+
+    const fetchSeasonalRates = async () => {
+        const { data, error } = await supabase
+            .from('invenio_seasonal_prices')
+            .select('*')
+            .eq('v_uuid', villa.v_uuid)
+            .order('start_date', { ascending: true });
+        if (!error && data) setSeasonalRates(data);
+    };
+
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+
+    // Dropzone
+    const onDrop = useCallback((accepted, rejected) => {
+        setPhotoError(null);
+        if (rejected && rejected.length) {
+            setPhotoError(rejected.map(r => `${r.file.name}: ${r.errors.map(e => e.message).join(', ')}`).join(' | '));
+        }
+        const valid = [];
+        for (const f of accepted) {
+            const v = validatePhoto(f);
+            if (v) {
+                setPhotoError(prev => (prev ? prev + ' | ' : '') + v);
+            } else {
+                valid.push({
+                    id: `pending_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    file: f,
+                    previewUrl: URL.createObjectURL(f),
+                });
+            }
+        }
+        if (valid.length) setPendingFiles(prev => [...prev, ...valid]);
+    }, []);
+
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+        onDrop,
+        accept: ALLOWED_MIME.reduce((acc, t) => ({ ...acc, [t]: [] }), {}),
+        multiple: true,
+        maxSize: MAX_SIZE_MB * 1024 * 1024,
+    });
+
+    const removePendingFile = id => {
+        setPendingFiles(prev => {
+            const target = prev.find(p => p.id === id);
+            if (target) URL.revokeObjectURL(target.previewUrl);
+            return prev.filter(p => p.id !== id);
+        });
+    };
+
+    const markPhotoDeleted = photoId => {
+        setPhotos(prev => prev.filter(p => p.id !== photoId));
+        setDeletedPhotoIds(prev => [...prev, photoId]);
+    };
+
+    const setAsCover = photoId => {
+        setPhotos(prev => {
+            const target = prev.find(p => p.id === photoId);
+            if (!target) return prev;
+            const others = prev.filter(p => p.id !== photoId);
+            const reordered = [target, ...others].map((p, idx) => ({ ...p, sort_order: idx }));
+            return reordered;
+        });
+    };
+
+    const movePhoto = (index, direction) => {
+        setPhotos(prev => {
+            const next = [...prev];
+            const newIdx = index + direction;
+            if (newIdx < 0 || newIdx >= next.length) return prev;
+            [next[index], next[newIdx]] = [next[newIdx], next[index]];
+            return next.map((p, idx) => ({ ...p, sort_order: idx }));
+        });
+    };
+
+    const handleAddRate = async (rateObj) => {
+        const payload = {
+            start_date: rateObj.start_date,
+            end_date: rateObj.end_date,
+            amount: parseFloat(rateObj.amount),
+            minimum_nights: parseInt(rateObj.minimum_nights, 10) || 7,
+            allowed_checkin_days: rateObj.allowed_checkin_days || 'Flexible check in days',
+        };
+        if (!villa.v_uuid) {
+            const queued = { ...payload, id: `pending_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, _pending: true };
+            setPendingRates(prev => [...prev, queued].sort((a, b) => new Date(a.start_date) - new Date(b.start_date)));
+            return;
+        }
+        const { data, error } = await supabase
+            .from('invenio_seasonal_prices')
+            .insert([{ v_uuid: villa.v_uuid, ...payload }])
+            .select()
+            .single();
+        if (error) { alert('Error adding rate: ' + error.message); return; }
+        setSeasonalRates(prev => [...prev, data].sort((a, b) => new Date(a.start_date) - new Date(b.start_date)));
+    };
+
+    const handleDeleteRate = async (rate) => {
+        if (!window.confirm('Delete this rate?')) return;
+        if (rate._pending || String(rate.id).startsWith('pending_')) {
+            setPendingRates(prev => prev.filter(r => r.id !== rate.id));
+            return;
+        }
+        const { error } = await supabase.from('invenio_seasonal_prices').delete().eq('id', rate.id);
+        if (error) { alert('Error: ' + error.message); return; }
+        setSeasonalRates(prev => prev.filter(r => r.id !== rate.id));
+    };
+
+    const cover = useMemo(() => {
+        if (photos.length) return photos[0];
+        if (pendingFiles.length) return { previewUrl: pendingFiles[0].previewUrl };
+        return null;
+    }, [photos, pendingFiles]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -101,6 +256,25 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
         try {
             if (!form.license || form.license.trim() === '') {
                 throw new Error('Tourist license number is mandatory according to Balearic regulations.');
+            }
+
+            const isNew = !villa.v_uuid;
+            const canAdd = role === 'admin' || role === 'super_admin' || role === 'editor';
+            const isAdmin = role === 'admin' || role === 'super_admin';
+            const isOwnerOfVilla = role === 'owner' && villa.owner_id === user?.id;
+            const isEditorOfVilla = role === 'editor' && villa.created_by === user?.id;
+
+            if (isNew && !canAdd) {
+                throw new Error('Permission denied: editor role required to add villas.');
+            }
+            if (!isNew && !isAdmin && !isOwnerOfVilla && !isEditorOfVilla) {
+                throw new Error('Permission denied: you can only edit villas you created.');
+            }
+
+            // Derive thumbnail_url from cover photo if we have photos in state; otherwise keep form value.
+            let derivedThumbnail = form.thumbnail_url;
+            if (photos.length > 0) {
+                derivedThumbnail = photos[0].url;
             }
 
             const villaData = {
@@ -119,51 +293,140 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 allow_shortstays: form.allow_shortstays,
                 minimum_nights: parseInt(form.minimum_nights) || 7,
                 allowed_checkin_days: form.allowed_checkin_days,
-                thumbnail_url: form.thumbnail_url,
+                thumbnail_url: derivedThumbnail,
                 license: form.license,
                 gps: form.gps,
                 deposit: parseFloat(form.deposit) || 0,
                 features: form.features,
                 owner_id: role === 'owner' ? user.id : (form.owner_id || null),
                 ses_establishment_code: form.ses_establishment_code,
-                created_by: villa.v_uuid ? villa.created_by : user.id
+                is_active: form.is_active,
+                created_by: isNew ? user.id : villa.created_by,
+                editor_markup_percent: parseFloat(form.editor_markup_percent) || 0,
+                rental_type_configs: rentalTypeConfigs,
             };
 
-            let result;
-            if (villa.v_uuid) {
-                // Permission Check: Only admin/super_admin (or the villa owner themselves) can modify existing records
-                const isAdmin = role === 'admin' || role === 'super_admin';
-                const isOwner = role === 'owner' && villa.owner_id === user?.id;
+            if (isNew) {
+                villaData.source = villa.source || 'manual';
+            }
 
-                if (!isAdmin && !isOwner) {
-                    throw new Error('Permission denied: Agents and editors are allowed to add new villas, but only administrators can modify existing ones.');
+            let savedVilla;
+            if (isNew) {
+                const { data, error: insErr } = await supabase
+                    .from('invenio_properties')
+                    .insert([villaData])
+                    .select()
+                    .single();
+                if (insErr) throw insErr;
+                savedVilla = data;
+
+                if (pendingRates.length > 0) {
+                    const rows = pendingRates.map(r => ({
+                        v_uuid: savedVilla.v_uuid,
+                        start_date: r.start_date,
+                        end_date: r.end_date,
+                        amount: r.amount,
+                        minimum_nights: r.minimum_nights,
+                        allowed_checkin_days: r.allowed_checkin_days,
+                    }));
+                    const { data: inserted, error: ratesErr } = await supabase
+                        .from('invenio_seasonal_prices')
+                        .insert(rows)
+                        .select();
+                    if (ratesErr) console.error('Failed to flush seasonal rates:', ratesErr);
+                    else if (inserted) {
+                        setSeasonalRates(prev => [...prev, ...inserted].sort((a, b) => new Date(a.start_date) - new Date(b.start_date)));
+                        setPendingRates([]);
+                    }
                 }
-
-                result = await supabase
+            } else {
+                const { data, error: updErr } = await supabase
                     .from('invenio_properties')
                     .update(villaData)
                     .eq('v_uuid', villa.v_uuid)
                     .select()
                     .single();
-            } else {
-                // Permission Check: Admins and users with specifically assigned 'editor' role can add new villas
-                const canAdd = role === 'admin' || role === 'super_admin' || role === 'editor';
-
-                if (!canAdd) {
-                    throw new Error('Permission denied: You need the "editor" role to add new villas.');
-                }
-
-                result = await supabase
-                    .from('invenio_properties')
-                    .insert([villaData])
-                    .select()
-                    .single();
+                if (updErr) throw updErr;
+                savedVilla = data;
             }
 
-            if (result.error) throw result.error;
-            onSaved(result.data);
+            const vUuid = savedVilla.v_uuid;
+
+            // 1) Apply deleted photos: remove storage objects + rows
+            if (deletedPhotoIds.length) {
+                const { data: toDelete } = await supabase
+                    .from('invenio_photos')
+                    .select('id, storage_path')
+                    .in('id', deletedPhotoIds);
+                if (toDelete && toDelete.length) {
+                    const paths = toDelete.map(p => p.storage_path).filter(Boolean);
+                    if (paths.length) {
+                        await supabase.storage.from('villa-photos').remove(paths);
+                    }
+                }
+                await supabase.from('invenio_photos').delete().in('id', deletedPhotoIds);
+            }
+
+            // 2) Upload pending files, insert rows
+            let nextSortOrder = photos.length;
+            const insertedPhotos = [];
+            if (pendingFiles.length > 0) {
+                setUploadProgress({ done: 0, total: pendingFiles.length });
+            }
+            for (let i = 0; i < pendingFiles.length; i++) {
+                const pf = pendingFiles[i];
+                const { url, storage_path } = await uploadVillaPhoto(pf.file, vUuid);
+                const row = {
+                    v_uuid: vUuid,
+                    url,
+                    thumbnail_url: url,
+                    sort_order: nextSortOrder++,
+                    storage_path,
+                };
+                const { data: inserted, error: photoInsErr } = await supabase
+                    .from('invenio_photos')
+                    .insert([row])
+                    .select()
+                    .single();
+                if (photoInsErr) {
+                    await deleteVillaPhotoFromStorage(storage_path);
+                    throw photoInsErr;
+                }
+                insertedPhotos.push(inserted);
+                setUploadProgress({ done: i + 1, total: pendingFiles.length });
+            }
+
+            // 3) Persist reordering for existing photos (sort_order may have changed via setAsCover / movePhoto)
+            for (const p of photos) {
+                await supabase
+                    .from('invenio_photos')
+                    .update({ sort_order: p.sort_order })
+                    .eq('id', p.id);
+            }
+
+            // 4) If cover changed, mirror first photo URL into properties.thumbnail_url
+            const finalPhotos = [...photos, ...insertedPhotos].sort((a, b) => a.sort_order - b.sort_order);
+            if (finalPhotos.length && finalPhotos[0].url !== savedVilla.thumbnail_url) {
+                const { data: updated } = await supabase
+                    .from('invenio_properties')
+                    .update({ thumbnail_url: finalPhotos[0].url })
+                    .eq('v_uuid', vUuid)
+                    .select()
+                    .single();
+                if (updated) savedVilla = updated;
+            }
+
+            // Reset session state
+            pendingFiles.forEach(p => URL.revokeObjectURL(p.previewUrl));
+            setPendingFiles([]);
+            setDeletedPhotoIds([]);
+            setPhotos(finalPhotos);
+            setUploadProgress(null);
+
+            onSaved(savedVilla);
         } catch (err) {
-            setError(err.message);
+            setError(err.message || String(err));
+            setUploadProgress(null);
         } finally {
             setSaving(false);
         }
@@ -171,19 +434,22 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-            <div className="bg-surface border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="bg-surface border border-border rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
                 {/* Header */}
                 <div className="flex items-center gap-4 p-6 border-b border-border">
                     <div className="w-16 h-16 rounded-xl overflow-hidden bg-surface-2 border border-border flex-shrink-0">
-                        <img 
-                            src={form.thumbnail_url || 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=400&q=60'} 
-                            className="w-full h-full object-cover" 
-                            alt="" 
+                        <img
+                            src={(cover && (cover.url || cover.previewUrl)) || form.thumbnail_url || 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=400&q=60'}
+                            className="w-full h-full object-cover"
+                            alt=""
                         />
                     </div>
                     <div className="flex-1 min-w-0">
                         <h2 className="text-lg font-bold text-text-primary truncate">{villa.v_uuid ? 'Edit Villa' : 'Add New Villa'}</h2>
-                        <p className="text-xs text-text-muted mt-0.5 truncate">{form.villa_name || 'Unnamed Property'}</p>
+                        <p className="text-xs text-text-muted mt-0.5 truncate">
+                            {form.villa_name || 'Unnamed Property'}
+                            {isManual && <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-bold uppercase tracking-widest">Manual</span>}
+                        </p>
                     </div>
                     <button
                         onClick={onClose}
@@ -201,25 +467,27 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         </div>
                     )}
 
-                    {/* Identità */}
+                    {/* Identity */}
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Identity & Content</p>
                         <div className="grid grid-cols-2 gap-4">
                             <Field label="Villa Name" field="villa_name" form={form} handleChange={handleChange} fullWidth />
                             <Field label="Tagline" field="tagline" form={form} handleChange={handleChange} fullWidth />
-                            <Field label="Main Photo URL" field="thumbnail_url" form={form} handleChange={handleChange} fullWidth />
-                            <Field label="License Number" field="license" form={form} handleChange={handleChange} />
-                            <Field label="GPS Coordinates" field="gps" form={form} handleChange={handleChange} />
+                            <Field label="License Number" field="license" form={form} handleChange={handleChange} fullWidth />
+                            <div className="col-span-2">
+                                <label className="block text-xs text-text-muted mb-1.5 font-medium">GPS Coordinates</label>
+                                <GpsMapPicker value={form.gps} onChange={v => handleChange('gps', v)} />
+                            </div>
                             {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
                                 <div className="col-span-2">
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">
-                                        {role === 'agent' ? 'Associated Owner (Contact)' : 'Villa Owner'}
+                                        {(role === 'agent' || role === 'editor') ? 'Associated Owner (Contact)' : 'Villa Owner'}
                                     </label>
-                                    <select 
+                                    <select
                                         className="input-theme w-full"
                                         value={form.owner_id}
                                         onChange={e => handleChange('owner_id', e.target.value)}
-                                        required={role === 'agent'}
+                                        required={role === 'agent' || role === 'editor'}
                                     >
                                         <option value="">Select Owner...</option>
                                         {owners.map(o => (
@@ -227,13 +495,211 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                                         ))}
                                     </select>
                                     <p className="text-[10px] text-text-muted mt-2 italic">
-                                        {role === 'agent' 
+                                        {(role === 'agent' || role === 'editor')
                                             ? 'You can only select owners that you manage as direct contacts.'
                                             : 'Note: Owners must be registered as users in the management section first.'}
                                     </p>
                                 </div>
                             )}
+
+                            {/* Visibility Status (Admin only) */}
+                            {(role === 'super_admin') && (
+                                <div className="col-span-2">
+                                    <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all duration-300 ${
+                                        form.is_active
+                                            ? 'border-emerald-500/40 bg-emerald-500/5'
+                                            : 'border-red-500/40 bg-red-500/5'
+                                    }`}>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleChange('is_active', !form.is_active)}
+                                            className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-300 focus:outline-none flex-shrink-0 ${
+                                                form.is_active ? 'bg-emerald-500' : 'bg-red-400'
+                                            }`}
+                                        >
+                                            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
+                                                form.is_active ? 'translate-x-6' : 'translate-x-1'
+                                            }`} />
+                                        </button>
+                                        <div className="flex-1">
+                                            <p className={`text-sm font-bold ${
+                                                form.is_active ? 'text-emerald-500' : 'text-red-400'
+                                            }`}>
+                                                {form.is_active ? '✓ Villa Active — Visible to public' : '✕ Villa Disabled — Hidden from public'}
+                                            </p>
+                                            <p className="text-[10px] text-text-muted mt-0.5">
+                                                {form.is_active
+                                                    ? 'Appears in searches and can be included in agent quotes.'
+                                                    : 'Hidden from catalog. Not visible to agents or clients.'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
+                    </div>
+
+                    {/* Photos */}
+                    <div>
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary">Photos</p>
+                                {(photos.length + pendingFiles.length) > 0 && (
+                                    <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-primary/15 text-primary text-[10px] font-bold">
+                                        {photos.length + pendingFiles.length}
+                                    </span>
+                                )}
+                            </div>
+                            <p className="text-[10px] text-text-muted italic">First photo is the cover · Max {MAX_SIZE_MB} MB</p>
+                        </div>
+
+                        {/* Upload progress bar */}
+                        {uploadProgress && (
+                            <div className="mb-3">
+                                <div className="flex items-center justify-between text-[10px] text-text-muted mb-1">
+                                    <span>Uploading photos...</span>
+                                    <span>{uploadProgress.done} / {uploadProgress.total}</span>
+                                </div>
+                                <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
+                                    <div
+                                        className="h-full bg-primary rounded-full transition-all duration-300"
+                                        style={{ width: `${(uploadProgress.done / uploadProgress.total) * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        <div
+                            {...getRootProps()}
+                            className={`border-2 border-dashed rounded-xl transition-all ${
+                                isDragActive
+                                    ? 'border-primary bg-primary/10 scale-[1.01]'
+                                    : 'border-border hover:border-primary/50 hover:bg-surface-2'
+                            } ${
+                                (photos.length + pendingFiles.length) === 0 ? 'p-10' : 'p-4'
+                            } text-center cursor-pointer`}
+                        >
+                            <input {...getInputProps()} />
+                            {isDragActive ? (
+                                <>
+                                    <span className="material-symbols-outlined notranslate text-4xl text-primary animate-bounce">file_upload</span>
+                                    <p className="text-sm font-semibold text-primary mt-2">Drop photos here</p>
+                                </>
+                            ) : (
+                                <>
+                                    <span className={`material-symbols-outlined notranslate text-text-muted ${
+                                        (photos.length + pendingFiles.length) === 0 ? 'text-5xl' : 'text-2xl'
+                                    }`}>add_photo_alternate</span>
+                                    <p className={`text-text-primary font-medium mt-1 ${
+                                        (photos.length + pendingFiles.length) === 0 ? 'text-sm' : 'text-xs'
+                                    }`}>
+                                        {(photos.length + pendingFiles.length) === 0
+                                            ? 'Drag photos here, or click to select'
+                                            : 'Add more photos'}
+                                    </p>
+                                    {(photos.length + pendingFiles.length) === 0 && (
+                                        <p className="text-[10px] text-text-muted mt-1">JPG, PNG, WEBP · Max {MAX_SIZE_MB} MB per file</p>
+                                    )}
+                                </>
+                            )}
+                        </div>
+
+                        {photoError && (
+                            <div className="mt-2 bg-red-500/10 border border-red-500/30 text-red-400 p-2 rounded text-xs flex items-start gap-2">
+                                <span className="material-symbols-outlined notranslate text-[14px] mt-0.5 flex-shrink-0">error</span>
+                                <span>{photoError}</span>
+                            </div>
+                        )}
+
+                        {(photos.length > 0 || pendingFiles.length > 0) && (
+                            <div className="grid grid-cols-3 gap-3 mt-4">
+                                {photos.map((p, idx) => (
+                                    <div
+                                        key={p.id}
+                                        className={`relative group rounded-xl overflow-hidden bg-surface-2 aspect-video ${
+                                            idx === 0
+                                                ? 'border-2 border-primary shadow-lg shadow-primary/20'
+                                                : 'border border-border'
+                                        }`}
+                                    >
+                                        <img src={p.thumbnail_url || p.url} alt="" className="w-full h-full object-cover" />
+                                        {idx === 0 && (
+                                            <span className="absolute top-2 left-2 px-2 py-0.5 bg-primary text-white text-[9px] font-bold uppercase rounded-full shadow">
+                                                ★ Cover
+                                            </span>
+                                        )}
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-200">
+                                            <div className="absolute bottom-2 left-0 right-0 flex items-center justify-center gap-1.5">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => movePhoto(idx, -1)}
+                                                    disabled={idx === 0}
+                                                    className="p-1.5 bg-white/20 backdrop-blur-sm text-white hover:bg-primary hover:text-white rounded-lg disabled:opacity-30 transition-all"
+                                                    title="Move left"
+                                                >
+                                                    <span className="material-symbols-outlined notranslate text-[16px]">arrow_back</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => movePhoto(idx, 1)}
+                                                    disabled={idx === photos.length - 1}
+                                                    className="p-1.5 bg-white/20 backdrop-blur-sm text-white hover:bg-primary hover:text-white rounded-lg disabled:opacity-30 transition-all"
+                                                    title="Move right"
+                                                >
+                                                    <span className="material-symbols-outlined notranslate text-[16px]">arrow_forward</span>
+                                                </button>
+                                                {idx !== 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setAsCover(p.id)}
+                                                        className="p-1.5 bg-white/20 backdrop-blur-sm text-white hover:bg-amber-500 hover:text-white rounded-lg transition-all"
+                                                        title="Set as cover"
+                                                    >
+                                                        <span className="material-symbols-outlined notranslate text-[16px]">star</span>
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => markPhotoDeleted(p.id)}
+                                                    className="p-1.5 bg-white/20 backdrop-blur-sm text-white hover:bg-red-500 hover:text-white rounded-lg transition-all"
+                                                    title="Delete photo"
+                                                >
+                                                    <span className="material-symbols-outlined notranslate text-[16px]">delete</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {pendingFiles.map(pf => (
+                                    <div key={pf.id} className="relative group rounded-xl overflow-hidden border-2 border-dashed border-amber-500/60 bg-surface-2 aspect-video">
+                                        <img src={pf.previewUrl} alt="" className="w-full h-full object-cover opacity-80" />
+                                        <span className="absolute top-2 left-2 px-2 py-0.5 bg-amber-500 text-black text-[9px] font-bold uppercase rounded-full shadow">
+                                            ⏳ Pending upload
+                                        </span>
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-200">
+                                            <div className="absolute bottom-2 left-0 right-0 flex items-center justify-center">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removePendingFile(pf.id)}
+                                                    className="p-1.5 bg-red-500/80 backdrop-blur-sm text-white hover:bg-red-500 rounded-lg transition-all"
+                                                    title="Remove"
+                                                >
+                                                    <span className="material-symbols-outlined notranslate text-[16px]">delete</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {pendingFiles.length > 0 && (
+                            <p className="mt-2 text-[10px] text-amber-500/80 italic flex items-center gap-1">
+                                <span className="material-symbols-outlined notranslate text-[12px]">info</span>
+                                {pendingFiles.length} photos pending upload. Click "Save Changes" to confirm.
+                            </p>
+                        )}
                     </div>
 
                     {/* Location */}
@@ -264,6 +730,133 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             <Field label="Cleaning" field="cleaning_charge" type="number" form={form} handleChange={handleChange} />
                             <Field label="Deposit" field="deposit" type="number" form={form} handleChange={handleChange} />
                         </div>
+                        {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                            <div className="mt-4 p-3 bg-surface-2/50 border border-primary/20 rounded-xl">
+                                <label className="block text-xs text-primary font-bold mb-1.5">Editor Commission % (Capturer)</label>
+                                <input
+                                    type="number"
+                                    step="0.5"
+                                    min="0"
+                                    max="100"
+                                    className="input-theme w-full"
+                                    value={form.editor_markup_percent}
+                                    onChange={e => handleChange('editor_markup_percent', e.target.value)}
+                                />
+                                <p className="text-[10px] text-text-muted mt-1.5 italic">
+                                    Your commission on this villa. Subtracted from owner payout when automatic split is active.
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Rental Types & Commission */}
+                        {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                            <div className="mt-4 p-3 bg-surface-2/50 border border-primary/20 rounded-xl space-y-2">
+                                <p className="text-xs text-primary font-bold uppercase tracking-widest mb-2">Rental Types & Commission</p>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                        <thead>
+                                            <tr className="text-text-muted text-[9px] uppercase tracking-widest">
+                                                <th className="text-left pb-2 font-semibold w-28">Type</th>
+                                                <th className="text-center pb-2 font-semibold w-16">Enabled</th>
+                                                <th className="text-right pb-2 font-semibold">Commission %</th>
+                                                <th className="text-right pb-2 font-semibold">Platform %</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[
+                                                { key: 'daily',    label: 'Daily / Nightly' },
+                                                { key: 'monthly',  label: 'Monthly' },
+                                                { key: 'seasonal', label: 'Seasonal' },
+                                                { key: 'annual',   label: 'Annual' },
+                                            ].map(({ key, label }) => {
+                                                const cfg = rentalTypeConfigs[key] || {};
+                                                const isLocked = key === 'daily';
+                                                return (
+                                                    <tr key={key} className={`border-t border-border/50 ${!cfg.enabled && !isLocked ? 'opacity-50' : ''}`}>
+                                                        <td className="py-1.5 pr-2 font-medium text-text-primary">{label}</td>
+                                                        <td className="py-1.5 text-center">
+                                                            {isLocked ? (
+                                                                <span className="material-symbols-outlined notranslate text-primary text-[14px]">lock</span>
+                                                            ) : (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setRentalTypeConfigs(prev => ({
+                                                                        ...prev,
+                                                                        [key]: { ...prev[key], enabled: !prev[key].enabled }
+                                                                    }))}
+                                                                    className={`w-8 h-4 rounded-full transition-colors ${cfg.enabled ? 'bg-primary' : 'bg-surface-2'} relative inline-flex items-center`}
+                                                                >
+                                                                    <span className={`absolute w-3 h-3 bg-white rounded-full shadow transition-transform ${cfg.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                                                </button>
+                                                            )}
+                                                        </td>
+                                                        <td className="py-1.5 text-right pl-2">
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                max="100"
+                                                                step="0.5"
+                                                                disabled={!cfg.enabled && !isLocked}
+                                                                className="input-theme w-16 text-right text-xs"
+                                                                value={cfg.commission_pct ?? ''}
+                                                                onChange={e => setRentalTypeConfigs(prev => ({
+                                                                    ...prev,
+                                                                    [key]: { ...prev[key], commission_pct: parseFloat(e.target.value) || 0 }
+                                                                }))}
+                                                            />
+                                                            <span className="ml-0.5 text-text-muted">%</span>
+                                                        </td>
+                                                        <td className="py-1.5 text-right pl-2">
+                                                            {role === 'super_admin' ? (
+                                                                <>
+                                                                    <input
+                                                                        type="number"
+                                                                        min="0"
+                                                                        max="100"
+                                                                        step="0.5"
+                                                                        disabled={!cfg.enabled && !isLocked}
+                                                                        className="input-theme w-16 text-right text-xs"
+                                                                        value={cfg.platform_retention_pct ?? ''}
+                                                                        onChange={e => setRentalTypeConfigs(prev => ({
+                                                                            ...prev,
+                                                                            [key]: { ...prev[key], platform_retention_pct: parseFloat(e.target.value) || 0 }
+                                                                        }))}
+                                                                    />
+                                                                    <span className="ml-0.5 text-text-muted">%</span>
+                                                                </>
+                                                            ) : (
+                                                                <span className="text-text-muted font-mono text-xs">{cfg.platform_retention_pct ?? 33}%</span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <p className="text-[10px] text-text-muted italic mt-1">
+                                    Commission % added to supplier base. Platform % = platform's share of that commission{role !== 'super_admin' ? ' — set by Super Admin only' : ''}.
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Seasonal Pricing — calendar range picker */}
+                    <div>
+                        <div className="flex items-center justify-between mb-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-widest text-primary">Seasonal Pricing (calendar)</p>
+                            {!villa.v_uuid && pendingRates.length > 0 && (
+                                <span className="text-[10px] text-amber-400 font-black uppercase tracking-widest">
+                                    {pendingRates.length} rates pending villa save
+                                </span>
+                            )}
+                        </div>
+                        <SeasonalPricingCalendar
+                            rates={[...seasonalRates, ...pendingRates]}
+                            onAddRate={handleAddRate}
+                            onDeleteRate={handleDeleteRate}
+                            monthsAhead={12}
+                        />
                     </div>
 
                     {/* Booking Policies */}
@@ -272,7 +865,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         <div className="grid grid-cols-3 gap-4">
                             <div>
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">Allow Short Stays</label>
-                                <select 
+                                <select
                                     className="input-theme w-full"
                                     value={form.allow_shortstays}
                                     onChange={e => handleChange('allow_shortstays', e.target.value)}
@@ -284,7 +877,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             <Field label="Minimum Nights" field="minimum_nights" type="number" form={form} handleChange={handleChange} />
                             <div>
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">Check-in Days</label>
-                                <select 
+                                <select
                                     className="input-theme w-full"
                                     value={form.allowed_checkin_days}
                                     onChange={e => handleChange('allowed_checkin_days', e.target.value)}
@@ -315,7 +908,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             {form.features.map(f => (
                                 <span key={f} className="flex items-center gap-1.5 px-3 py-1 bg-primary/10 border border-primary/20 rounded-full text-[11px] font-bold text-primary animate-in zoom-in duration-200">
                                     {f}
-                                    <button 
+                                    <button
                                         onClick={() => handleChange('features', form.features.filter(x => x !== f))}
                                         className="hover:text-text-primary transition-colors"
                                     >
@@ -325,7 +918,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             ))}
                         </div>
                         <div className="flex gap-2">
-                            <input 
+                            <input
                                 type="text"
                                 className="input-theme flex-1"
                                 placeholder="Add feature (e.g. Infinity Pool, Gym...)"
@@ -340,7 +933,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                                     }
                                 }}
                             />
-                            <button 
+                            <button
                                 onClick={() => {
                                     if (newFeature.trim() && !form.features.includes(newFeature.trim())) {
                                         handleChange('features', [...form.features, newFeature.trim()]);

@@ -55,6 +55,7 @@ export default function VillaView() {
     const [agentDetails, setAgentDetails] = useState(null);
     const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 15, ivaPercent: 10 });
     const [useStripeFee, setUseStripeFee] = useState(false);
+    const [useForexFee, setUseForexFee] = useState(false);
     const [platformMargin, setPlatformMargin] = useState(15);
     const [agentMargin, setAgentMargin] = useState(0);
     
@@ -92,7 +93,7 @@ export default function VillaView() {
         });
         
         let amount = 0;
-        if (rate) amount = parseFloat(rate.amount);
+        if (rate) amount = parseFloat(rate.amount) / 7;
         else amount = parseFloat(villa?.minimum_price || 0) / 7;
 
         if (withMarkup) {
@@ -305,27 +306,38 @@ export default function VillaView() {
         }, 0);
 
         subtotal += extraTotal;
-        const stripeFee = useStripeFee ? subtotal * 0.015 : 0;
-        
-        if (stripeFee > 0) {
-            breakdownItems.push({
-                label: 'Stripe Processing Fee (1.5%)',
-                amount: stripeFee,
-                desc: 'Secure payment gateway processing'
-            });
-        }
 
-        // VAT (IVA) - Apply only to agency services (margin + extras + stripe fee)
-        const agencyServicesTotal = (subtotal - baseTotal) + stripeFee;
+        // VAT (IVA) - Applied to agency services only (margin + extras), NOT to fees
+        const agencyServicesTotal = (subtotal - baseTotal);
         const ivaAmount = agencyServicesTotal * (globalMargins.ivaPercent / 100);
-        
+
         breakdownItems.push({
             label: `IVA (VAT) ${globalMargins.ivaPercent}%`,
             amount: ivaAmount,
             desc: 'Applied exclusively to agency services'
         });
 
-        finalPrice = Math.round(subtotal + stripeFee + ivaAmount);
+        // Fees applied on top of final price (post-IVA) — flat % of total
+        const priceBeforeFees = subtotal + ivaAmount;
+        const stripeFee = useStripeFee ? priceBeforeFees * 0.03 : 0;
+        const forexFee = useForexFee ? priceBeforeFees * 0.02 : 0;
+
+        if (stripeFee > 0) {
+            breakdownItems.push({
+                label: 'Stripe / Card Fee (3%)',
+                amount: stripeFee,
+                desc: 'Digital payment processing cost'
+            });
+        }
+        if (forexFee > 0) {
+            breakdownItems.push({
+                label: 'Currency Exchange (2%)',
+                amount: forexFee,
+                desc: 'Non-EUR currency conversion cost'
+            });
+        }
+
+        finalPrice = Math.round(priceBeforeFees + stripeFee + forexFee);
         agentProfit = Math.round(subtotal - baseTotal);
         
         return { 
@@ -631,6 +643,7 @@ export default function VillaView() {
                 agent_markup: agentMargin,
                 extra_services: extraServices,
                 stripe_fee_included: useStripeFee,
+                forex_fee_included: useForexFee,
                 final_price: finalPrice,
                 price_breakdown: breakdown,
                 is_manual_price: isManualPrice,
@@ -841,8 +854,7 @@ export default function VillaView() {
                                 <span className="material-symbols-outlined notranslate text-primary text-[24px]">map</span>
                                 Indicative Location
                             </h2>
-                            <div className="rounded-2xl overflow-hidden h-[400px] border border-border relative group">
-                                <div className="absolute inset-0 bg-primary/5 pointer-events-none group-hover:bg-transparent transition-colors z-10"></div>
+                            <div className="rounded-2xl overflow-hidden h-[500px] border border-primary/20 relative group shadow-xl">
                                 <VillaMap 
                                     locations={[{ 
                                         gps: villa.gps, 
@@ -1236,18 +1248,49 @@ export default function VillaView() {
                                         </div>
                                     </div>
                                     
+                                    {/* Fee toggles — agent must inform client of these costs */}
+                                    <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3">
+                                        <div className="flex items-center gap-2">
+                                            <span className="material-symbols-outlined notranslate text-amber-500 text-[18px]">info</span>
+                                            <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Bank Fees to Charge the Client</span>
+                                        </div>
+                                        <label className="flex items-start gap-3 cursor-pointer group">
+                                            <input
+                                                type="checkbox"
+                                                checked={useStripeFee}
+                                                onChange={e => setUseStripeFee(e.target.checked)}
+                                                className="accent-primary mt-0.5"
+                                            />
+                                            <div>
+                                                <span className="text-xs font-bold text-text-primary group-hover:text-primary transition-colors">
+                                                    Stripe / Card Fee (+3%)
+                                                </span>
+                                                <p className="text-[10px] text-text-muted mt-0.5">
+                                                    Select if the client pays with credit card or Revolut. Covers digital payment processing costs.
+                                                </p>
+                                            </div>
+                                        </label>
+                                        <label className="flex items-start gap-3 cursor-pointer group">
+                                            <input
+                                                type="checkbox"
+                                                checked={useForexFee}
+                                                onChange={e => setUseForexFee(e.target.checked)}
+                                                className="accent-primary mt-0.5"
+                                            />
+                                            <div>
+                                                <span className="text-xs font-bold text-text-primary group-hover:text-primary transition-colors">
+                                                    Currency Exchange — Non-EUR Client (+2%)
+                                                </span>
+                                                <p className="text-[10px] text-text-muted mt-0.5">
+                                                    Select if the client pays in a currency other than Euro (GBP, USD, etc.). Covers conversion costs.
+                                                </p>
+                                            </div>
+                                        </label>
+                                    </div>
+
                                     <div className="flex justify-between items-center p-4 rounded-2xl bg-primary/5 border border-primary/20">
                                         <div className="flex flex-col">
                                             <span className="text-xs font-bold text-text-muted uppercase tracking-widest">Total Quote Price</span>
-                                            <label className="flex items-center gap-2 mt-2 cursor-pointer group">
-                                                <input 
-                                                    type="checkbox" 
-                                                    className="accent-primary size-3" 
-                                                    checked={useStripeFee}
-                                                    onChange={e => setUseStripeFee(e.target.checked)}
-                                                />
-                                                <span className="text-[10px] text-text-muted font-bold uppercase group-hover:text-primary transition-colors">Add Stripe Fee (1.5%)</span>
-                                            </label>
                                         </div>
                                         <div className="text-right">
                                             <span className="text-2xl font-black text-primary block">€{calculateQuoteTotal().toLocaleString()}</span>

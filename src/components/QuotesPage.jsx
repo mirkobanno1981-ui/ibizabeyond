@@ -66,6 +66,7 @@ export default function QuotesPage() {
     const queryClient = useQueryClient();
     const [editQuote, setEditQuote] = useState(null);
     const [assignQuote, setAssignQuote] = useState(null);
+    const [bulkEditOpen, setBulkEditOpen] = useState(false);
     const [viewMode, setViewMode] = useState('list');
     const [selectedQuotes, setSelectedQuotes] = useState([]);
     const [groupByClient, setGroupByClient] = useState(true);
@@ -92,6 +93,7 @@ export default function QuotesPage() {
                     price_breakdown,
                     documenso_document_id,
                     group_details,
+                    rental_type,
                     clients(full_name, email, phone_number, dob, id_number, address_street),
                     invenio_properties(*),
                     invenio_boats(*),
@@ -720,46 +722,47 @@ export default function QuotesPage() {
                                                     </div>
                                                 </td>
                                             )}
-                                            <td className="px-5 py-4 text-text-muted text-xs whitespace-nowrap">
-                                                {q.check_in ? `${new Date(q.check_in).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} → ${new Date(q.check_out).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}` : '—'}
+                                            <td className="px-5 py-4 text-xs whitespace-nowrap">
+                                                <span className="text-text-muted">
+                                                    {q.check_in ? `${new Date(q.check_in).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} → ${new Date(q.check_out).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })}` : '—'}
+                                                </span>
+                                                {q.rental_type && q.rental_type !== 'daily' && (
+                                                    <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest bg-primary/15 text-primary">
+                                                        {q.rental_type}
+                                                    </span>
+                                                )}
                                             </td>
-                                            
-                                             {(role === 'admin' || role === 'super_admin') && (
+                                            {(role === 'admin' || role === 'super_admin') && (
                                                  <>
                                                      <td className="px-5 py-4 text-right">
                                                          <p className="font-mono text-[13px] text-text-primary">€{parseFloat(q.supplier_base_price || 0).toLocaleString()}</p>
                                                          <span className="text-[8px] text-text-muted uppercase font-black">Owner Net</span>
                                                      </td>
                                                      <td className="px-5 py-4 text-right">
-                                                         <p className="font-mono text-[13px] text-amber-500/90 font-bold">€{Math.round(parseFloat(q.supplier_base_price || 0) * (parseFloat(q.admin_markup || 0) / 100)).toLocaleString()}</p>
-                                                         <span className="text-[8px] text-amber-600/60 uppercase font-black">Platform Profit</span>
+                                                         {(() => {
+                                                             const platformItem = q.price_breakdown?.find(i => i.label?.includes('Platform'));
+                                                             const platformProfit = platformItem ? platformItem.amount : 0;
+                                                             return (
+                                                                 <>
+                                                                     <p className="font-mono text-[13px] text-amber-500/90 font-bold">€{Math.round(platformProfit).toLocaleString()}</p>
+                                                                     <span className="text-[8px] text-amber-600/60 uppercase font-black">Platform Profit</span>
+                                                                 </>
+                                                             );
+                                                         })()}
                                                      </td>
                                                  </>
                                              )}
 
                                              <td className="px-5 py-4 text-right">
                                                  {(() => {
-                                                     const base = parseFloat(q.supplier_base_price || 0);
-                                                     const adminMarkup = parseFloat(q.admin_markup || 0);
-                                                     const agentMarkup = parseFloat(q.agent_markup || 0);
-                                                     const priceWithAdmin = base * (1 + adminMarkup / 100);
+                                                     const agencyItem = q.price_breakdown?.find(i => i.label?.includes('Agency'));
+                                                     const agencyProfit = agencyItem ? agencyItem.amount : 0;
                                                      
-                                                     const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
-                                                     const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : 0;
-                                                     const finalNet = parseFloat(q.final_price || 0) - ivaAmount;
-                                                     
-                                                     let agentProfit = 0;
-                                                     if (q.is_manual_price) {
-                                                         agentProfit = finalNet - priceWithAdmin;
-                                                     } else {
-                                                         agentProfit = priceWithAdmin * (agentMarkup / 100);
-                                                     }
-
                                                      const isB2C = !q.agent_id || q.agent_id === '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
                                                      return (
                                                          <div className="flex flex-col items-end">
                                                              <span className={`font-mono text-[13px] font-bold ${isB2C ? 'text-cyan-400' : 'text-emerald-400'}`}>
-                                                                 €{Math.round(agentProfit).toLocaleString()}
+                                                                 €{Math.round(agencyProfit).toLocaleString()}
                                                              </span>
                                                              <span className={`text-[8px] uppercase font-black ${isB2C ? 'text-cyan-600/60' : 'text-emerald-600/60'}`}>
                                                                  {isB2C ? 'B2C Commission' : 'Agency Comm'}
@@ -1039,8 +1042,16 @@ export default function QuotesPage() {
                                 <svg className="size-4 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.634 1.437h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
                                 WhatsApp Portal Link
                             </button>
-                            
-                            <button 
+
+                            <button
+                                onClick={() => setBulkEditOpen(true)}
+                                className="px-5 py-2.5 bg-surface border border-primary/40 text-primary rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 transition-all flex items-center gap-2"
+                            >
+                                <span className="material-symbols-outlined notranslate text-[18px]">tune</span>
+                                Bulk Edit
+                            </button>
+
+                            <button
                                 onClick={() => setSelectedQuotes([])}
                                 className="size-10 flex items-center justify-center text-text-muted hover:text-red-400 transition-colors"
                             >
@@ -1082,13 +1093,26 @@ export default function QuotesPage() {
             )}
 
             {editQuote && (
-                <EditQuoteModal 
-                    quote={editQuote} 
-                    onClose={() => setEditQuote(null)} 
+                <EditQuoteModal
+                    quote={editQuote}
+                    onClose={() => setEditQuote(null)}
                     onSaved={() => {
                         setEditQuote(null);
                         refreshData();
-                    }} 
+                    }}
+                />
+            )}
+
+            {bulkEditOpen && (
+                <BulkEditQuotesModal
+                    ids={selectedQuotes}
+                    role={role}
+                    onClose={() => setBulkEditOpen(false)}
+                    onSaved={() => {
+                        setBulkEditOpen(false);
+                        setSelectedQuotes([]);
+                        refreshData();
+                    }}
                 />
             )}
 
@@ -1151,4 +1175,118 @@ function AgentsList() {
         fetch();
     }, []);
     return agents.map(a => <option key={a.id} value={a.id}>{a.company_name || 'Unnamed Agency'}</option>);
+}
+
+function BulkEditQuotesModal({ ids, role, onClose, onSaved }) {
+    const [agentId, setAgentId] = useState('');
+    const [agentMarkup, setAgentMarkup] = useState('');
+    const [adminMarkup, setAdminMarkup] = useState('');
+    const [status, setStatus] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    const isAdmin = role === 'admin';
+
+    async function handleSave() {
+        const patch = {};
+        if (agentId) patch.agent_id = agentId;
+        if (agentMarkup !== '') patch.agent_markup = parseFloat(agentMarkup);
+        if (isAdmin && adminMarkup !== '') patch.admin_markup = parseFloat(adminMarkup);
+        if (status) patch.status = status;
+
+        if (Object.keys(patch).length === 0) {
+            alert('No changes to apply.');
+            return;
+        }
+
+        setSaving(true);
+        const { error } = await supabase.from('quotes').update(patch).in('id', ids);
+        setSaving(false);
+        if (error) { alert(error.message); return; }
+        onSaved();
+    }
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-surface border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                <div className="p-4 border-b border-border flex justify-between items-center">
+                    <div>
+                        <h3 className="font-bold text-text-primary">Bulk Edit Quotes</h3>
+                        <p className="text-[10px] text-text-muted uppercase tracking-widest">{ids.length} selected · empty fields skipped</p>
+                    </div>
+                    <button onClick={onClose}><span className="material-symbols-outlined notranslate text-sm">close</span></button>
+                </div>
+                <div className="p-4 space-y-4">
+                    <div>
+                        <label className="block text-[10px] font-black text-text-muted uppercase tracking-widest mb-1">Assign Agent</label>
+                        <select
+                            value={agentId}
+                            onChange={(e) => setAgentId(e.target.value)}
+                            className="w-full input-theme p-2 text-sm"
+                        >
+                            <option value="">— Leave unchanged —</option>
+                            <option value="72241c14-09ed-4227-a01e-9bdeefdd0c8d">Invenio Administration</option>
+                            <AgentsList />
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="block text-[10px] font-black text-text-muted uppercase tracking-widest mb-1">Agent Markup (%)</label>
+                        <input
+                            type="number"
+                            step="0.01"
+                            value={agentMarkup}
+                            onChange={(e) => setAgentMarkup(e.target.value)}
+                            placeholder="Leave empty to keep current"
+                            className="w-full input-theme p-2 text-sm"
+                        />
+                    </div>
+
+                    {isAdmin && (
+                        <div>
+                            <label className="block text-[10px] font-black text-text-muted uppercase tracking-widest mb-1">Admin Markup (%)</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                value={adminMarkup}
+                                onChange={(e) => setAdminMarkup(e.target.value)}
+                                placeholder="Leave empty to keep current"
+                                className="w-full input-theme p-2 text-sm"
+                            />
+                        </div>
+                    )}
+
+                    <div>
+                        <label className="block text-[10px] font-black text-text-muted uppercase tracking-widest mb-1">Status</label>
+                        <select
+                            value={status}
+                            onChange={(e) => setStatus(e.target.value)}
+                            className="w-full input-theme p-2 text-sm"
+                        >
+                            <option value="">— Leave unchanged —</option>
+                            <option value="draft">Draft</option>
+                            <option value="sent">Sent</option>
+                            <option value="booked">Booked</option>
+                            <option value="cancelled">Cancelled</option>
+                            <option value="expired">Expired</option>
+                        </select>
+                    </div>
+                </div>
+                <div className="p-4 border-t border-border flex items-center justify-end gap-2">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-xs font-black uppercase tracking-widest text-text-muted hover:text-text-primary"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="px-4 py-2 bg-primary text-background-dark rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+                    >
+                        {saving ? 'Applying…' : `Apply to ${ids.length}`}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 }

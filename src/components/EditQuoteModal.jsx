@@ -12,6 +12,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const [manualPrice, setManualPrice] = useState(quote.final_price || 0);
     const [isManual, setIsManual] = useState(quote.is_manual_price || false);
     const [useStripeFee, setUseStripeFee] = useState(quote.stripe_fee_included || false);
+    const [useForexFee, setUseForexFee] = useState(quote.forex_fee_included || false);
     const [saving, setSaving] = useState(false);
     const [agents, setAgents] = useState([]);
     const [assignedAgentId, setAssignedAgentId] = useState(quote.agent_id);
@@ -21,6 +22,34 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const [ownerPhone, setOwnerPhone] = useState('');
     const [ownerName, setOwnerName] = useState('');
     
+    // Rental type
+    const [rentalType, setRentalType] = useState(quote.rental_type || 'daily');
+
+    const villaRentalConfigs = quote.invenio_properties?.rental_type_configs || {};
+    const RENTAL_TYPE_LABELS = {
+        daily: 'Daily / Nightly',
+        monthly: 'Monthly',
+        seasonal: 'Seasonal (months)',
+        annual: 'Annual',
+    };
+    const enabledRentalTypes = ['daily', 'monthly', 'seasonal', 'annual'].filter(t => {
+        if (t === 'daily') return true;
+        return villaRentalConfigs[t]?.enabled === true;
+    });
+
+    const applyRentalTypeDefaults = (type) => {
+        const cfg = villaRentalConfigs[type];
+        if (!cfg) return;
+        const agencyShare = 100 - (cfg.platform_retention_pct || 33);
+        setMargin(cfg.commission_pct ?? margin);
+        setPlatformMargin(cfg.platform_retention_pct ?? platformMargin);
+    };
+
+    const handleRentalTypeChange = (type) => {
+        setRentalType(type);
+        applyRentalTypeDefaults(type);
+    };
+
     // Group Qualification State
     const [groupType, setGroupType] = useState(quote.group_details?.type || 'family');
     const [numChildren, setNumChildren] = useState(quote.group_details?.children || 0);
@@ -32,19 +61,26 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     useEffect(() => {
         async function fetchData() {
             const [agentsRes, settingsRes] = await Promise.all([
-                supabase.from('agents').select('id, company_name, markup_percent'),
+                supabase.from('agents').select('id, company_name, markup_percent, admin_margin, agency_split_pct'),
                 supabase.from('margin_settings').select('iva_percent').eq('id', 1).single()
             ]);
             const fetchedAgents = agentsRes.data || [];
             setAgents(fetchedAgents);
             if (settingsRes.data) setIvaPercent(parseFloat(settingsRes.data.iva_percent) || 10);
 
-            // If quote has no markup set, apply the agent's default markup
-            if (!quote.agent_markup) {
-                const currentAgent = fetchedAgents.find(a => a.id === assignedAgentId);
-                if (currentAgent && currentAgent.markup_percent) {
-                    setMargin(currentAgent.markup_percent);
-                }
+            // Fetch current agent details to get default split/markup
+            const currentAgent = fetchedAgents.find(a => a.id === assignedAgentId);
+
+            // If quote has no markup set, apply the agent's default markup (or 12% as per new rules)
+            if (!quote.agent_markup && currentAgent) {
+                setMargin(currentAgent.markup_percent || 12);
+            }
+
+            // Platform markup should be 0 by default now, as we split the total margin
+            if (!quote.admin_markup && currentAgent) {
+                // We'll use platformMargin state to store the PLATFORM SHARE if needed, 
+                // but for now let's keep it as is and use the agent's split in calculations
+                setPlatformMargin(currentAgent.admin_margin || 0);
             }
 
             // Fetch Owner Info (Admins only)
@@ -62,7 +98,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             }
         }
         fetchData();
-    }, [quote]);
+    }, [quote, assignedAgentId]);
 
     const addService = () => setExtraServices([...extraServices, { name: '', price: 0 }]);
     const removeService = (idx) => setExtraServices(extraServices.filter((_, i) => i !== idx));
@@ -74,66 +110,68 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
     const calculateAutoPrice = () => {
         const base = parseFloat(quote.supplier_base_price || 0);
-        const adminMarkup = parseFloat(platformMargin || 0);
-        const agentMarkup = parseFloat(margin || 0);
+        const totalMarkup = parseFloat(margin || 0);
         
-        const priceWithAdmin = base * (1 + adminMarkup / 100);
-        const priceWithAgent = priceWithAdmin * (1 + agentMarkup / 100);
+        const priceWithMarkup = base * (1 + totalMarkup / 100);
         
         const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        const subtotal = priceWithAgent + extraTotal;
-        const stripeFee = useStripeFee ? subtotal * 0.015 : 0;
-        
-        const preTax = subtotal + stripeFee;
-        const ivaAmount = (preTax - base) * (ivaPercent / 100);
+        const subtotal = priceWithMarkup + extraTotal;
+        // IVA on agency services (subtotal - base), NOT on fees
+        const ivaAmount = (subtotal - base) * (ivaPercent / 100);
+        const priceBeforeFees = subtotal + ivaAmount;
 
-        return Math.round(preTax + ivaAmount);
+        // Fees applied flat on top of post-IVA price (matches calculator math: total * 1.03)
+        const stripeFee = useStripeFee ? priceBeforeFees * 0.03 : 0;
+        const forexFee = useForexFee ? priceBeforeFees * 0.02 : 0;
+
+        return Math.round(priceBeforeFees + stripeFee + forexFee);
     };
 
     useEffect(() => {
         if (!isManual) {
             setManualPrice(calculateAutoPrice());
         }
-    }, [margin, platformMargin, extraServices, isManual, useStripeFee, ivaPercent]);
+    }, [margin, platformMargin, extraServices, isManual, useStripeFee, useForexFee, ivaPercent]);
 
     const handleSave = async () => {
         setSaving(true);
         try {
             const finalPrice = isManual ? manualPrice : calculateAutoPrice();
+            const currentAgent = agents.find(a => a.id === assignedAgentId);
             
+            // Get the revenue split percentage (default to 67% for agency, 33% for platform)
+            const agencySplitPct = currentAgent?.agency_split_pct || 67;
+            const platformSharePct = 100 - agencySplitPct;
+
             // Build Breakdown for saving
             const base = parseFloat(quote.supplier_base_price || 0);
-            const adminMarkupValue = parseFloat(platformMargin || 0);
-            const agentMarkupValue = parseFloat(margin || 0);
-            const priceWithAdmin = base * (1 + adminMarkupValue / 100);
-            const priceWithAgent = priceWithAdmin * (1 + agentMarkupValue / 100);
-            
             const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-            const subtotal = priceWithAgent + extraTotal;
-            const stripeFeeSource = useStripeFee ? subtotal * 0.015 : 0;
             
-            let ivaAmount = 0;
+            // IVA is calculated on the gain (Final Price - Base Cost)
+            const totalGain = finalPrice - base;
+            const ivaAmount = Math.round(totalGain * (ivaPercent / 100) / (1 + ivaPercent / 100));
+            const preTaxProfit = totalGain - ivaAmount;
+
+            // Split the pre-tax profit between Platform and Agency
+            const platformProfit = Math.round(preTaxProfit * (platformSharePct / 100));
+            const agencyProfit = Math.round(preTaxProfit - platformProfit);
+
             const newBreakdown = [];
-            
-            if (isManual) {
-                ivaAmount = (finalPrice - base) * (ivaPercent / 100) / (1 + ivaPercent / 100);
-                const baseLabel = quote.invenio_properties ? 'Base Accommodation' : 'Base Charter';
-                newBreakdown.push({ label: baseLabel, amount: Math.round(base), desc: 'Base cost' });
-                newBreakdown.push({ label: 'Manual Adjustment', amount: Math.round(finalPrice - base - ivaAmount), desc: 'Manual adjustment' });
-            } else {
-                const baseLabel = quote.invenio_properties ? 'Base Accommodation' : 'Base Charter';
-                newBreakdown.push({ label: baseLabel, amount: Math.round(base), desc: 'Base cost' });
-                if (priceWithAgent > base) {
-                    newBreakdown.push({ label: 'Agency Margin', amount: Math.round(priceWithAgent - base), desc: 'Agency commissions' });
-                }
-                extraServices.forEach(s => {
-                    if (s.price > 0) newBreakdown.push({ label: s.name || 'Extra Service', amount: Math.round(s.price), desc: 'Additional service' });
-                });
-                if (stripeFeeSource > 0) {
-                    newBreakdown.push({ label: 'Stripe Fee', amount: Math.round(stripeFeeSource), desc: 'Transaction fees' });
-                }
+            const baseLabel = quote.invenio_properties ? 'Base Accommodation' : 'Base Charter';
+            newBreakdown.push({ label: baseLabel, amount: Math.round(base), desc: 'Base cost' });
+
+            if (platformProfit > 0) {
+                newBreakdown.push({ label: 'Platform Profit', amount: platformProfit, desc: 'Platform service fee' });
             }
-            
+            if (agencyProfit !== 0) {
+                newBreakdown.push({ label: 'Agency Profit', amount: agencyProfit, desc: 'Agency commission' });
+            }
+
+            // Note: In auto-mode, extra services are part of the totalGain, 
+            // so they are effectively split too if we calculate this way.
+            // If the user wants extras to NOT be split, we'd need to subtract them from preTaxProfit first.
+            // But "proportional share of gain" usually includes everything.
+
             newBreakdown.push({ label: `IVA (VAT) ${ivaPercent}%`, amount: Math.round(ivaAmount), desc: 'VAT on agency services' });
 
             const { error } = await supabase
@@ -146,9 +184,11 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     price_breakdown: newBreakdown,
                     is_manual_price: isManual,
                     stripe_fee_included: useStripeFee,
+                    forex_fee_included: useForexFee,
                     agent_id: assignedAgentId,
                     deposit_paid: depositPaid,
                     balance_paid: balancePaid,
+                    rental_type: rentalType,
                     group_details: {
                         type: groupType,
                         children: groupType === 'family' ? numChildren : 0,
@@ -248,6 +288,27 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             <option value="owner_declined">Owner Declined</option>
                         </select>
                     </div>
+
+                    {/* Rental Type */}
+                    {quote.invenio_properties && (
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Rental Type</label>
+                            <select
+                                value={rentalType}
+                                onChange={e => handleRentalTypeChange(e.target.value)}
+                                className="w-full input-theme py-2.5 px-3 font-bold text-text-primary"
+                            >
+                                {enabledRentalTypes.map(t => (
+                                    <option key={t} value={t}>{RENTAL_TYPE_LABELS[t]}</option>
+                                ))}
+                            </select>
+                            {rentalType !== 'daily' && villaRentalConfigs[rentalType] && (
+                                <p className="text-[9px] text-primary/70 italic px-1">
+                                    Commission {villaRentalConfigs[rentalType].commission_pct}% · Platform retention {villaRentalConfigs[rentalType].platform_retention_pct}% — pre-filled above
+                                </p>
+                            )}
+                        </div>
+                    )}
 
                     {/* Group Qualification Section */}
                     <div className="p-4 rounded-2xl bg-primary/5 border border-primary/20 space-y-4">
@@ -359,24 +420,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     </div>
 
                     {/* Margin */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {role === 'super_admin' && (
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-primary uppercase tracking-widest block">Platform Profit (%)</label>
-                                <div className="relative">
-                                    <input 
-                                        type="number" 
-                                        value={platformMargin}
-                                        onChange={e => setPlatformMargin(e.target.value)}
-                                        disabled={isManual}
-                                        className="w-full input-theme py-2.5 text-right font-bold text-primary border-primary/30 disabled:opacity-50"
-                                    />
-                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-primary">%</span>
-                                </div>
-                            </div>
-                        )}
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Agent Margin (%)</label>
+                        <div className="space-y-2 col-span-2">
+                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Total Commission (%)</label>
                             <div className="relative">
                                 <input 
                                     type="number" 
@@ -388,8 +433,15 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-text-muted">%</span>
                                 {!canManageMargins && <div className="absolute -top-6 right-0 text-[8px] font-black text-red-500 uppercase tracking-widest">Read Only</div>}
                             </div>
+                            <div className="flex justify-between items-center px-1">
+                                <p className="text-[9px] text-text-muted italic">
+                                    Ibiza Beyond Share: {100 - (agents.find(a => a.id === assignedAgentId)?.agency_split_pct || 67)}% of total commission.
+                                </p>
+                                <p className="text-[9px] text-text-muted italic">
+                                    Agency Share: {agents.find(a => a.id === assignedAgentId)?.agency_split_pct || 67}%
+                                </p>
+                            </div>
                         </div>
-                    </div>
                     
                     {/* Assigned Agent (Admin only) */}
                     {(role === 'admin' || role === 'super_admin' || user?.id === quote.agent_id) && (
@@ -448,28 +500,57 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
                     {/* Final Price & Override */}
                     <div className="pt-4 border-t border-border space-y-4">
+                        {/* Fee toggles info banner */}
+                        <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3">
+                            <div className="flex items-center gap-2 mb-1">
+                                <span className="material-symbols-outlined notranslate text-amber-500 text-[18px]">info</span>
+                                <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Bank Fees to Charge the Client</span>
+                            </div>
+                            <label className="flex items-start gap-3 cursor-pointer group">
+                                <input
+                                    type="checkbox"
+                                    checked={useStripeFee}
+                                    onChange={e => setUseStripeFee(e.target.checked)}
+                                    className="accent-primary mt-0.5"
+                                />
+                                <div>
+                                    <span className="text-xs font-bold text-text-primary group-hover:text-primary transition-colors">
+                                        Stripe / Card Fee (+3%)
+                                    </span>
+                                    <p className="text-[10px] text-text-muted mt-0.5">
+                                        Select if the client pays with credit card or Revolut. Covers digital payment processing costs.
+                                    </p>
+                                </div>
+                            </label>
+                            <label className="flex items-start gap-3 cursor-pointer group">
+                                <input
+                                    type="checkbox"
+                                    checked={useForexFee}
+                                    onChange={e => setUseForexFee(e.target.checked)}
+                                    className="accent-primary mt-0.5"
+                                />
+                                <div>
+                                    <span className="text-xs font-bold text-text-primary group-hover:text-primary transition-colors">
+                                        Currency Exchange — Non-EUR Client (+2%)
+                                    </span>
+                                    <p className="text-[10px] text-text-muted mt-0.5">
+                                        Select if the client pays in a currency other than Euro (GBP, USD, etc.). Covers currency conversion costs.
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
+
                         <div className="flex items-center justify-between">
                             <label className="text-[10px] font-black text-text-muted uppercase tracking-widest">Total Price (EUR)</label>
-                            <div className="flex items-center gap-4">
-                                <label className="flex items-center gap-2 cursor-pointer group">
-                                    <span className="text-[10px] font-bold text-text-muted uppercase group-hover:text-primary transition-colors">Stripe Fee (1.5%)</span>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={useStripeFee}
-                                        onChange={e => setUseStripeFee(e.target.checked)}
-                                        className="accent-primary"
-                                    />
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer group">
-                                    <span className="text-[10px] font-bold text-text-muted uppercase group-hover:text-primary transition-colors">Manual Override</span>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={isManual}
-                                        onChange={e => setIsManual(e.target.checked)}
-                                        className="accent-primary"
-                                    />
-                                </label>
-                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer group">
+                                <span className="text-[10px] font-bold text-text-muted uppercase group-hover:text-primary transition-colors">Manual Override</span>
+                                <input
+                                    type="checkbox"
+                                    checked={isManual}
+                                    onChange={e => setIsManual(e.target.checked)}
+                                    className="accent-primary"
+                                />
+                            </label>
                         </div>
                         <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-black text-primary/30">€</span>
@@ -501,6 +582,30 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                             <span className="font-bold text-text-primary">+ €{Math.round(s.price).toLocaleString()}</span>
                                         </div>
                                     ))}
+                                    {useStripeFee && (() => {
+                                        const base2 = parseFloat(quote.supplier_base_price || 0);
+                                        const sub = base2 * (1 + parseFloat(margin || 0) / 100) + extraServices.reduce((s, x) => s + (x.price || 0), 0);
+                                        const ivaAmt = (sub - base2) * (ivaPercent / 100);
+                                        const preFees = sub + ivaAmt;
+                                        return (
+                                            <div className="flex justify-between text-[11px]">
+                                                <span className="text-amber-500">Stripe / Card Fee (3%)</span>
+                                                <span className="font-bold text-amber-500">+ €{Math.round(preFees * 0.03).toLocaleString()}</span>
+                                            </div>
+                                        );
+                                    })()}
+                                    {useForexFee && (() => {
+                                        const base2 = parseFloat(quote.supplier_base_price || 0);
+                                        const sub = base2 * (1 + parseFloat(margin || 0) / 100) + extraServices.reduce((s, x) => s + (x.price || 0), 0);
+                                        const ivaAmt = (sub - base2) * (ivaPercent / 100);
+                                        const preFees = sub + ivaAmt;
+                                        return (
+                                            <div className="flex justify-between text-[11px]">
+                                                <span className="text-amber-500">Currency Exchange (2%)</span>
+                                                <span className="font-bold text-amber-500">+ €{Math.round(preFees * 0.02).toLocaleString()}</span>
+                                            </div>
+                                        );
+                                    })()}
                                     <div className="pt-2 mt-2 border-t border-border flex justify-between text-xs font-black text-primary uppercase">
                                         <span>Estimated Final Total</span>
                                         <span>€{calculateAutoPrice().toLocaleString()}</span>
