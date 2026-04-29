@@ -36,6 +36,7 @@ serve(async (req) => {
       .select(`
         *,
         invenio_properties (
+          owner_id,
           owners (stripe_account_id)
         ),
         agents (stripe_account_id)
@@ -49,7 +50,16 @@ serve(async (req) => {
     let description = '';
 
     if (targetType === 'owner') {
-      destinationAccount = quote.invenio_properties?.owners?.stripe_account_id;
+      destinationAccount = quote.invenio_properties?.owners?.stripe_account_id || null;
+      // Fallback: editor (agents row) acting as self-managed owner
+      if (!destinationAccount && quote.invenio_properties?.owner_id) {
+        const { data: agt } = await supabase
+          .from('agents')
+          .select('stripe_account_id')
+          .eq('id', quote.invenio_properties.owner_id)
+          .single();
+        destinationAccount = agt?.stripe_account_id || null;
+      }
       description = `Payout to Owner for Quote ${quoteId}`;
     } else if (targetType === 'collaborator') {
       destinationAccount = quote.agents?.stripe_account_id;

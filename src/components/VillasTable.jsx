@@ -16,7 +16,7 @@ const filterOptions = {
 const PAGE_SIZE = 20;
 
 export default function VillasTable() {
-    const { role, user } = useAuth();
+    const { role, user, agentData } = useAuth();
     const queryClient = useQueryClient();
     const isMounted = useRef(true);
     
@@ -39,6 +39,7 @@ export default function VillasTable() {
     const [destinationFilter, setDestinationFilter] = useState('Any');
     
     const [viewMode, setViewMode] = useState('grid');
+    const [myVillasOnly, setMyVillasOnly] = useState(false);
     const featuresMenuRef = useRef(null);
     const [isFeaturesOpen, setIsFeaturesOpen] = useState(false);
     const [editVilla, setEditVilla] = useState(null);
@@ -82,7 +83,7 @@ export default function VillasTable() {
     const margins = marginDataObj || { invenioToAdmin: 0, adminToAgent: 0, ivaPercent: 21 };
 
     const { data: villasData = { list: [], total: 0 }, isLoading: loading, error: queryError } = useQuery({
-        queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, destinationFilter, sortBy],
+        queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, destinationFilter, sortBy, myVillasOnly],
         queryFn: async () => {
             // 1. Fetch Villas (All matching base filters)
             let query = supabase.from('invenio_properties').select('*');
@@ -90,25 +91,22 @@ export default function VillasTable() {
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
             } else if (role === 'agent' && user?.id) {
-                // Get agent profile id first
-                const { data: agentData } = await supabase
-                    .from('agents')
+                const agentId = agentData?.id || user.id;
+
+                const { data: managedOwners } = await supabase
+                    .from('owners')
                     .select('id')
-                    .eq('user_id', user.id)
-                    .single();
-                
-                if (agentData) {
-                    // Logic: Get properties where owner_id is an owner managed by this agent
-                    const { data: managedOwners } = await supabase
-                        .from('owners')
-                        .select('id')
-                        .eq('agent_id', agentData.id);
-                    
-                    const ownerIds = managedOwners?.map(o => o.id) || [];
-                    
-                    // We also include villas created_by this agent
-                    query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
-                }
+                    .eq('agent_id', agentId);
+
+                const ownerIds = managedOwners?.map(o => o.id) || [];
+                const ownerFilter = ownerIds.length > 0
+                    ? `owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`
+                    : `created_by.eq.${user.id}`;
+                query = query.or(ownerFilter);
+            }
+            // editor: sees all villas for quoting, edit permission gated in VillaCard
+            if (myVillasOnly && user?.id) {
+                query = query.eq('created_by', user.id);
             }
             if (search) {
                 query = query.or(`villa_name.ilike.%${search}%,areaname.ilike.%${search}%`);
@@ -139,8 +137,28 @@ export default function VillasTable() {
             if (vErr) throw vErr;
             if (!villasRaw) return { list: [], total: 0 };
 
+            // Filter out inactive villas for non-admin/editor — editors see their own inactive too (to reactivate)
+            const isAdmin = role === 'admin' || role === 'super_admin';
+            let activeVillas = isAdmin
+                ? villasRaw
+                : villasRaw.filter(v => v.is_active !== false || (role === 'editor' && v.created_by === user?.id));
+
+            // Per-user visibility overrides (skip super_admin)
+            if (role !== 'super_admin' && user?.id) {
+                const { data: hides } = await supabase
+                    .from('entity_visibility_overrides')
+                    .select('entity_id')
+                    .eq('user_id', user.id)
+                    .eq('entity_type', 'villa')
+                    .eq('hidden', true);
+                const hiddenIds = new Set((hides || []).map(h => h.entity_id));
+                if (hiddenIds.size > 0) {
+                    activeVillas = activeVillas.filter(v => !hiddenIds.has(v.v_uuid));
+                }
+            }
+
             // 2. Fetch Photos
-            const villaUuids = villasRaw.map(v => v.v_uuid);
+            const villaUuids = activeVillas.map(v => v.v_uuid);
             const { data: photosData } = await supabase
                 .from('invenio_photos')
                 .select('v_uuid, thumbnail_url')
@@ -168,7 +186,7 @@ export default function VillasTable() {
 
             // 4. Availability check via villa_blocked_dates (server-synced from iCals).
             //    Single indexed query replaces per-villa iCal fetches through CORS proxies.
-            let processedVillas = villasRaw;
+            let processedVillas = activeVillas;
             const blockedByVilla = {};
             if (checkIn && checkOut) {
                 const { data: blockedRows } = await supabase
@@ -351,7 +369,8 @@ export default function VillasTable() {
                             license: '',
                             gps: '',
                             deposit: 0,
-                            features: [] 
+                            features: [],
+                            source: 'manual'
                         })}
                         className="btn-primary flex items-center gap-2 text-sm self-start"
                     >
@@ -360,8 +379,26 @@ export default function VillasTable() {
                     </button>
                 )}
                 
+                {(role === 'editor' || role === 'agent' || role === 'admin' || role === 'super_admin') && (
+                    <div className="flex items-center gap-1 bg-surface-2 p-1 rounded-xl border border-border">
+                        <button
+                            onClick={() => setMyVillasOnly(false)}
+                            className={`px-3 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${!myVillasOnly ? 'bg-primary text-black shadow-lg shadow-primary/20' : 'text-text-muted hover:text-text-primary'}`}
+                        >
+                            All
+                        </button>
+                        <button
+                            onClick={() => setMyVillasOnly(true)}
+                            className={`px-3 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${myVillasOnly ? 'bg-primary text-black shadow-lg shadow-primary/20' : 'text-text-muted hover:text-text-primary'}`}
+                        >
+                            <span className="material-symbols-outlined notranslate text-[14px]">person</span>
+                            My Villas
+                        </button>
+                    </div>
+                )}
+
                 <div className="flex items-center gap-1 bg-surface-2 p-1 rounded-xl border border-border">
-                    <button 
+                    <button
                         onClick={() => setViewMode('grid')}
                         className={`p-2 rounded-lg transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-widest ${viewMode === 'grid' ? 'bg-primary text-black shadow-lg shadow-primary/20' : 'text-text-muted hover:text-text-primary'}`}
                     >
@@ -651,8 +688,33 @@ export default function VillasTable() {
                                     key={villa.v_uuid}
                                     villa={villa}
                                     role={role}
+                                    user={user}
                                     onEdit={() => setEditVilla(villa)}
                                     isSelected={selectedVillaIds.includes(villa.v_uuid)}
+                                    onToggleActive={async () => {
+                                        const canToggle = role === 'super_admin' || role === 'admin'
+                                            || (role === 'editor' && villa.created_by === user?.id);
+                                        if (!canToggle) {
+                                            alert('Access denied.');
+                                            return;
+                                        }
+                                        await supabase
+                                            .from('invenio_properties')
+                                            .update({ is_active: !villa.is_active })
+                                            .eq('v_uuid', villa.v_uuid);
+                                        queryClient.invalidateQueries({ queryKey: ['villas'] });
+                                    }}
+                                    onHardDelete={async () => {
+                                        if (!confirm(`Permanently delete "${villa.villa_name}"? This action is irreversible.`)) return;
+                                        const canDelete = role === 'super_admin' || role === 'admin'
+                                            || (role === 'editor' && villa.created_by === user?.id);
+                                        if (!canDelete) { alert('Access denied.'); return; }
+                                        await supabase.from('invenio_seasonal_prices').delete().eq('v_uuid', villa.v_uuid);
+                                        await supabase.from('invenio_photos').delete().eq('v_uuid', villa.v_uuid);
+                                        const { error } = await supabase.from('invenio_properties').delete().eq('v_uuid', villa.v_uuid);
+                                        if (error) { alert(error.message); return; }
+                                        queryClient.invalidateQueries({ queryKey: ['villas'] });
+                                    }}
                                     onSelect={() => {
                                         setSelectedVillaIds(prev => 
                                             prev.includes(villa.v_uuid)
@@ -733,9 +795,19 @@ export default function VillasTable() {
     );
 }
 
-function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
+function VillaCard({ villa, role, user, onEdit, onToggleActive, onHardDelete, isSelected, onSelect }) {
+    const isActive = villa.is_active !== false;
+    const isSuperAdmin = role === 'super_admin';
+    const isAdminStrict = role === 'admin' || role === 'super_admin';
+    const canEditEditor = role === 'editor' && villa.created_by && user?.id && villa.created_by === user.id;
+    const isAdmin = isAdminStrict || canEditEditor;
+    const canArchive = isAdminStrict || canEditEditor;
+    const canHardDelete = isAdminStrict || canEditEditor;
+
     return (
-        <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'}`}>
+        <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${
+            isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'
+        } ${!isActive ? 'opacity-60' : ''}`}>
             {/* Selection Checkbox Overlay */}
             <div 
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}
@@ -752,6 +824,16 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                     onError={e => { e.currentTarget.src = FALLBACK_IMG; }}
                     loading="lazy"
                 />
+
+                {/* Inactive banner */}
+                {!isActive && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="px-3 py-1 bg-red-500/90 text-white text-[10px] font-black uppercase tracking-widest rounded-full shadow-lg backdrop-blur-sm">
+                            ✕ Disabled
+                        </span>
+                    </div>
+                )}
+
                 <div className="absolute bottom-3 left-3 bg-background/90 backdrop-blur-md border border-border px-3 py-1.5 rounded-xl shadow-xl">
                     <div className="flex flex-col">
                         <span className="text-[9px] font-black text-text-muted uppercase tracking-wider leading-none mb-1">
@@ -767,7 +849,7 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                         </div>
                     </div>
                 </div>
-                {villa.allow_shortstays === 'yes' && (
+                {villa.allow_shortstays === 'yes' && isActive && (
                     <div className="absolute top-3 right-3 bg-primary/90 text-background-dark text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
                         Short Stay
                     </div>
@@ -799,7 +881,48 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                 </div>
 
                 <div className="mt-3 flex gap-2">
-                    {(role === 'admin' || role === 'super_admin' || (role === 'owner' && villa.owner_id === user?.id)) ? (
+                    {isAdmin ? (
+                        <>
+                            {canArchive && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onToggleActive(); }}
+                                    title={isActive ? 'Archive / hide' : 'Reactivate villa'}
+                                    className={`flex items-center justify-center gap-1 px-2 py-2 rounded-lg border text-xs font-semibold transition-all ${
+                                        isActive
+                                            ? 'border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/10'
+                                            : 'border-red-400/40 text-red-400 hover:bg-red-400/10'
+                                    }`}
+                                >
+                                    <span className="material-symbols-outlined notranslate text-[14px]">
+                                        {isActive ? 'visibility' : 'visibility_off'}
+                                    </span>
+                                </button>
+                            )}
+                            {canHardDelete && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onHardDelete && onHardDelete(); }}
+                                    title="Permanently delete"
+                                    className="flex items-center justify-center gap-1 px-2 py-2 rounded-lg border border-red-500/40 text-red-400 hover:bg-red-500/10 text-xs font-semibold transition-all"
+                                >
+                                    <span className="material-symbols-outlined notranslate text-[14px]">delete_forever</span>
+                                </button>
+                            )}
+                            <button
+                                onClick={onEdit}
+                                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:border-primary/40 hover:text-primary transition-all"
+                            >
+                                <span className="material-symbols-outlined notranslate text-[13px]">edit</span>
+                                Edit
+                            </button>
+                            <button 
+                                onClick={() => window.location.href = `/villas/${villa.v_uuid}`}
+                                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-primary/10 text-xs font-semibold text-primary hover:bg-primary/20 transition-all"
+                            >
+                                <span className="material-symbols-outlined notranslate text-[13px]">visibility</span>
+                                View
+                            </button>
+                        </>
+                    ) : (role === 'owner' && villa.owner_id) ? (
                         <>
                             <button
                                 onClick={onEdit}
@@ -825,6 +948,13 @@ function VillaCard({ villa, role, onEdit, isSelected, onSelect }) {
                         </button>
                     )}
                 </div>
+
+                {/* Active status indicator for admins */}
+                {isAdmin && !isActive && (
+                    <p className="mt-2 text-[9px] text-red-400/70 text-center italic">
+                        Villa nascosta al pubblico
+                    </p>
+                )}
             </div>
         </div>
     );

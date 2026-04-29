@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { effectiveCapturerCommission } from '../lib/capturerCommission';
 
 const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const { user, role, agentData } = useAuth();
@@ -8,6 +9,14 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const canManageMargins = role === 'admin' || role === 'super_admin' || isAgencyLeader;
     const [margin, setMargin] = useState(quote.agent_markup || 15);
     const [platformMargin, setPlatformMargin] = useState(quote.admin_markup || 0);
+    const _capturerSpecInit = effectiveCapturerCommission(quote.invenio_properties, quote.rental_type || 'daily');
+    const [editorMargin, setEditorMargin] = useState(
+        parseFloat(quote.editor_markup) || _capturerSpecInit.pct || 0
+    );
+    // Default 'add' so super_admin's editor % visibly affects Total Price.
+    // If existing quote already has an explicit mode persisted, respect it.
+    const [editorMarkupMode, setEditorMarkupMode] = useState(quote.editor_markup_mode || 'add');
+    const [inputUnit, setInputUnit] = useState('pct'); // 'pct' | 'eur'
     const [extraServices, setExtraServices] = useState(quote.extra_services || []);
     const [manualPrice, setManualPrice] = useState(quote.final_price || 0);
     const [isManual, setIsManual] = useState(quote.is_manual_price || false);
@@ -40,8 +49,12 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const applyRentalTypeDefaults = (type) => {
         const cfg = villaRentalConfigs[type];
         if (!cfg) return;
-        const agencyShare = 100 - (cfg.platform_retention_pct || 33);
-        setMargin(cfg.commission_pct ?? margin);
+        const baseAmt = parseFloat(quote.supplier_base_price || 0);
+        const mode = cfg.commission_mode || 'percent';
+        const pctFromCfg = mode === 'fixed' && baseAmt > 0
+            ? +(((cfg.commission_amount || 0) / baseAmt) * 100).toFixed(2)
+            : (cfg.commission_pct ?? margin);
+        setMargin(pctFromCfg);
         setPlatformMargin(cfg.platform_retention_pct ?? platformMargin);
     };
 
@@ -110,55 +123,87 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
     const calculateAutoPrice = () => {
         const base = parseFloat(quote.supplier_base_price || 0);
-        const totalMarkup = parseFloat(margin || 0);
-        
-        const priceWithMarkup = base * (1 + totalMarkup / 100);
-        
+        const agentPct = parseFloat(margin || 0);
+        const platformPct = parseFloat(platformMargin || 0);
+        const editorPct = parseFloat(editorMargin || 0);
+        const editorAdds = editorMarkupMode === 'add' && editorPct > 0;
+
+        const priceWithEditor = editorAdds ? base * (1 + editorPct / 100) : base;
+        const priceWithPlatform = priceWithEditor * (1 + platformPct / 100);
+        const priceWithAgent = priceWithPlatform * (1 + agentPct / 100);
+
         const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        const subtotal = priceWithMarkup + extraTotal;
-        // IVA on agency services (subtotal - base), NOT on fees
+        const subtotal = priceWithAgent + extraTotal;
         const ivaAmount = (subtotal - base) * (ivaPercent / 100);
         const priceBeforeFees = subtotal + ivaAmount;
 
-        // Fees applied flat on top of post-IVA price (matches calculator math: total * 1.03)
         const stripeFee = useStripeFee ? priceBeforeFees * 0.03 : 0;
         const forexFee = useForexFee ? priceBeforeFees * 0.02 : 0;
 
         return Math.round(priceBeforeFees + stripeFee + forexFee);
     };
 
+    // Convert between % and € (€ relative to supplier_base_price)
+    const base = parseFloat(quote.supplier_base_price || 0);
+    const pctToEur = (pct) => Math.round(base * (parseFloat(pct) || 0) / 100);
+    const eurToPct = (eur) => base > 0 ? +(((parseFloat(eur) || 0) / base) * 100).toFixed(2) : 0;
+    const displayValue = (pct) => inputUnit === 'eur' ? pctToEur(pct) : pct;
+    const handleInputChange = (raw, setter) => {
+        const v = parseFloat(raw) || 0;
+        setter(inputUnit === 'eur' ? eurToPct(v) : v);
+    };
+
     useEffect(() => {
         if (!isManual) {
             setManualPrice(calculateAutoPrice());
         }
-    }, [margin, platformMargin, extraServices, isManual, useStripeFee, useForexFee, ivaPercent]);
+    }, [margin, platformMargin, editorMargin, editorMarkupMode, extraServices, isManual, useStripeFee, useForexFee, ivaPercent]);
 
     const handleSave = async () => {
         setSaving(true);
         try {
             const finalPrice = isManual ? manualPrice : calculateAutoPrice();
             const currentAgent = agents.find(a => a.id === assignedAgentId);
-            
-            // Get the revenue split percentage (default to 67% for agency, 33% for platform)
-            const agencySplitPct = currentAgent?.agency_split_pct || 67;
-            const platformSharePct = 100 - agencySplitPct;
 
-            // Build Breakdown for saving
-            const base = parseFloat(quote.supplier_base_price || 0);
+            const baseAmt = parseFloat(quote.supplier_base_price || 0);
             const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-            
-            // IVA is calculated on the gain (Final Price - Base Cost)
-            const totalGain = finalPrice - base;
-            const ivaAmount = Math.round(totalGain * (ivaPercent / 100) / (1 + ivaPercent / 100));
-            const preTaxProfit = totalGain - ivaAmount;
-
-            // Split the pre-tax profit between Platform and Agency
-            const platformProfit = Math.round(preTaxProfit * (platformSharePct / 100));
-            const agencyProfit = Math.round(preTaxProfit - platformProfit);
 
             const newBreakdown = [];
             const baseLabel = quote.invenio_properties ? 'Base Accommodation' : 'Base Charter';
-            newBreakdown.push({ label: baseLabel, amount: Math.round(base), desc: 'Base cost' });
+            newBreakdown.push({ label: baseLabel, amount: Math.round(baseAmt), desc: 'Base cost' });
+
+            let platformProfit;
+            let agencyProfit;
+            let editorShare = 0;
+
+            if (role === 'super_admin') {
+                // Super admin: use exact per-quote commission overrides (multiplicative chain)
+                const editorPct = parseFloat(editorMargin || 0);
+                const platformPct = parseFloat(platformMargin || 0);
+                const agentPct = parseFloat(margin || 0);
+                const editorAdds = editorMarkupMode === 'add' && editorPct > 0;
+
+                editorShare = editorAdds ? baseAmt * (editorPct / 100) : (editorMarkupMode === 'deduct' ? baseAmt * (editorPct / 100) : 0);
+                const baseForPlatform = editorAdds ? baseAmt + (baseAmt * editorPct / 100) : baseAmt;
+                platformProfit = Math.round(baseForPlatform * (platformPct / 100));
+                const baseForAgent = baseForPlatform + (baseForPlatform * platformPct / 100);
+                agencyProfit = Math.round(baseForAgent * (agentPct / 100));
+
+                if (editorAdds && editorShare > 0) {
+                    newBreakdown.push({ label: `Editor (Captatore) ${editorPct}%`, amount: Math.round(editorShare), desc: 'Captatore commission added to client price' });
+                } else if (editorMarkupMode === 'deduct' && editorPct > 0) {
+                    newBreakdown.push({ label: `Editor (deduct from owner) ${editorPct}%`, amount: Math.round(editorShare), desc: 'Captatore commission deducted from owner payout' });
+                }
+            } else {
+                // Other roles: split totalGain by agent's agency_split_pct (legacy logic)
+                const agencySplitPct = currentAgent?.agency_split_pct || 67;
+                const platformSharePct = 100 - agencySplitPct;
+                const totalGain = finalPrice - baseAmt;
+                const ivaPart = Math.round(totalGain * (ivaPercent / 100) / (1 + ivaPercent / 100));
+                const preTaxProfit = totalGain - ivaPart;
+                platformProfit = Math.round(preTaxProfit * (platformSharePct / 100));
+                agencyProfit = Math.round(preTaxProfit - platformProfit);
+            }
 
             if (platformProfit > 0) {
                 newBreakdown.push({ label: 'Platform Profit', amount: platformProfit, desc: 'Platform service fee' });
@@ -167,11 +212,9 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                 newBreakdown.push({ label: 'Agency Profit', amount: agencyProfit, desc: 'Agency commission' });
             }
 
-            // Note: In auto-mode, extra services are part of the totalGain, 
-            // so they are effectively split too if we calculate this way.
-            // If the user wants extras to NOT be split, we'd need to subtract them from preTaxProfit first.
-            // But "proportional share of gain" usually includes everything.
-
+            // IVA computed from the actual finalPrice gain
+            const totalGain = finalPrice - baseAmt;
+            const ivaAmount = Math.round(totalGain * (ivaPercent / 100) / (1 + ivaPercent / 100));
             newBreakdown.push({ label: `IVA (VAT) ${ivaPercent}%`, amount: Math.round(ivaAmount), desc: 'VAT on agency services' });
 
             const { error } = await supabase
@@ -179,6 +222,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                 .update({
                     admin_markup: platformMargin,
                     agent_markup: margin,
+                    editor_markup: parseFloat(editorMargin) || 0,
+                    editor_markup_mode: editorMarkupMode,
                     extra_services: extraServices,
                     final_price: finalPrice,
                     price_breakdown: newBreakdown,
@@ -304,7 +349,9 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             </select>
                             {rentalType !== 'daily' && villaRentalConfigs[rentalType] && (
                                 <p className="text-[9px] text-primary/70 italic px-1">
-                                    Commission {villaRentalConfigs[rentalType].commission_pct}% · Platform retention {villaRentalConfigs[rentalType].platform_retention_pct}% — pre-filled above
+                                    Commission {(villaRentalConfigs[rentalType].commission_mode || 'percent') === 'fixed'
+                                        ? `€${villaRentalConfigs[rentalType].commission_amount || 0}`
+                                        : `${villaRentalConfigs[rentalType].commission_pct}%`} · Platform retention {villaRentalConfigs[rentalType].platform_retention_pct}% — pre-filled above
                                 </p>
                             )}
                         </div>
@@ -419,12 +466,90 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                         </label>
                     </div>
 
-                    {/* Margin */}
+                    {/* Commissions */}
+                    {role === 'super_admin' ? (
+                        <div className="space-y-3 p-4 rounded-2xl bg-purple-500/5 border border-purple-500/20">
+                            <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Commissions Override</label>
+                                <div className="flex gap-1 bg-surface-2 rounded-lg p-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setInputUnit('pct')}
+                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${inputUnit === 'pct' ? 'bg-purple-500 text-white' : 'text-text-muted'}`}
+                                    >%</button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setInputUnit('eur')}
+                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${inputUnit === 'eur' ? 'bg-purple-500 text-white' : 'text-text-muted'}`}
+                                    >€</button>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                <div className="bg-background/50 p-2 rounded-xl border border-border">
+                                    <label className="text-[8px] text-text-muted font-black uppercase tracking-widest block mb-1">Platform</label>
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[10px] text-primary font-bold">{inputUnit === 'eur' ? '€' : '%'}</span>
+                                        <input
+                                            type="number"
+                                            value={displayValue(platformMargin)}
+                                            onChange={e => handleInputChange(e.target.value, setPlatformMargin)}
+                                            disabled={isManual}
+                                            className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none disabled:opacity-50"
+                                        />
+                                    </div>
+                                    <p className="text-[8px] text-text-muted/60 mt-0.5">{inputUnit === 'eur' ? `${platformMargin}%` : `€${pctToEur(platformMargin)}`}</p>
+                                </div>
+                                <div className="bg-background/50 p-2 rounded-xl border border-border">
+                                    <label className="text-[8px] text-text-muted font-black uppercase tracking-widest block mb-1">Agent</label>
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[10px] text-blue-400 font-bold">{inputUnit === 'eur' ? '€' : '%'}</span>
+                                        <input
+                                            type="number"
+                                            value={displayValue(margin)}
+                                            onChange={e => handleInputChange(e.target.value, setMargin)}
+                                            disabled={isManual}
+                                            className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none disabled:opacity-50"
+                                        />
+                                    </div>
+                                    <p className="text-[8px] text-text-muted/60 mt-0.5">{inputUnit === 'eur' ? `${margin}%` : `€${pctToEur(margin)}`}</p>
+                                </div>
+                                <div className="bg-background/50 p-2 rounded-xl border border-purple-500/40">
+                                    <label className="text-[8px] text-purple-400 font-black uppercase tracking-widest block mb-1">Editor</label>
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[10px] text-purple-400 font-bold">{inputUnit === 'eur' ? '€' : '%'}</span>
+                                        <input
+                                            type="number"
+                                            value={displayValue(editorMargin)}
+                                            onChange={e => handleInputChange(e.target.value, setEditorMargin)}
+                                            disabled={isManual}
+                                            className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none disabled:opacity-50"
+                                        />
+                                    </div>
+                                    <p className="text-[8px] text-text-muted/60 mt-0.5">{inputUnit === 'eur' ? `${editorMargin}%` : `€${pctToEur(editorMargin)}`}</p>
+                                </div>
+                            </div>
+                            {parseFloat(editorMargin) > 0 && (
+                                <div className="flex items-center gap-2 pt-2 border-t border-purple-500/20">
+                                    <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest">Editor mode:</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setEditorMarkupMode('deduct')}
+                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${editorMarkupMode === 'deduct' ? 'bg-purple-500 text-white' : 'bg-transparent text-text-muted border border-border'}`}
+                                    >Deduct from Owner</button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setEditorMarkupMode('add')}
+                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${editorMarkupMode === 'add' ? 'bg-purple-500 text-white' : 'bg-transparent text-text-muted border border-border'}`}
+                                    >Add to Client Price</button>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
                         <div className="space-y-2 col-span-2">
                             <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Total Commission (%)</label>
                             <div className="relative">
-                                <input 
-                                    type="number" 
+                                <input
+                                    type="number"
                                     value={margin}
                                     onChange={e => setMargin(e.target.value)}
                                     disabled={isManual || !canManageMargins}
@@ -442,6 +567,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                 </p>
                             </div>
                         </div>
+                    )}
                     
                     {/* Assigned Agent (Admin only) */}
                     {(role === 'admin' || role === 'super_admin' || user?.id === quote.agent_id) && (
@@ -572,9 +698,17 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                         <span className="text-text-secondary">Base ({quote.invenio_properties ? 'Villa' : 'Boat'} cost)</span>
                                         <span className="font-bold text-text-primary">€{Math.round(parseFloat(quote.supplier_base_price || 0)).toLocaleString()}</span>
                                     </div>
+                                    {parseFloat(editorMargin) > 0 && (
+                                        <div className="flex justify-between text-[11px]">
+                                            <span className="text-purple-400">Editor (Captatore) {editorMargin}% {editorMarkupMode === 'deduct' ? '(deducted from owner)' : ''}</span>
+                                            <span className={`font-bold ${editorMarkupMode === 'add' ? 'text-purple-400' : 'text-purple-400/50 line-through'}`}>
+                                                {editorMarkupMode === 'add' ? '+ ' : ''}€{Math.round(parseFloat(quote.supplier_base_price || 0) * parseFloat(editorMargin) / 100).toLocaleString()}
+                                            </span>
+                                        </div>
+                                    )}
                                     <div className="flex justify-between text-[11px]">
-                                        <span className="text-text-secondary">Total Margins ({parseFloat(margin) + parseFloat(platformMargin)}%)</span>
-                                        <span className="font-bold text-primary">+ €{Math.round(calculateAutoPrice() - parseFloat(quote.supplier_base_price || 0) - extraServices.reduce((sum, s) => sum + (s.price || 0), 0)).toLocaleString()}</span>
+                                        <span className="text-text-secondary">Platform + Agent ({parseFloat(margin) + parseFloat(platformMargin)}%)</span>
+                                        <span className="font-bold text-primary">+ €{Math.round(calculateAutoPrice() - parseFloat(quote.supplier_base_price || 0) - extraServices.reduce((sum, s) => sum + (s.price || 0), 0) - (editorMarkupMode === 'add' ? parseFloat(quote.supplier_base_price || 0) * parseFloat(editorMargin) / 100 : 0)).toLocaleString()}</span>
                                     </div>
                                     {extraServices.filter(s => s.price > 0).map((s, i) => (
                                         <div key={i} className="flex justify-between text-[11px]">

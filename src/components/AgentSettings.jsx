@@ -24,6 +24,8 @@ export default function AgentSettings() {
     const { role, refreshSession } = useAuth();
     const [message, setMessage] = useState({ text: '', type: '' });
     const [uploading, setUploading] = useState(false);
+    const [connectingStripe, setConnectingStripe] = useState(false);
+    const [stripeCountry, setStripeCountry] = useState('IT');
 
     useEffect(() => {
         if (user) {
@@ -104,6 +106,32 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
             setMessage({ text: 'Unable to load profile.', type: 'error' });
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleConnectStripe = async () => {
+        setConnectingStripe(true);
+        setMessage({ text: '', type: '' });
+        try {
+            const { data, error } = await supabase.functions.invoke('stripe-connect-express', {
+                body: { agentId: user.id, country: stripeCountry },
+            });
+            if (error) throw error;
+            if (data?.error) throw new Error(data.error);
+            if (data?.accountId) {
+                setAgentData(prev => ({ ...prev, stripe_account_id: data.accountId }));
+            }
+            if (data?.onboarded) {
+                setMessage({ text: 'Stripe account already onboarded.', type: 'success' });
+            } else if (data?.url) {
+                window.location.href = data.url;
+                return;
+            }
+        } catch (e) {
+            console.error('Stripe connect error:', e);
+            setMessage({ text: `Stripe connection failed: ${e.message}`, type: 'error' });
+        } finally {
+            setConnectingStripe(false);
         }
     };
 
@@ -426,47 +454,73 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
                                 </div>
                             </div>
 
-                            <div className="space-y-6">
-                                <div>
-                                    <label className="block text-xs font-black text-text-muted uppercase tracking-[0.2em] mb-3">Stripe Account ID</label>
-                                    <div className="relative group">
-                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined notranslate text-text-muted group-focus-within:text-primary transition-colors">payments</span>
-                                        <input
-                                            type="text"
-                                            value={agentData.stripe_account_id}
-                                            onChange={(e) => setAgentData({...agentData, stripe_account_id: e.target.value})}
-                                            className="w-full bg-surface-1 border border-border rounded-2xl py-4 pl-12 pr-4 text-text-primary focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all outline-none"
-                                            placeholder="acct_xxxxxxxxxxxxxx"
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-primary/5 border border-primary/20 rounded-2xl p-6 space-y-4">
-                            <div className="flex items-start gap-4">
-                                <span className="material-symbols-outlined notranslate text-primary text-2xl">account_balance_wallet</span>
-                                <div className="space-y-3">
-                                    <p className="text-xs font-bold text-text-primary uppercase tracking-wider">Automated Payouts Configuration (Stripe Connect):</p>
-
-                                    <div className="space-y-4 pt-1">
-                                        <div className="space-y-1">
-                                            <p className="text-[11px] font-bold text-text-primary">Already have a Stripe account?</p>
-                                            <ol className="text-[11px] text-text-muted space-y-1 list-decimal ml-4">
-                                                <li>Log in to your <a href="https://dashboard.stripe.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-bold">Stripe Dashboard</a>.</li>
-                                                <li>Go to <b>Settings</b> (gear icon) &gt; <b>Account Details</b>.</li>
-                                                <li>Copy your <b>Account ID</b> (e.g., <code className="bg-surface-2 px-1 rounded text-primary">acct_1xxxx</code>).</li>
-                                            </ol>
+                            <div className="space-y-5">
+                                {agentData.stripe_account_id ? (
+                                    <div className="bg-surface-1 border border-border rounded-2xl p-5 space-y-3">
+                                        <div className="flex items-center gap-3">
+                                            <span className="material-symbols-outlined notranslate text-green-500 text-2xl">check_circle</span>
+                                            <div className="flex-1">
+                                                <p className="text-sm font-bold text-text-primary">Stripe account linked</p>
+                                                <p className="text-xs text-text-muted font-mono">{agentData.stripe_account_id}</p>
+                                            </div>
                                         </div>
-
-                                        <div className="space-y-1">
-                                            <p className="text-[11px] font-bold text-text-primary">Don't have Stripe yet?</p>
-                                            <p className="text-[11px] text-text-muted leading-relaxed">
-                                                Create a free account at <a href="https://stripe.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-bold">Stripe.com</a>. Once identity verification is complete, follow the steps above to retrieve your ID.
-                                            </p>
+                                        <button
+                                            type="button"
+                                            onClick={handleConnectStripe}
+                                            disabled={connectingStripe}
+                                            className="w-full border border-border text-text-primary rounded-xl py-3 text-xs font-black uppercase tracking-widest hover:bg-surface-2 transition-colors disabled:opacity-50"
+                                        >
+                                            {connectingStripe ? 'Opening Stripe...' : 'Manage / Re-verify account'}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="bg-surface-1 border border-border rounded-2xl p-5 space-y-4">
+                                        <div className="flex items-start gap-3">
+                                            <span className="material-symbols-outlined notranslate text-primary text-2xl">account_balance_wallet</span>
+                                            <div className="flex-1 space-y-1">
+                                                <p className="text-sm font-bold text-text-primary">Connect Stripe to receive payments</p>
+                                                <p className="text-xs text-text-muted leading-relaxed">Clients pay you directly. Your agency commission stays on your balance; supplier and platform shares are forwarded automatically.</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row gap-3">
+                                            <select
+                                                value={stripeCountry}
+                                                onChange={(e) => setStripeCountry(e.target.value)}
+                                                className="bg-background border border-border rounded-xl px-4 py-3 text-sm text-text-primary focus:border-primary/50 outline-none"
+                                                disabled={connectingStripe}
+                                            >
+                                                <option value="IT">Italy</option>
+                                                <option value="ES">Spain</option>
+                                                <option value="FR">France</option>
+                                                <option value="DE">Germany</option>
+                                                <option value="NL">Netherlands</option>
+                                                <option value="BE">Belgium</option>
+                                                <option value="PT">Portugal</option>
+                                                <option value="AT">Austria</option>
+                                                <option value="IE">Ireland</option>
+                                                <option value="GB">United Kingdom</option>
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={handleConnectStripe}
+                                                disabled={connectingStripe}
+                                                className="flex-1 bg-primary text-white rounded-xl py-3 px-5 text-xs font-black uppercase tracking-widest hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                            >
+                                                {connectingStripe ? (
+                                                    <>
+                                                        <span className="material-symbols-outlined notranslate animate-spin text-[18px]">sync</span>
+                                                        Redirecting...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <span className="material-symbols-outlined notranslate text-[18px]">link</span>
+                                                        Connect with Stripe
+                                                    </>
+                                                )}
+                                            </button>
                                         </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         </div>
 

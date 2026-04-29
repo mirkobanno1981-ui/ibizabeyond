@@ -17,6 +17,9 @@ export default function AgentsPage() {
     const [viewHistory, setViewHistory] = useState(null);
     const [agentQuotes, setAgentQuotes] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
+    const [viewInsertions, setViewInsertions] = useState(null);
+    const [insertionsData, setInsertionsData] = useState({ villas: [], owners: [] });
+    const [loadingInsertions, setLoadingInsertions] = useState(false);
     const [editQuote, setEditQuote] = useState(null);
     const [activeTab, setActiveTab] = useState('individual'); // individual, agency
 
@@ -200,11 +203,10 @@ export default function AgentsPage() {
                 });
             if (profileError) throw profileError;
 
-            // 2. Update Role in user_roles
+            // 2. Update Role in user_roles (upsert so missing rows are created)
             const { error: roleError } = await supabase
                 .from('user_roles')
-                .update({ role: editAgent.role || 'agent' })
-                .eq('user_id', editAgent.id);
+                .upsert({ user_id: editAgent.id, role: editAgent.role || 'agent' }, { onConflict: 'user_id' });
             if (roleError) throw roleError;
 
             setMessage({ type: 'success', text: 'Agent updated successfully!' });
@@ -265,6 +267,33 @@ export default function AgentsPage() {
             setMessage({ type: 'error', text: err.message });
         } finally {
             setSaving(null);
+        }
+    }
+
+    async function fetchEditorInsertions(editorId) {
+        setViewInsertions(editorId);
+        setLoadingInsertions(true);
+        try {
+            const [villasRes, ownersRes] = await Promise.all([
+                supabase
+                    .from('invenio_properties')
+                    .select('id, villa_name, location, owner_id, created_at, is_active')
+                    .eq('created_by', editorId)
+                    .order('created_at', { ascending: false }),
+                supabase
+                    .from('owners')
+                    .select('id, name, company_name, email, phone_number, is_active, created_at')
+                    .eq('agent_id', editorId)
+                    .order('created_at', { ascending: false }),
+            ]);
+            if (villasRes.error) throw villasRes.error;
+            if (ownersRes.error) throw ownersRes.error;
+            setInsertionsData({ villas: villasRes.data || [], owners: ownersRes.data || [] });
+        } catch (err) {
+            console.error('fetchEditorInsertions error:', err);
+            setInsertionsData({ villas: [], owners: [] });
+        } finally {
+            setLoadingInsertions(false);
         }
     }
 
@@ -448,9 +477,14 @@ export default function AgentsPage() {
                                         </div>
                                     </div>
                                     <div className="flex gap-2">
-                                        <button onClick={() => fetchAgentHistory(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-primary transition-all">
+                                        <button onClick={() => fetchAgentHistory(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-primary transition-all" title="Quote history">
                                             <span className="material-symbols-outlined notranslate text-[20px]">history</span>
                                         </button>
+                                        {agent.role === 'editor' && (
+                                            <button onClick={() => fetchEditorInsertions(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-purple-400 transition-all" title="Inserted villas & owners">
+                                                <span className="material-symbols-outlined notranslate text-[20px]">domain</span>
+                                            </button>
+                                        )}
                                         <button onClick={() => setEditAgent({ ...agent.profile, id: agent.user_id, role: agent.role })} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-all">
                                             <span className="material-symbols-outlined notranslate text-[20px]">edit</span>
                                         </button>
@@ -629,7 +663,7 @@ export default function AgentsPage() {
                             <div>
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">Permission Level</label>
                                 <div className="grid grid-cols-2 gap-2">
-                                    {['agent', 'editor', 'admin', 'super_admin'].map(r => (
+                                    {['agent', 'editor', 'editor-boat', 'admin', 'super_admin'].map(r => (
                                         <button key={r} type="button" onClick={() => setEditAgent({...editAgent, role: r})} 
                                             className={`py-2 rounded-lg text-xs font-bold uppercase border transition-all ${editAgent.role === r ? 'bg-primary/20 border-primary text-primary' : 'bg-surface-2 border-transparent text-text-muted'}`}>
                                             {r}
@@ -767,6 +801,119 @@ export default function AgentsPage() {
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Editor Insertions Modal */}
+            {viewInsertions && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="bg-surface border border-border rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
+                        <div className="p-6 border-b border-border flex items-center justify-between">
+                            <div>
+                                <h2 className="text-xl font-bold text-text-primary">Editor Insertions</h2>
+                                <p className="text-[10px] text-text-muted/60 font-mono mt-1">Editor ID: {viewInsertions}</p>
+                            </div>
+                            <button onClick={() => { setViewInsertions(null); setInsertionsData({ villas: [], owners: [] }); }} className="text-text-muted hover:text-text-primary">
+                                <span className="material-symbols-outlined notranslate">close</span>
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
+                            {loadingInsertions ? (
+                                <div className="text-center text-text-muted text-sm py-10">Loading...</div>
+                            ) : (
+                                <>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="p-4 bg-white/2 rounded-xl border border-border">
+                                            <p className="text-[10px] text-text-muted uppercase font-black">Villas Inserted</p>
+                                            <p className="text-2xl font-black text-purple-400">{insertionsData.villas.length}</p>
+                                        </div>
+                                        <div className="p-4 bg-white/2 rounded-xl border border-border">
+                                            <p className="text-[10px] text-text-muted uppercase font-black">Owners Inserted</p>
+                                            <p className="text-2xl font-black text-primary">{insertionsData.owners.length}</p>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h3 className="text-sm font-bold text-text-primary uppercase tracking-widest mb-3 flex items-center gap-2">
+                                            <span className="material-symbols-outlined notranslate text-[18px] text-purple-400">villa</span>
+                                            Villas
+                                        </h3>
+                                        {insertionsData.villas.length === 0 ? (
+                                            <div className="p-6 text-center text-text-muted text-xs italic border border-dashed border-border rounded-xl">No villas inserted by this editor.</div>
+                                        ) : (
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left text-[11px]">
+                                                    <thead>
+                                                        <tr className="text-text-muted font-bold uppercase tracking-widest bg-surface-2/50">
+                                                            <th className="px-4 py-3">Date</th>
+                                                            <th className="px-4 py-3">Villa</th>
+                                                            <th className="px-4 py-3">Location</th>
+                                                            <th className="px-4 py-3 text-center">Status</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-border/30">
+                                                        {insertionsData.villas.map(v => (
+                                                            <tr key={v.id} className="hover:bg-purple-500/5 transition-all">
+                                                                <td className="px-4 py-3 text-text-muted font-mono">{v.created_at ? new Date(v.created_at).toLocaleDateString() : '-'}</td>
+                                                                <td className="px-4 py-3 text-text-primary font-bold">{v.villa_name || '—'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{v.location || '-'}</td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${v.is_active === false ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                                                                        {v.is_active === false ? 'inactive' : 'active'}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <h3 className="text-sm font-bold text-text-primary uppercase tracking-widest mb-3 flex items-center gap-2">
+                                            <span className="material-symbols-outlined notranslate text-[18px] text-primary">person</span>
+                                            Owners
+                                        </h3>
+                                        {insertionsData.owners.length === 0 ? (
+                                            <div className="p-6 text-center text-text-muted text-xs italic border border-dashed border-border rounded-xl">No owners inserted by this editor.</div>
+                                        ) : (
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left text-[11px]">
+                                                    <thead>
+                                                        <tr className="text-text-muted font-bold uppercase tracking-widest bg-surface-2/50">
+                                                            <th className="px-4 py-3">Date</th>
+                                                            <th className="px-4 py-3">Name</th>
+                                                            <th className="px-4 py-3">Company</th>
+                                                            <th className="px-4 py-3">Email</th>
+                                                            <th className="px-4 py-3">Phone</th>
+                                                            <th className="px-4 py-3 text-center">Status</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-border/30">
+                                                        {insertionsData.owners.map(o => (
+                                                            <tr key={o.id} className="hover:bg-primary/5 transition-all">
+                                                                <td className="px-4 py-3 text-text-muted font-mono">{o.created_at ? new Date(o.created_at).toLocaleDateString() : '-'}</td>
+                                                                <td className="px-4 py-3 text-text-primary font-bold">{o.name || '—'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{o.company_name || '-'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{o.email || '-'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{o.phone_number || '-'}</td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${o.is_active === false ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                                                                        {o.is_active === false ? 'inactive' : 'active'}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

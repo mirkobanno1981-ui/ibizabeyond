@@ -50,7 +50,7 @@ class ErrorBoundary extends React.Component {
                 Tenta ripristino automatico
               </button>
             </div>
-            {process.env.NODE_ENV === 'development' && (
+            {(typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') && (
               <pre className="mt-8 p-4 bg-black/40 rounded text-left text-[10px] text-red-400 overflow-auto max-h-40 font-mono">
                 {this.state.error?.toString()}
               </pre>

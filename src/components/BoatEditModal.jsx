@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import EntityVisibilityTab from './EntityVisibilityTab';
 
 const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = false, placeholder = '' }) => (
     <div className={fullWidth ? 'col-span-2' : ''}>
@@ -70,9 +71,10 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     });
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
+    const [activeTab, setActiveTab] = useState('details');
 
     useEffect(() => {
-        if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') {
+        if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'editor-boat' || role === 'agent') {
             fetchOwners();
         }
         if (boat.v_uuid) {
@@ -192,7 +194,9 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                 security_deposit: parseFloat(form.security_deposit) || 0,
                 cleaning_fee: parseFloat(form.cleaning_fee) || 0,
                 owner_id: role === 'owner' ? user.id : (form.owner_id || null),
-                created_by: boat.v_uuid ? boat.created_by : user.id
+                created_by: boat.v_uuid ? (boat.created_by || user.id) : user.id,
+                // New boats need super_admin approval before going live
+                ...(boat.v_uuid ? {} : { is_active: (role === 'admin' || role === 'super_admin') ? true : false })
             };
 
             let result;
@@ -244,6 +248,22 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                     </button>
                 </div>
 
+                {/* Tabs (super_admin only) */}
+                {role === 'super_admin' && boat.v_uuid && (
+                    <div className="px-6 pt-4 border-b border-border flex gap-1 overflow-x-auto">
+                        {['details', 'visibility'].map(t => (
+                            <button
+                                key={t}
+                                type="button"
+                                onClick={() => setActiveTab(t)}
+                                className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-t-lg transition-all ${activeTab === t ? 'bg-primary/10 text-primary border-b-2 border-primary' : 'text-text-muted hover:text-text-primary'}`}
+                            >
+                                {t}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {/* Body */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-8">
                     {error && (
@@ -252,6 +272,11 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                         </div>
                     )}
 
+                    {activeTab === 'visibility' && role === 'super_admin' && (
+                        <EntityVisibilityTab entityType="boat" entityId={boat.v_uuid} />
+                    )}
+
+                    {activeTab === 'details' && (<>
                     {/* Basic Info */}
                     <section>
                         <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-4 flex items-center gap-2">
@@ -483,7 +508,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                             <Field label="Registration / License" field="registration_number" form={form} handleChange={handleChange} />
                             <Field label="Base Port" field="location_base_port" form={form} handleChange={handleChange} />
                             <Field label="SES Establishment Code" field="ses_establishment_code" form={form} handleChange={handleChange} />
-                            {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent') && (
+                            {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'editor-boat' || role === 'agent') && (
                                 <div className="col-span-2">
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">
                                         {role === 'agent' ? 'Associated Owner (Contact)' : 'Yacht Owner'}
@@ -569,6 +594,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                             <Field label="Detailed Description" field="description" type="textarea" form={form} handleChange={handleChange} fullWidth />
                         </div>
                     </section>
+                    </>)}
                 </div>
 
                 {/* Footer */}

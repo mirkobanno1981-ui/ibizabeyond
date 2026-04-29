@@ -129,13 +129,13 @@ export default function Dashboard() {
             const quotesQuery = supabase.from('quotes').select('id', { count: 'exact', head: true });
             const clientsQuery = supabase.from('clients').select('id', { count: 'exact', head: true });
             const recentQuery = supabase.from('quotes').select(`
-                id, created_at, final_price, supplier_base_price, admin_markup, agent_markup, status, agent_id, v_uuid,
+                id, created_at, final_price, supplier_base_price, admin_markup, agent_markup, editor_markup, editor_markup_mode, status, agent_id, v_uuid,
                 payout_owner_sent_at, payout_collaborator_sent_at,
                 security_deposit_authorized, security_deposit_intent_id,
                 agents (company_name),
                 price_breakdown,
                 clients (full_name),
-                invenio_properties (villa_name, deposit)
+                invenio_properties (villa_name, deposit, created_by, owner_id)
             `).order('created_at', { ascending: false }).limit(20);
 
             let depositsQuery = supabase.from('quotes').select(`
@@ -179,7 +179,48 @@ export default function Dashboard() {
                 approvalsQuery.in('agent_id', agentIds);
             }
 
-            const [villasRes, boatsRes, quotesRes, clientsRes, areasRes, recentRes, depositsRes, approvalsRes] = await Promise.all([
+            const editorVillasPromise = (role === 'super_admin' || role === 'admin')
+                ? (async () => {
+                    const { data: editorRoles } = await supabase
+                        .from('user_roles')
+                        .select('user_id')
+                        .eq('role', 'editor');
+                    const editorIds = (editorRoles || []).map(r => r.user_id);
+                    if (editorIds.length === 0) return { data: [], editorMap: {} };
+
+                    const [villasRes, agentsRes] = await Promise.all([
+                        supabase
+                            .from('invenio_properties')
+                            .select('v_uuid, villa_name, areaname, district, thumbnail_url, created_at, created_by, owner_id, source')
+                            .in('created_by', editorIds)
+                            .order('created_at', { ascending: false })
+                            .limit(10),
+                        supabase
+                            .from('agents')
+                            .select('id, company_name, email')
+                            .in('id', editorIds),
+                    ]);
+                    const editorMap = {};
+                    for (const a of (agentsRes.data || [])) editorMap[a.id] = a;
+
+                    // Fetch owner names for assigned non-editor owners
+                    const ownerIdsToLookup = (villasRes.data || [])
+                        .map(v => v.owner_id)
+                        .filter(oid => oid && !editorMap[oid]);
+                    const ownerMap = {};
+                    if (ownerIdsToLookup.length > 0) {
+                        const { data: ownerRows } = await supabase
+                            .from('owners')
+                            .select('id, name')
+                            .in('id', ownerIdsToLookup);
+                        for (const o of (ownerRows || [])) ownerMap[o.id] = o;
+                    }
+
+                    return { data: villasRes.data || [], editorMap, ownerMap };
+                })()
+                : Promise.resolve({ data: [], editorMap: {}, ownerMap: {} });
+
+            const [villasRes, boatsRes, quotesRes, clientsRes, areasRes, recentRes, depositsRes, approvalsRes, editorVillasRes] = await Promise.all([
                 supabase.from('invenio_properties').select('v_uuid', { count: 'exact', head: true }),
                 supabase.from('invenio_boats').select('*', { count: 'exact', head: true }),
                 quotesQuery,
@@ -187,7 +228,8 @@ export default function Dashboard() {
                 supabase.from('invenio_properties').select('areaname').limit(1000),
                 recentQuery,
                 depositsQuery,
-                role === 'owner' ? approvalsQuery : Promise.resolve({ data: [] })
+                role === 'owner' ? approvalsQuery : Promise.resolve({ data: [] }),
+                editorVillasPromise,
             ]);
 
             // Area distribution logic
@@ -201,6 +243,42 @@ export default function Dashboard() {
                 .slice(0, 5)
                 .map(([label, value]) => ({ label, value }));
 
+            // villaOwnerMap: resolve villa.owner_id from quotes.invenio_properties
+            // to either a real owner (owners table) or a self-managed editor (agents table).
+            const villaOwnerMap = {};
+            const recentOwnerIds = Array.from(new Set(
+                (recentRes.data || [])
+                    .map(q => q.invenio_properties?.owner_id)
+                    .filter(Boolean)
+            ));
+            if (recentOwnerIds.length > 0) {
+                const { data: ownerRows } = await supabase
+                    .from('owners')
+                    .select('id, name, stripe_account_id')
+                    .in('id', recentOwnerIds);
+                for (const o of (ownerRows || [])) {
+                    villaOwnerMap[o.id] = {
+                        name: o.name,
+                        source: 'owner',
+                        stripeOk: !!o.stripe_account_id,
+                    };
+                }
+                const missing = recentOwnerIds.filter(id => !villaOwnerMap[id]);
+                if (missing.length > 0) {
+                    const { data: agentRows } = await supabase
+                        .from('agents')
+                        .select('id, company_name, email, stripe_account_id')
+                        .in('id', missing);
+                    for (const a of (agentRows || [])) {
+                        villaOwnerMap[a.id] = {
+                            name: a.company_name || a.email || a.id.slice(0, 8),
+                            source: 'editor',
+                            stripeOk: !!a.stripe_account_id,
+                        };
+                    }
+                }
+            }
+
             return {
                 stats: {
                     villas: villasRes.count || 0,
@@ -211,6 +289,10 @@ export default function Dashboard() {
                 recentQuotes: recentRes.data || [],
                 securityDeposits: depositsRes.data || [],
                 pendingApprovals: approvalsRes.data || [],
+                editorVillas: editorVillasRes.data || [],
+                editorMap: editorVillasRes.editorMap || {},
+                ownerMap: editorVillasRes.ownerMap || {},
+                villaOwnerMap,
                 areaDistribution: areaDistribution.length > 0 ? areaDistribution : [{label:'Ibiza', value:1}],
                 monthlyPerformance: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'].map(m => ({ label: m, value: Math.floor(Math.random() * 5) }))
             };
@@ -223,6 +305,10 @@ export default function Dashboard() {
     const recentQuotes = dashboardData?.recentQuotes || [];
     const securityDeposits = dashboardData?.securityDeposits || [];
     const pendingApprovals = dashboardData?.pendingApprovals || [];
+    const editorVillas = dashboardData?.editorVillas || [];
+    const editorMap = dashboardData?.editorMap || {};
+    const ownerMap = dashboardData?.ownerMap || {};
+    const villaOwnerMap = dashboardData?.villaOwnerMap || {};
     const areaDistribution = dashboardData?.areaDistribution || [];
     const monthlyPerformance = dashboardData?.monthlyPerformance || [];
 
@@ -513,13 +599,32 @@ export default function Dashboard() {
                                         const adminPct = parseFloat(q.admin_markup || 0);
                                         const finalPrice = parseFloat(q.final_price || 0);
                                         const platformProfit = Math.round(base * (adminPct / 100));
+                                        const editorPct = parseFloat(q.editor_markup || 0);
+                                        const editorMode = q.editor_markup_mode || 'deduct';
+                                        const editorShare = Math.round(base * (editorPct / 100));
+                                        const editorUserId = q.invenio_properties?.created_by;
+                                        const editorInfo = editorUserId ? editorMap[editorUserId] : null;
+                                        const editorLabel = editorInfo?.company_name || editorInfo?.email || (editorUserId ? editorUserId.slice(0, 8) : 'Unknown');
+
+                                        // Resolve villa.owner_id: real owner vs self-managed editor
+                                        const villaOwnerId = q.invenio_properties?.owner_id;
+                                        const villaOwnerInfo = villaOwnerId ? villaOwnerMap[villaOwnerId] : null;
+                                        const isSelfManagedEditor = villaOwnerInfo?.source === 'editor';
+                                        const ownerRecipientName = villaOwnerInfo?.name || 'Owner';
 
                                         // IVA calculation from breakdown or estimated at 10%
                                         const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
                                         const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : Math.round((finalPrice - base) * 0.0909);
 
-                                        // Calculate agency remainder (Correct for Manual prices)
-                                        const agencyPayout = Math.max(0, Math.round(finalPrice - base - platformProfit - ivaAmount));
+                                        // Owner payout:
+                                        //  - self-managed editor: receives base + editor commission (settles real owner manually)
+                                        //  - otherwise: base minus editor share if mode='deduct'
+                                        const ownerPayout = isSelfManagedEditor
+                                            ? base + editorShare
+                                            : Math.max(0, base - (editorMode === 'deduct' ? editorShare : 0));
+
+                                        // Agency remainder unchanged (editor share already routed via owner side when self-managed)
+                                        const agencyPayout = Math.max(0, Math.round(finalPrice - base - platformProfit - ivaAmount - (editorMode === 'add' ? editorShare : 0)));
 
                                         const isB2C = !q.agent_id || q.agent_id === '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
                                         const totalProfit = isB2C ? (platformProfit + agencyPayout) : platformProfit;
@@ -537,15 +642,31 @@ export default function Dashboard() {
                                                     </div>
                                                 </div>
 
-                                                <div className="grid grid-cols-3 gap-2 mb-4">
-                                                    <div className="p-2 rounded-lg bg-background/50 border border-border/50">
-                                                        <p className="text-[8px] text-text-muted font-black uppercase mb-1">Owner Net</p>
-                                                        <p className="text-xs font-mono font-bold text-text-primary">€{base.toLocaleString()}</p>
+                                                <div className={`grid ${editorPct > 0 && !isSelfManagedEditor ? 'grid-cols-4' : 'grid-cols-3'} gap-2 mb-4`}>
+                                                    <div className={`p-2 rounded-lg border ${isSelfManagedEditor ? 'bg-purple-500/5 border-purple-500/20' : 'bg-background/50 border-border/50'}`}>
+                                                        <p className={`text-[8px] font-black uppercase mb-1 ${isSelfManagedEditor ? 'text-purple-400/60' : 'text-text-muted'}`}>
+                                                            {isSelfManagedEditor ? 'Editor (Self-Managed)' : 'Owner Net'}
+                                                        </p>
+                                                        <p className={`text-xs font-mono font-bold ${isSelfManagedEditor ? 'text-purple-400' : 'text-text-primary'}`}>€{ownerPayout.toLocaleString()}</p>
+                                                        {isSelfManagedEditor ? (
+                                                            <p className="text-[7px] text-purple-400/70 font-bold mt-0.5 truncate" title={ownerRecipientName}>{ownerRecipientName}</p>
+                                                        ) : (
+                                                            editorMode === 'deduct' && editorPct > 0 && (
+                                                                <p className="text-[7px] text-purple-400 font-bold mt-0.5">- €{editorShare} editor</p>
+                                                            )
+                                                        )}
                                                     </div>
                                                     <div className="p-2 rounded-lg bg-primary/5 border border-primary/20">
                                                         <p className="text-[8px] text-primary/60 font-black uppercase mb-1">Platform</p>
                                                         <p className="text-xs font-mono font-bold text-primary">€{platformProfit.toLocaleString()}</p>
                                                     </div>
+                                                    {editorPct > 0 && !isSelfManagedEditor && (
+                                                        <div className="p-2 rounded-lg bg-purple-500/5 border border-purple-500/20">
+                                                            <p className="text-[8px] text-purple-400/60 font-black uppercase mb-1">Editor</p>
+                                                            <p className="text-xs font-mono font-bold text-purple-400">€{editorShare.toLocaleString()}</p>
+                                                            <p className="text-[7px] text-purple-400/70 font-bold mt-0.5 truncate" title={editorLabel}>{editorLabel}</p>
+                                                        </div>
+                                                    )}
                                                     <div className="p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
                                                         <p className="text-[8px] text-emerald-400/60 font-black uppercase mb-1">{isB2C ? 'B2C Comm' : 'Agency'}</p>
                                                         <p className="text-xs font-mono font-bold text-emerald-400">€{agencyPayout.toLocaleString()}</p>
@@ -558,8 +679,8 @@ export default function Dashboard() {
                                                         <span className="text-sm font-black text-emerald-500">€{totalProfit.toLocaleString()}</span>
                                                     </div>
                                                     <div className="flex gap-2">
-                                                        <button 
-                                                            onClick={() => handlePayout(q.id, 'owner', base)}
+                                                        <button
+                                                            onClick={() => handlePayout(q.id, 'owner', ownerPayout)}
                                                             disabled={q.payout_owner_sent_at}
                                                             className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${q.payout_owner_sent_at ? 'bg-emerald-500/20 text-emerald-400 cursor-default' : 'bg-primary text-background-dark hover:scale-105 active:scale-95'}`}
                                                         >
@@ -588,6 +709,76 @@ export default function Dashboard() {
                                     <div className="py-20 text-center space-y-4 opacity-40">
                                         <span className="material-symbols-outlined notranslate text-4xl block">task_alt</span>
                                         <p className="text-[10px] font-black uppercase tracking-widest">All settlements complete</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* EDITOR SUBMISSIONS (Super Admin / Admin) */}
+                    {(role === 'super_admin' || role === 'admin') && (
+                        <div className="glass-card overflow-hidden border-border bg-surface shadow-xl relative">
+                            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-pink-500"></div>
+                            <div className="p-4 border-b border-border bg-surface-2 flex items-center justify-between">
+                                <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined notranslate text-purple-400 text-[16px]">villa</span>
+                                    Editor Submissions
+                                </h2>
+                                <span className="bg-purple-500/10 text-purple-400 text-[8px] font-black px-2 py-0.5 rounded uppercase tracking-widest">Captatori</span>
+                            </div>
+                            <div className="p-4 space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
+                                {editorVillas.length > 0 ? (
+                                    editorVillas.map(v => {
+                                        const editor = editorMap[v.created_by];
+                                        const editorLabel = editor?.company_name || editor?.email || (v.created_by ? v.created_by.slice(0, 8) : 'Unknown');
+                                        const owner = v.owner_id ? ownerMap[v.owner_id] : null;
+                                        const ownerIsEditor = v.owner_id && editorMap[v.owner_id];
+                                        const handedOff = v.owner_id && v.owner_id !== v.created_by;
+                                        return (
+                                            <div
+                                                key={v.v_uuid}
+                                                onClick={() => navigate(`/villas/${v.v_uuid}`)}
+                                                className="flex items-center gap-3 p-2 rounded-xl bg-surface-2/40 border border-border hover:border-primary/40 hover:bg-primary/5 cursor-pointer transition-all group"
+                                            >
+                                                <div className="size-12 rounded-lg overflow-hidden bg-surface flex-shrink-0 border border-border">
+                                                    <img
+                                                        src={v.thumbnail_url || 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=200&q=60'}
+                                                        alt=""
+                                                        className="w-full h-full object-cover"
+                                                    />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-xs font-bold text-text-primary truncate group-hover:text-primary transition-colors">
+                                                        {v.villa_name || 'Unnamed Villa'}
+                                                    </p>
+                                                    <p className="text-[10px] text-text-muted uppercase tracking-wider truncate">
+                                                        {[v.areaname, v.district].filter(Boolean).join(' · ') || '—'}
+                                                    </p>
+                                                    <p className="text-[9px] text-purple-400 font-bold uppercase tracking-widest mt-0.5 truncate">
+                                                        by {editorLabel}
+                                                        {handedOff && (
+                                                            <span className="text-emerald-400 normal-case">
+                                                                {' → '}
+                                                                {owner?.name || (ownerIsEditor ? (editorMap[v.owner_id]?.company_name || 'Editor') : v.owner_id.slice(0, 8))}
+                                                            </span>
+                                                        )}
+                                                    </p>
+                                                </div>
+                                                <div className="flex flex-col items-end gap-1">
+                                                    <span className="text-[9px] text-text-muted font-mono whitespace-nowrap">
+                                                        {new Date(v.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                                                    </span>
+                                                    {v.source === 'manual' && (
+                                                        <span className="text-[8px] bg-primary/15 text-primary font-black px-1.5 py-0.5 rounded uppercase tracking-widest">Manual</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                ) : (
+                                    <div className="py-12 text-center space-y-3 opacity-40">
+                                        <span className="material-symbols-outlined notranslate text-3xl block">villa</span>
+                                        <p className="text-[10px] font-black uppercase tracking-widest">No editor submissions yet</p>
                                     </div>
                                 )}
                             </div>

@@ -65,6 +65,15 @@ const AdminRoute = ({ children }) => {
   return children;
 };
 
+// Guard: admin, super_admin, or editor (owners management)
+const OwnersRoute = ({ children }) => {
+  const { user, role, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  if (role !== 'admin' && role !== 'super_admin' && role !== 'editor') return <Navigate to="/" replace />;
+  return children;
+};
+
 // Guard: must be super admin
 const SuperAdminRoute = ({ children }) => {
   const { user, role, loading } = useAuth();
@@ -116,7 +125,7 @@ function App() {
                     <Route path="team" element={<AgencyAgentsPage />} />
                     <Route path="settings" element={<AdminRoute><AdminSettings /></AdminRoute>} />
                     <Route path="agents" element={<AdminRoute><AgentsPage /></AdminRoute>} />
-                    <Route path="owners" element={<AdminRoute><OwnersPage /></AdminRoute>} />
+                    <Route path="owners" element={<OwnersRoute><OwnersPage /></OwnersRoute>} />
                     <Route path="payouts" element={<SuperAdminRoute><PayoutManager /></SuperAdminRoute>} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Route>

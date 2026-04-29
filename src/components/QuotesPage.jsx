@@ -61,6 +61,166 @@ Fino a 60 giorni dall'arrivo: penale del 50%. Successivamente: penale del 100%.
 ### ART. 6 - RESPONSABILITÀ
 La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico.`;
 
+const SUPER_ADMIN_AGENT_ID = '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
+
+function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
+    const base = parseFloat(quote.supplier_base_price || 0);
+    const adminPct = parseFloat(quote.admin_markup || 0);
+    const editorPct = parseFloat(quote.editor_markup || 0);
+    const editorMode = quote.editor_markup_mode || 'add';
+    const finalPrice = parseFloat(quote.final_price || 0);
+
+    const breakdown = Array.isArray(quote.price_breakdown) ? quote.price_breakdown : [];
+    const platformItem = breakdown.find(i => i.label?.includes('Platform'));
+    const agencyItem = breakdown.find(i => i.label?.includes('Agency'));
+    const ivaItem = breakdown.find(i => i.label?.includes('IVA'));
+    const editorItem = breakdown.find(i => i.label?.includes('Editor') || i.label?.includes('Captatore'));
+
+    const editorShare = editorItem ? parseFloat(editorItem.amount) : Math.round(base * (editorPct / 100));
+    const platformProfit = platformItem ? parseFloat(platformItem.amount) : Math.round(base * (adminPct / 100));
+    const agencyProfit = agencyItem
+        ? parseFloat(agencyItem.amount)
+        : Math.max(0, finalPrice - base - platformProfit - (ivaItem ? parseFloat(ivaItem.amount) : 0) - (editorMode === 'add' ? editorShare : 0));
+    const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : 0;
+
+    // Deposit timing
+    const checkIn = quote.check_in ? new Date(quote.check_in) : null;
+    const today = new Date();
+    if (checkIn) checkIn.setUTCHours(0, 0, 0, 0);
+    today.setUTCHours(0, 0, 0, 0);
+    const diffDays = checkIn ? Math.round((checkIn.getTime() - today.getTime()) / 86400000) : 0;
+    const isLastMinute = diffDays <= 42;
+    const upfrontStayPart = isLastMinute ? base : base * 0.5;
+    const balanceLater = base - upfrontStayPart;
+
+    const isVilla = !!quote.invenio_properties;
+    const sellingAgent = quote.agents || null;
+    const sellingAgentAccount = sellingAgent?.stripe_account_id || null;
+    const isB2C = !quote.agent_id || quote.agent_id === SUPER_ADMIN_AGENT_ID;
+
+    const isSelfManagedEditor = isVilla && villaOwnerInfo?.source === 'editor';
+    const ownerStripeAccount = villaOwnerInfo?.stripeAccount || null;
+    const ownerName = villaOwnerInfo?.name || (isVilla ? 'Owner (unassigned)' : 'Boat Owner');
+
+    // Owner-side amount in deposit (combined with editor commission when self-managed)
+    const ownerSideDepositAmount = isSelfManagedEditor
+        ? upfrontStayPart + editorShare
+        : upfrontStayPart;
+
+    const fmt = (n) => `€${Math.round(n).toLocaleString()}`;
+
+    const Box = ({ tone, label, name, sub, amount, account, warn, note }) => {
+        const toneMap = {
+            client: 'border-cyan-500/40 bg-cyan-500/5 text-cyan-400',
+            owner: 'border-purple-500/40 bg-purple-500/5 text-purple-400',
+            editor: 'border-fuchsia-500/40 bg-fuchsia-500/5 text-fuchsia-400',
+            agency: 'border-emerald-500/40 bg-emerald-500/5 text-emerald-400',
+            platform: 'border-amber-500/40 bg-amber-500/5 text-amber-400',
+            warn: 'border-red-500/40 bg-red-500/5 text-red-400',
+        };
+        return (
+            <div className={`flex-1 min-w-[160px] rounded-xl border p-3 ${toneMap[warn ? 'warn' : tone] || ''}`}>
+                <p className="text-[8px] font-black uppercase tracking-widest opacity-70 mb-1">{label}</p>
+                <p className="text-sm font-black truncate" title={name}>{name}</p>
+                {sub && <p className="text-[9px] font-bold opacity-70 truncate">{sub}</p>}
+                <p className="text-base font-mono font-black mt-2">{fmt(amount)}</p>
+                {account && (
+                    <p className="text-[9px] font-mono opacity-60 mt-1 truncate" title={account}>{account}</p>
+                )}
+                {note && <p className="text-[9px] font-bold mt-1 opacity-80">{note}</p>}
+                {warn && <p className="text-[9px] font-black mt-1 uppercase tracking-widest">⚠ Stripe Connect missing</p>}
+            </div>
+        );
+    };
+
+    const Arrow = () => (
+        <div className="flex items-center justify-center text-text-muted opacity-60 self-center">
+            <span className="material-symbols-outlined notranslate text-xl">arrow_forward</span>
+        </div>
+    );
+
+    return (
+        <tr className="bg-surface-2/30">
+            <td colSpan={colSpan} className="px-5 py-4">
+                <div className="rounded-2xl border border-border bg-background/40 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-primary">
+                            Connect Payment Flow {isSelfManagedEditor && <span className="text-fuchsia-400 ml-2">(Self-Managed Editor)</span>}
+                        </h3>
+                        <span className="text-[9px] text-text-muted font-bold uppercase tracking-widest">
+                            {isLastMinute ? '100% upfront' : '50% deposit / 50% balance'}
+                        </span>
+                    </div>
+
+                    {/* Deposit row */}
+                    <p className="text-[9px] font-black uppercase tracking-widest text-text-muted mb-2">Deposit charge ({fmt((finalPrice - base) + upfrontStayPart)})</p>
+                    <div className="flex items-stretch gap-2 flex-wrap mb-4">
+                        <Box tone="client" label="Client pays" name={quote.clients?.full_name || 'Client'} amount={(finalPrice - base) + upfrontStayPart}
+                             note={isB2C ? 'Direct to platform' : `Direct charge → ${sellingAgent?.company_name || 'agency'}`} />
+                        <Arrow />
+                        <Box tone={isSelfManagedEditor ? 'editor' : 'owner'}
+                             label={isSelfManagedEditor ? 'Editor (self-managed owner)' : 'Owner'}
+                             name={ownerName}
+                             sub={isSelfManagedEditor ? 'Pays real owner manually' : undefined}
+                             amount={ownerSideDepositAmount}
+                             account={ownerStripeAccount}
+                             warn={!ownerStripeAccount && ownerSideDepositAmount > 0} />
+                        {!isSelfManagedEditor && editorShare > 0 && (
+                            <>
+                                <Arrow />
+                                <Box tone="editor" label="Editor commission" name="Linked Captatore" amount={editorShare} note="Routed only when owner.split_enabled" />
+                            </>
+                        )}
+                        {!isB2C && (
+                            <>
+                                <Arrow />
+                                <Box tone="agency" label="Selling Agency" name={sellingAgent?.company_name || 'Agency'} amount={agencyProfit}
+                                     account={sellingAgentAccount}
+                                     warn={!sellingAgentAccount && agencyProfit > 0} />
+                            </>
+                        )}
+                        <Arrow />
+                        <Box tone="platform" label="Platform" name="Ibiza Beyond"
+                             amount={platformProfit + ivaAmount}
+                             note="application_fee_amount (incl. IVA)" />
+                    </div>
+
+                    {/* Balance row (only when split deposit) */}
+                    {!isLastMinute && balanceLater > 0 && (
+                        <>
+                            <p className="text-[9px] font-black uppercase tracking-widest text-text-muted mb-2">Balance later ({fmt(balanceLater)})</p>
+                            <div className="flex items-stretch gap-2 flex-wrap">
+                                <Box tone="client" label="Client pays balance" name={quote.clients?.full_name || 'Client'} amount={balanceLater} />
+                                <Arrow />
+                                <Box tone={isSelfManagedEditor ? 'editor' : 'owner'}
+                                     label={isSelfManagedEditor ? 'Editor (self-managed)' : 'Owner'}
+                                     name={ownerName}
+                                     amount={balanceLater}
+                                     account={ownerStripeAccount}
+                                     warn={!ownerStripeAccount && balanceLater > 0} />
+                            </div>
+                        </>
+                    )}
+
+                    <div className="mt-3 pt-3 border-t border-border/40 flex flex-wrap gap-3 text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                        <span>Total client: {fmt(finalPrice)}</span>
+                        <span className="opacity-50">•</span>
+                        <span>Base (owner side): {fmt(base)}</span>
+                        <span className="opacity-50">•</span>
+                        <span>Editor: {fmt(editorShare)} ({editorMode})</span>
+                        <span className="opacity-50">•</span>
+                        <span>Platform: {fmt(platformProfit)}</span>
+                        <span className="opacity-50">•</span>
+                        <span>Agency: {fmt(agencyProfit)}</span>
+                        <span className="opacity-50">•</span>
+                        <span>IVA: {fmt(ivaAmount)}</span>
+                    </div>
+                </div>
+            </td>
+        </tr>
+    );
+}
+
 export default function QuotesPage() {
     const { user, role, agentData } = useAuth();
     const queryClient = useQueryClient();
@@ -71,6 +231,7 @@ export default function QuotesPage() {
     const [selectedQuotes, setSelectedQuotes] = useState([]);
     const [groupByClient, setGroupByClient] = useState(true);
     const [expandedGroups, setExpandedGroups] = useState({});
+    const [flowOpenIds, setFlowOpenIds] = useState({});
 
     // --- Data Queries ---
     const { data: quotes = [], isLoading: quotesLoading } = useQuery({
@@ -90,14 +251,16 @@ export default function QuotesPage() {
                     stripe_fee_included,
                     supplier_base_price,
                     admin_markup,
+                    editor_markup,
+                    editor_markup_mode,
                     price_breakdown,
                     documenso_document_id,
                     group_details,
                     rental_type,
                     clients(full_name, email, phone_number, dob, id_number, address_street),
-                    invenio_properties(*),
+                    invenio_properties(*, owners(name, stripe_account_id)),
                     invenio_boats(*),
-                    agents!quotes_agent_id_fkey(company_name, contract_template, boat_contract_template, phone_number, agency_details)
+                    agents!quotes_agent_id_fkey(company_name, contract_template, boat_contract_template, phone_number, agency_details, stripe_account_id)
                 `)
                 .order('created_at', { ascending: false });
 
@@ -129,6 +292,43 @@ export default function QuotesPage() {
             return parseFloat(data?.iva_percent) || 10;
         },
         staleTime: 1000 * 60 * 60, // 1 hour
+    });
+
+    // Resolve villa.owner_id -> {name, source: 'owner'|'editor', stripeAccount} so the
+    // payment-flow viewer can show self-managed editors (owner_id pointing to an agents row).
+    const ownerIdsForLookup = Array.from(new Set(
+        (quotes || []).map(q => q.invenio_properties?.owner_id).filter(Boolean)
+    ));
+    const { data: villaOwnerMap = {} } = useQuery({
+        queryKey: ['villaOwnerMap', ownerIdsForLookup.sort().join(',')],
+        queryFn: async () => {
+            if (ownerIdsForLookup.length === 0) return {};
+            const map = {};
+            const { data: ownerRows } = await supabase
+                .from('owners')
+                .select('id, name, stripe_account_id')
+                .in('id', ownerIdsForLookup);
+            for (const o of (ownerRows || [])) {
+                map[o.id] = { name: o.name, source: 'owner', stripeAccount: o.stripe_account_id || null };
+            }
+            const missing = ownerIdsForLookup.filter(id => !map[id]);
+            if (missing.length > 0) {
+                const { data: agentRows } = await supabase
+                    .from('agents')
+                    .select('id, company_name, email, stripe_account_id')
+                    .in('id', missing);
+                for (const a of (agentRows || [])) {
+                    map[a.id] = {
+                        name: a.company_name || a.email || a.id.slice(0, 8),
+                        source: 'editor',
+                        stripeAccount: a.stripe_account_id || null,
+                    };
+                }
+            }
+            return map;
+        },
+        enabled: ownerIdsForLookup.length > 0,
+        staleTime: 1000 * 60 * 5,
     });
 
     const refreshData = () => {
@@ -685,8 +885,10 @@ export default function QuotesPage() {
                             </thead>
                             <tbody>
                                 {(() => {
+                                    const colCount = role === 'admin' || role === 'super_admin' ? 12 : (role === 'agency_admin' ? 11 : 10);
                                     const renderQuoteRow = (q, isNested = false) => (
-                                        <tr key={q.id} className={`hover:bg-primary/5 transition-colors group ${selectedQuotes.includes(q.id) ? 'bg-primary/5' : ''} ${isNested ? 'bg-surface/30' : ''}`}>
+                                        <React.Fragment key={q.id}>
+                                        <tr className={`hover:bg-primary/5 transition-colors group ${selectedQuotes.includes(q.id) ? 'bg-primary/5' : ''} ${isNested ? 'bg-surface/30' : ''}`}>
                                             <td className="px-5 py-4">
                                                 <input 
                                                     type="checkbox" 
@@ -847,16 +1049,26 @@ export default function QuotesPage() {
                                                         >
                                                             <span className="material-symbols-outlined notranslate text-[18px]">picture_as_pdf</span>
                                                         </button>
-                                                        <button 
+                                                        <button
                                                             onClick={() => handleDeleteQuote(q.id)}
                                                             className="size-8 rounded-lg bg-surface-2 border border-border flex items-center justify-center text-text-muted hover:text-red-500 transition-all"
                                                             title="Delete Quote"
                                                         >
                                                             <span className="material-symbols-outlined notranslate text-[18px]">delete</span>
                                                         </button>
-                                                        
+
+                                                        {role === 'super_admin' && (
+                                                            <button
+                                                                onClick={() => setFlowOpenIds(prev => ({ ...prev, [q.id]: !prev[q.id] }))}
+                                                                className={`size-8 rounded-lg border flex items-center justify-center transition-all ${flowOpenIds[q.id] ? 'bg-fuchsia-500/20 border-fuchsia-500/40 text-fuchsia-400' : 'bg-surface-2 border-border text-text-muted hover:text-fuchsia-400'}`}
+                                                                title="Connect Payment Flow"
+                                                            >
+                                                                <span className="material-symbols-outlined notranslate text-[18px]">account_tree</span>
+                                                            </button>
+                                                        )}
+
                                                         {(role === 'admin' || role === 'super_admin') && (q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
-                                                            <button 
+                                                            <button
                                                                 onClick={() => handleAskAvailability(q)}
                                                                 className="size-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/20 transition-all"
                                                                 title="Ask Owner Availability (WhatsApp)"
@@ -868,6 +1080,14 @@ export default function QuotesPage() {
                                                 </div>
                                             </td>
                                         </tr>
+                                        {role === 'super_admin' && flowOpenIds[q.id] && (
+                                            <PaymentFlowDiagram
+                                                quote={q}
+                                                villaOwnerInfo={q.invenio_properties?.owner_id ? villaOwnerMap[q.invenio_properties.owner_id] : null}
+                                                colSpan={colCount}
+                                            />
+                                        )}
+                                        </React.Fragment>
                                     );
 
                                     if (!groupByClient) {

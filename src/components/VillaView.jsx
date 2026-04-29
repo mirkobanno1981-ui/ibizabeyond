@@ -15,6 +15,7 @@ export default function VillaView() {
     // Data states
     const [villa, setVilla] = useState(null);
     const [photos, setPhotos] = useState([]);
+    const [videos, setVideos] = useState([]);
     const [seasonalRates, setSeasonalRates] = useState([]);
     const [blockedDates, setBlockedDates] = useState([]);
     const [clients, setClients] = useState([]);
@@ -58,6 +59,8 @@ export default function VillaView() {
     const [useForexFee, setUseForexFee] = useState(false);
     const [platformMargin, setPlatformMargin] = useState(15);
     const [agentMargin, setAgentMargin] = useState(0);
+    const [editorMargin, setEditorMargin] = useState(0);
+    const [editorMarkupMode, setEditorMarkupMode] = useState('deduct'); // 'add' | 'deduct'
     
     // Quick Client Create
     const [showNewClientForm, setShowNewClientForm] = useState(false);
@@ -93,7 +96,7 @@ export default function VillaView() {
         });
         
         let amount = 0;
-        if (rate) amount = parseFloat(rate.amount) / 7;
+        if (rate) amount = parseFloat(rate.amount);
         else amount = parseFloat(villa?.minimum_price || 0) / 7;
 
         if (withMarkup) {
@@ -116,8 +119,8 @@ export default function VillaView() {
             return date >= start && date <= end;
         });
         return {
-            minimum_nights: seasonalRule?.minimum_nights || villa.minimum_nights || 7,
-            allowed_checkin_days: seasonalRule?.allowed_checkin_days || villa.allowed_checkin_days || 'Flexible check in days'
+            minimum_nights: seasonalRule?.minimum_nights || villa?.minimum_nights || 7,
+            allowed_checkin_days: seasonalRule?.allowed_checkin_days || villa?.allowed_checkin_days || 'Flexible check in days'
         };
     };
 
@@ -201,7 +204,7 @@ export default function VillaView() {
             }
         }
 
-        if (isShortStay && villa.allow_shortstays !== '1' && villa.allow_shortstays !== 'yes') {
+        if (isShortStay && villa?.allow_shortstays !== '1' && villa?.allow_shortstays !== 'yes') {
             errors.push("Short stays (less than 7 nights) are not allowed for this property.");
         }
 
@@ -231,7 +234,7 @@ export default function VillaView() {
             desc: `Stay from ${new Date(selectionStart).toLocaleDateString()} to ${new Date(selectionEnd).toLocaleDateString()}`
         });
 
-        if (villa.cleaning_charge > 0) {
+        if (villa?.cleaning_charge > 0) {
             items.push({ 
                 label: 'Cleaning Fee', 
                 amount: parseFloat(villa.cleaning_charge),
@@ -241,7 +244,7 @@ export default function VillaView() {
         }
 
         const isShortStay = diffDays <= 6;
-        if (isShortStay && (villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes' || villa.allow_shortstays === true)) {
+        if (isShortStay && (villa?.allow_shortstays === '1' || villa?.allow_shortstays === 'yes' || villa?.allow_shortstays === true)) {
             let factor = 0;
             if (diffDays === 3) factor = 0.50;
             else if (diffDays === 4) factor = 0.25;
@@ -274,9 +277,22 @@ export default function VillaView() {
         
         const adminMarkupVal = parseFloat(platformMargin);
         const agentMarkupVal = parseFloat(agentMargin);
-            
-        const priceWithAdmin = baseTotal * (1 + adminMarkupVal / 100);
+        const editorMarkupVal = parseFloat(editorMargin) || 0;
+        const editorAddsToPrice = editorMarkupMode === 'add' && editorMarkupVal > 0;
+
+        const priceWithEditor = editorAddsToPrice
+            ? baseTotal * (1 + editorMarkupVal / 100)
+            : baseTotal;
+        const priceWithAdmin = priceWithEditor * (1 + adminMarkupVal / 100);
         const totalWithMarkup = priceWithAdmin * (1 + agentMarkupVal / 100);
+
+        if (editorAddsToPrice) {
+            breakdownItems.push({
+                label: `Editor (Captatore) ${editorMarkupVal}%`,
+                amount: priceWithEditor - baseTotal,
+                desc: 'Commission added to client price'
+            });
+        }
         
         let subtotal;
         let finalPrice;
@@ -390,6 +406,14 @@ export default function VillaView() {
                 .order('sort_order', { ascending: true });
             setPhotos(photoData || []);
 
+            // 2b. Fetch All Videos
+            const { data: videoData } = await supabase
+                .from('invenio_videos')
+                .select('id, url, caption, sort_order')
+                .eq('v_uuid', id)
+                .order('sort_order', { ascending: true });
+            setVideos(videoData || []);
+
             // 3. Fetch Seasonal Rates
             const { data: rateData } = await supabase
                 .from('invenio_seasonal_prices')
@@ -438,6 +462,11 @@ export default function VillaView() {
                     : (marginData.invenio_to_admin_margin || 15);
                 setPlatformMargin(activeAdminMargin);
                 setAgentMargin(0); // Default villa agent margin is 0
+                setEditorMargin(
+                    parseFloat(villaData.capturer_commission_pct)
+                    || parseFloat(villaData.editor_markup_percent)
+                    || 0
+                );
             }
 
             // 6. Availability from villa_blocked_dates (server-synced from iCal).
@@ -641,6 +670,8 @@ export default function VillaView() {
                 supplier_base_price: supplierBase,
                 admin_markup: platformMargin,
                 agent_markup: agentMargin,
+                editor_markup: parseFloat(editorMargin) || 0,
+                editor_markup_mode: editorMarkupMode,
                 extra_services: extraServices,
                 stripe_fee_included: useStripeFee,
                 forex_fee_included: useForexFee,
@@ -814,6 +845,34 @@ export default function VillaView() {
                                 </div>
                             ))}
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Videos */}
+            {videos.length > 0 && (
+                <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined notranslate text-primary">play_circle</span>
+                        <h2 className="text-lg font-bold text-text-primary">Videos</h2>
+                        <span className="text-text-muted text-xs">({videos.length})</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {videos.map(v => (
+                            <div key={v.id} className="rounded-2xl overflow-hidden bg-surface border border-border aspect-video">
+                                <video
+                                    src={v.url}
+                                    controls
+                                    preload="metadata"
+                                    className="w-full h-full object-cover"
+                                >
+                                    Your browser does not support the video tag.
+                                </video>
+                                {v.caption && (
+                                    <p className="px-4 py-2 text-xs text-text-muted">{v.caption}</p>
+                                )}
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -1304,31 +1363,72 @@ export default function VillaView() {
                                     
                                     {/* Profit Margin Controls - Super Admin Only */}
                                     {role === 'super_admin' && (
-                                        <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-top-2">
-                                            <div className="bg-background/50 p-4 rounded-2xl border border-border">
-                                                <label className="text-[10px] text-text-muted font-black uppercase tracking-widest block mb-2">Platform Mark-up (%)</label>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="material-symbols-outlined notranslate text-sm text-primary">account_balance</span>
-                                                    <input 
-                                                        type="number"
-                                                        value={platformMargin}
-                                                        onChange={e => setPlatformMargin(parseFloat(e.target.value) || 0)}
-                                                        className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
-                                                    />
+                                        <div className="space-y-3 animate-in slide-in-from-top-2">
+                                            <div className="grid grid-cols-3 gap-3">
+                                                <div className="bg-background/50 p-3 rounded-2xl border border-border">
+                                                    <label className="text-[9px] text-text-muted font-black uppercase tracking-widest block mb-2">Platform %</label>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="material-symbols-outlined notranslate text-sm text-primary">account_balance</span>
+                                                        <input
+                                                            type="number"
+                                                            value={platformMargin}
+                                                            onChange={e => setPlatformMargin(parseFloat(e.target.value) || 0)}
+                                                            className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="bg-background/50 p-3 rounded-2xl border border-border">
+                                                    <label className="text-[9px] text-text-muted font-black uppercase tracking-widest block mb-2">Agent %</label>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="material-symbols-outlined notranslate text-sm text-blue-400">person</span>
+                                                        <input
+                                                            type="number"
+                                                            value={agentMargin}
+                                                            onChange={e => setAgentMargin(parseFloat(e.target.value) || 0)}
+                                                            className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="bg-background/50 p-3 rounded-2xl border border-purple-500/30">
+                                                    <label className="text-[9px] text-purple-400 font-black uppercase tracking-widest block mb-2">Editor (Captatore) %</label>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="material-symbols-outlined notranslate text-sm text-purple-400">badge</span>
+                                                        <input
+                                                            type="number"
+                                                            value={editorMargin}
+                                                            onChange={e => setEditorMargin(parseFloat(e.target.value) || 0)}
+                                                            className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
+                                                        />
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <div className="bg-background/50 p-4 rounded-2xl border border-border">
-                                                <label className="text-[10px] text-text-muted font-black uppercase tracking-widest block mb-2">Agent Mark-up (%)</label>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="material-symbols-outlined notranslate text-sm text-blue-400">person</span>
-                                                    <input 
-                                                        type="number"
-                                                        value={agentMargin}
-                                                        onChange={e => setAgentMargin(parseFloat(e.target.value) || 0)}
-                                                        className="bg-transparent border-none text-sm font-black text-text-primary w-full outline-none"
-                                                    />
+                                            {editorMargin > 0 && (
+                                                <div className="flex items-center gap-2 bg-purple-500/5 border border-purple-500/20 rounded-xl p-2">
+                                                    <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest">Editor commission mode:</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setEditorMarkupMode('deduct')}
+                                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${
+                                                            editorMarkupMode === 'deduct'
+                                                                ? 'bg-purple-500 text-white'
+                                                                : 'bg-transparent text-text-muted border border-border hover:text-text-primary'
+                                                        }`}
+                                                    >
+                                                        Deduct from Owner
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setEditorMarkupMode('add')}
+                                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${
+                                                            editorMarkupMode === 'add'
+                                                                ? 'bg-purple-500 text-white'
+                                                                : 'bg-transparent text-text-muted border border-border hover:text-text-primary'
+                                                        }`}
+                                                    >
+                                                        Add to Client Price
+                                                    </button>
                                                 </div>
-                                            </div>
+                                            )}
                                         </div>
                                     )}
 

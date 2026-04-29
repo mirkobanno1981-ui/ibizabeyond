@@ -200,6 +200,10 @@ export default function Layout() {
                         )}
                     </>
                 )}
+
+                {role === 'editor' && (
+                    <NavItem to="/owners" icon="groups" label="Owners" />
+                )}
             </nav>
 
             {/* User profile */}

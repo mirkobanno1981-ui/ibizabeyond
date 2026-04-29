@@ -50,6 +50,8 @@ serve(async (req) => {
         supplier_base_price,
         admin_markup,
         agent_markup,
+        editor_markup,
+        editor_markup_mode,
         extra_services,
         agent_id,
         v_uuid,
@@ -62,7 +64,12 @@ serve(async (req) => {
           villa_name,
           deposit,
           editor_markup_percent,
+          capturer_commission_mode,
+          capturer_commission_pct,
+          capturer_commission_amount,
+          capturer_commission_included,
           rental_type_configs,
+          owner_id,
           owners ( stripe_account_id, split_enabled, agent_id )
         ),
         invenio_boats (
@@ -93,21 +100,57 @@ serve(async (req) => {
       ? parseFloat(quote.invenio_properties?.deposit || 0)
       : parseFloat(quote.invenio_boats?.security_deposit || 0);
 
-    const ownerStripeAccount = isVilla
-      ? quote.invenio_properties?.owners?.stripe_account_id
-      : quote.invenio_boats?.owners?.stripe_account_id;
+    let ownerStripeAccount: string | null = isVilla
+      ? (quote.invenio_properties?.owners?.stripe_account_id || null)
+      : (quote.invenio_boats?.owners?.stripe_account_id || null);
 
     const ownerSplitEnabled = isVilla
       ? !!quote.invenio_properties?.owners?.split_enabled
       : false;
 
+    // Capturer (editor) commission: per-quote override (% only) wins; otherwise
+    // fall back to the villa-level capturer commission spec (mode + pct/amount +
+    // included flag, with optional per-rental-type override of "included").
+    const villaProps: any = quote.invenio_properties || {};
+    const rentalTypeForSpec = (quote as any).rental_type || 'daily';
+    const rtCfg = (villaProps.rental_type_configs?.[rentalTypeForSpec]) || {};
+    const capMode: 'percent' | 'fixed' =
+      (villaProps.capturer_commission_mode as any) || 'percent';
+    const capPct = parseFloat(
+      villaProps.capturer_commission_pct ?? villaProps.editor_markup_percent ?? 0
+    ) || 0;
+    const capAmount = parseFloat(villaProps.capturer_commission_amount ?? 0) || 0;
+    const capIncluded =
+      rtCfg.commission_included_override === true  ? true
+    : rtCfg.commission_included_override === false ? false
+    : !!villaProps.capturer_commission_included;
+
+    // Quote-level override is always interpreted as percent (legacy behaviour).
+    const quoteOverridePct = quote.editor_markup != null
+      ? parseFloat(quote.editor_markup)
+      : null;
     const editorMarkupPct = isVilla
-      ? parseFloat(quote.invenio_properties?.editor_markup_percent || 0)
+      ? (quoteOverridePct != null ? quoteOverridePct : (capMode === 'percent' ? capPct : 0))
       : 0;
 
     const editorAgentId = isVilla
       ? quote.invenio_properties?.owners?.agent_id
       : null;
+
+    // Fallback: villa.owner_id may point to an editor (agents row) without a matching
+    // owners row. Treat the editor as the owner-side recipient (self-managed).
+    let selfManagedEditor = false;
+    if (isVilla && !ownerStripeAccount && quote.invenio_properties?.owner_id) {
+      const { data: agt } = await supabase
+        .from('agents')
+        .select('id, company_name, stripe_account_id')
+        .eq('id', quote.invenio_properties.owner_id)
+        .single();
+      if (agt?.stripe_account_id) {
+        ownerStripeAccount = agt.stripe_account_id;
+        selfManagedEditor = true;
+      }
+    }
 
     let editorStripeAccount: string | null = null;
     if (editorAgentId) {
@@ -197,31 +240,42 @@ serve(async (req) => {
     }
 
     // ---- Editor (captatore) commission split ----
-    // Default routing: invenioTransferAmount -> ownerStripeAccount (existing).
-    // Editor split overrides only when villa is captured by an editor and split_enabled.
+    // Routing rules:
+    //  - selfManagedEditor: villa.owner_id is an editor without an owners row.
+    //      Editor receives upfrontStayPart + editor commission; settles real owner manually.
+    //  - 2-recipient split: villa has a real owner with split_enabled + linked editor.
+    //  - Legacy: invenioTransferAmount -> ownerStripeAccount (single-owner).
     let ownerTransferAmount = 0;
     let ownerTransferAccount: string | null = null;
     let editorTransferAmount = 0;
     let editorTransferAccount: string | null = null;
 
-    if (type !== 'security_deposit' && isVilla && ownerSplitEnabled && editorAgentId) {
-      const editorShare = supplierBase * (editorMarkupPct / 100);
-      const ownerShareRaw = Math.max(0, invenioTransferAmount - editorShare);
+    if (type !== 'security_deposit' && isVilla && ownerStripeAccount) {
+      // Resolve absolute editor (capturer) share. Quote-level override is
+      // always %; otherwise honour villa-level mode (percent or fixed €).
+      const editorShare = quoteOverridePct != null || capMode === 'percent'
+        ? supplierBase * (editorMarkupPct / 100)
+        : capAmount;
 
-      if (ownerStripeAccount) {
+      if (selfManagedEditor) {
+        // Editor IS the owner-side recipient — receives both stay portion and
+        // commission. capIncluded irrelevant: same wallet anyway.
+        ownerTransferAccount = ownerStripeAccount;
+        ownerTransferAmount = invenioTransferAmount + (capIncluded ? 0 : editorShare);
+        invenioTransferAmount = 0;
+      } else if (ownerSplitEnabled && editorAgentId && editorStripeAccount) {
+        // capIncluded=true  → commission already inside supplierBase, deduct from owner.
+        // capIncluded=false → commission added on top, owner keeps full stay portion.
+        const ownerShareRaw = capIncluded
+          ? Math.max(0, invenioTransferAmount - editorShare)
+          : invenioTransferAmount;
         ownerTransferAccount = ownerStripeAccount;
         ownerTransferAmount = ownerShareRaw;
         editorTransferAccount = editorStripeAccount;
         editorTransferAmount = editorShare;
-        // Suppress legacy single-owner transfer; webhook will use new fields
-        invenioTransferAmount = 0;
-      } else if (editorStripeAccount) {
-        // Owner not connected: redirect entire upfrontStayPart to editor
-        editorTransferAccount = editorStripeAccount;
-        editorTransferAmount = invenioTransferAmount;
         invenioTransferAmount = 0;
       }
-      // else: neither connected -> keep platform-held (existing behavior, no transfer)
+      // else: legacy single-owner path keeps invenioTransferAmount; routed below.
     }
 
     if (isNaN(amountToCharge) || amountToCharge <= 0) {

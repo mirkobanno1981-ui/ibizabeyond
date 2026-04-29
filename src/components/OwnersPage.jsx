@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function OwnersPage() {
-    const { user, role, loading: authLoading } = useAuth();
+    const { user, role, agentData, loading: authLoading } = useAuth();
     const [owners, setOwners] = useState([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(null);
@@ -13,14 +13,20 @@ export default function OwnersPage() {
     const [newOwner, setNewOwner] = useState({ name: '', email: '', password: '', company_name: '', logo_url: '', phone_number: '', stripe_account_id: '' });
     const [newPassword, setNewPassword] = useState('');
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+    const [showInactive, setShowInactive] = useState(false);
+    const [villasModal, setVillasModal] = useState(null);
+    const [villasModalList, setVillasModalList] = useState([]);
+    const [stripeConnecting, setStripeConnecting] = useState(null);
+
+    const canManage = role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent';
 
     useEffect(() => {
-        if (!authLoading && (role === 'admin' || role === 'super_admin')) {
+        if (!authLoading && canManage) {
             fetchAll();
         } else if (!authLoading) {
             setLoading(false);
         }
-    }, [role, authLoading]);
+    }, [role, authLoading, showInactive]);
 
     if (authLoading) {
         return (
@@ -31,7 +37,7 @@ export default function OwnersPage() {
         );
     }
 
-    if (role !== 'admin' && role !== 'super_admin') {
+    if (!canManage) {
         return (
             <div className="h-screen flex items-center justify-center p-6 text-center">
                 <div className="max-w-md space-y-4">
@@ -49,22 +55,14 @@ export default function OwnersPage() {
         setLoading(true);
         try {
             let query = supabase.from('owners').select('*');
-            
-            if (role === 'agent') {
-                // First get the agent profile id
-                const { data: agentData } = await supabase
-                    .from('agents')
-                    .select('id')
-                    .eq('user_id', user.id)
-                    .single();
-                
-                if (agentData) {
-                    query = query.eq('agent_id', agentData.id);
-                } else {
-                    // If agent profile not found, return empty
-                    setOwners([]);
-                    return;
-                }
+
+            if (role === 'agent' || role === 'editor') {
+                const agentId = agentData?.id || user.id;
+                query = query.eq('agent_id', agentId);
+            }
+
+            if (!showInactive) {
+                query = query.neq('is_active', false);
             }
 
             const { data, error } = await query.order('name');
@@ -121,13 +119,8 @@ export default function OwnersPage() {
 
             // 3. Create Owner Profile
             let agentIdToLink = null;
-            if (role === 'agent') {
-                const { data: agentData } = await supabase
-                    .from('agents')
-                    .select('id')
-                    .eq('user_id', user.id)
-                    .single();
-                agentIdToLink = agentData?.id;
+            if (role === 'agent' || role === 'editor') {
+                agentIdToLink = agentData?.id || user.id;
             }
 
             const { error: profileErr } = await supabase
@@ -171,7 +164,8 @@ export default function OwnersPage() {
                     logo_url: editOwner.logo_url,
                     phone_number: editOwner.phone_number,
                     stripe_account_id: editOwner.stripe_account_id,
-                    is_active: editOwner.is_active ?? true
+                    is_active: editOwner.is_active ?? true,
+                    split_enabled: !!editOwner.split_enabled,
                 })
                 .eq('id', editOwner.id);
 
@@ -186,6 +180,48 @@ export default function OwnersPage() {
             setMessage({ type: 'error', text: err.message });
         } finally {
             setSaving(null);
+        }
+    }
+
+    async function handleSoftDelete(owner) {
+        if (!window.confirm(`Owner "${owner.name}" sara nascosto. Dati e ville restano collegati e recuperabili. Continuare?`)) return;
+        const { error } = await supabase.from('owners').update({ is_active: false }).eq('id', owner.id);
+        if (error) { setMessage({ type: 'error', text: error.message }); return; }
+        setMessage({ type: 'success', text: 'Owner disattivato.' });
+        fetchAll();
+    }
+
+    async function handleReactivate(owner) {
+        const { error } = await supabase.from('owners').update({ is_active: true }).eq('id', owner.id);
+        if (error) { setMessage({ type: 'error', text: error.message }); return; }
+        setMessage({ type: 'success', text: 'Owner riattivato.' });
+        fetchAll();
+    }
+
+    async function handleViewVillas(owner) {
+        setVillasModal(owner);
+        setVillasModalList([]);
+        const { data } = await supabase
+            .from('invenio_properties')
+            .select('v_uuid, villa_name, license, editor_markup_percent, capturer_commission_mode, capturer_commission_pct, capturer_commission_amount, capturer_commission_included, is_active')
+            .eq('owner_id', owner.id)
+            .order('villa_name');
+        setVillasModalList(data || []);
+    }
+
+    async function handleConnectStripe(owner) {
+        setStripeConnecting(owner.id);
+        try {
+            const { data, error } = await supabase.functions.invoke('stripe-connect-express', {
+                body: { accountType: 'owner', accountId: owner.id, country: 'ES' }
+            });
+            if (error) throw error;
+            if (data?.url) window.location.href = data.url;
+            else throw new Error('No onboarding URL returned');
+        } catch (err) {
+            setMessage({ type: 'error', text: 'Stripe connect failed: ' + err.message });
+        } finally {
+            setStripeConnecting(null);
         }
     }
 
@@ -221,13 +257,13 @@ export default function OwnersPage() {
                     <h1 className="text-2xl font-bold text-text-primary uppercase tracking-tight">Owner Management</h1>
                     <p className="text-text-muted text-sm mt-0.5">Manage property owners and their payment settings</p>
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'agent') && (
-                    <button 
+                {canManage && (
+                    <button
                         onClick={() => setShowAddModal(true)}
                         className="btn-primary text-sm flex items-center gap-2"
                     >
                         <span className="material-symbols-outlined notranslate text-[18px]">person_add</span>
-                        {role === 'agent' ? 'Add New Contact' : 'Create New Owner'}
+                        {(role === 'agent' || role === 'editor') ? 'Add New Contact' : 'Create New Owner'}
                     </button>
                 )}
             </div>
@@ -249,7 +285,13 @@ export default function OwnersPage() {
                         <span className="material-symbols-outlined notranslate text-primary text-[20px]">groups</span>
                         Registered Owners
                     </h2>
-                    <span className="text-[10px] bg-primary/20 px-2 py-1 rounded-full text-primary font-black uppercase tracking-widest">{owners.length} Total</span>
+                    <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-black text-text-muted cursor-pointer">
+                            <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} className="size-3.5 accent-primary" />
+                            Show inactive
+                        </label>
+                        <span className="text-[10px] bg-primary/20 px-2 py-1 rounded-full text-primary font-black uppercase tracking-widest">{owners.length} Total</span>
+                    </div>
                 </div>
 
                 <div className="divide-y divide-border/30">
@@ -301,13 +343,57 @@ export default function OwnersPage() {
                                             )}
                                         </div>
                                     </div>
-                                <div className="flex gap-2">
-                                    <button 
-                                        onClick={() => setEditOwner({ ...owner })}
+                                <div className="flex gap-1.5 flex-wrap justify-end">
+                                    <button
+                                        onClick={() => handleViewVillas(owner)}
+                                        title="View villas"
                                         className="p-2.5 rounded-xl bg-surface-2 border border-border text-text-muted hover:text-primary hover:border-primary/50 transition-all flex items-center justify-center"
                                     >
-                                        <span className="material-symbols-outlined notranslate text-[20px]">edit</span>
+                                        <span className="material-symbols-outlined notranslate text-[18px]">villa</span>
                                     </button>
+                                    {!owner.stripe_account_id ? (
+                                        <button
+                                            onClick={() => handleConnectStripe(owner)}
+                                            disabled={stripeConnecting === owner.id}
+                                            title="Connect Stripe"
+                                            className="p-2.5 rounded-xl bg-surface-2 border border-border text-text-muted hover:text-[#635bff] hover:border-[#635bff]/50 transition-all flex items-center justify-center disabled:opacity-50"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-[18px]">{stripeConnecting === owner.id ? 'sync' : 'link'}</span>
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={() => handleConnectStripe(owner)}
+                                            disabled={stripeConnecting === owner.id}
+                                            title="Re-verify Stripe"
+                                            className="p-2.5 rounded-xl bg-[#635bff]/10 border border-[#635bff]/30 text-[#635bff] hover:bg-[#635bff]/20 transition-all flex items-center justify-center disabled:opacity-50"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-[18px]">{stripeConnecting === owner.id ? 'sync' : 'verified'}</span>
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => setEditOwner({ ...owner })}
+                                        title="Edit"
+                                        className="p-2.5 rounded-xl bg-surface-2 border border-border text-text-muted hover:text-primary hover:border-primary/50 transition-all flex items-center justify-center"
+                                    >
+                                        <span className="material-symbols-outlined notranslate text-[18px]">edit</span>
+                                    </button>
+                                    {owner.is_active !== false ? (
+                                        <button
+                                            onClick={() => handleSoftDelete(owner)}
+                                            title="Disable"
+                                            className="p-2.5 rounded-xl bg-surface-2 border border-border text-text-muted hover:text-red-400 hover:border-red-400/50 transition-all flex items-center justify-center"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-[18px]">delete</span>
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={() => handleReactivate(owner)}
+                                            title="Reactivate"
+                                            className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 transition-all flex items-center justify-center"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-[18px]">restart_alt</span>
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         ))
@@ -441,12 +527,42 @@ export default function OwnersPage() {
                                         </p>
                                     </div>
                                 </div>
-                                <input 
-                                    type="checkbox" 
-                                    checked={editOwner.is_active !== false} 
-                                    onChange={e => setEditOwner({...editOwner, is_active: e.target.checked})} 
-                                    className="size-5 accent-primary cursor-pointer" 
+                                <input
+                                    type="checkbox"
+                                    checked={editOwner.is_active !== false}
+                                    onChange={e => setEditOwner({...editOwner, is_active: e.target.checked})}
+                                    className="size-5 accent-primary cursor-pointer"
                                 />
+                            </div>
+
+                            <div className="p-4 bg-surface-2/50 rounded-2xl border border-border space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`p-2 rounded-lg ${editOwner.split_enabled ? 'bg-[#635bff]/10 text-[#635bff]' : 'bg-surface text-text-muted'}`}>
+                                            <span className="material-symbols-outlined notranslate text-[18px]">call_split</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-bold text-text-primary">Automatic Stripe Split</p>
+                                            <p className="text-[10px] text-text-muted uppercase font-black tracking-tighter">
+                                                {editOwner.split_enabled ? 'Enabled' : 'Disabled'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!editOwner.split_enabled}
+                                        onChange={e => setEditOwner({...editOwner, split_enabled: e.target.checked})}
+                                        className="size-5 accent-primary cursor-pointer"
+                                    />
+                                </div>
+                                {editOwner.split_enabled && !editOwner.stripe_account_id && (
+                                    <p className="text-[10px] text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-lg p-2 leading-relaxed">
+                                        Owner non ancora connesso a Stripe. Fino al collegamento, l'intero importo dell'affitto va all'editor (captatore).
+                                    </p>
+                                )}
+                                <p className="text-[9px] text-text-muted/60 italic leading-relaxed">
+                                    Quando attivo, il deposito del preventivo viene auto-instradato: affitto → Stripe del proprietario (o editor se non connesso), commissione → Stripe dell'editor.
+                                </p>
                             </div>
 
                             <div className="pt-4">
@@ -562,6 +678,60 @@ export default function OwnersPage() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {villasModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+                    <div className="bg-surface border border-border rounded-3xl w-full max-w-xl shadow-2xl flex flex-col max-h-[80vh] overflow-hidden">
+                        <div className="p-5 border-b border-border flex items-center justify-between bg-surface-2/20">
+                            <div>
+                                <h2 className="text-lg font-bold text-text-primary">Villas of {villasModal.name}</h2>
+                                <p className="text-[10px] text-text-muted uppercase font-black tracking-widest">{villasModalList.length} associate</p>
+                            </div>
+                            <button onClick={() => setVillasModal(null)} className="size-9 rounded-xl bg-surface-2 border border-border text-text-muted hover:text-text-primary flex items-center justify-center">
+                                <span className="material-symbols-outlined notranslate">close</span>
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto divide-y divide-border/30">
+                            {villasModalList.length === 0 ? (
+                                <p className="p-8 text-center text-text-muted text-xs italic">Nessuna villa associata.</p>
+                            ) : (
+                                villasModalList.map(v => (
+                                    <a
+                                        key={v.v_uuid}
+                                        href={`/villas/${v.v_uuid}`}
+                                        className="block p-4 hover:bg-primary/5 transition-all"
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="font-bold text-text-primary text-sm truncate">{v.villa_name || 'Unnamed'}</p>
+                                                <p className="text-[10px] text-text-muted truncate">License: {v.license || '—'}</p>
+                                            </div>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                {v.is_active === false && (
+                                                    <span className="px-2 py-0.5 bg-red-500/10 text-red-400 text-[9px] font-black uppercase tracking-widest rounded-full">Inactive</span>
+                                                )}
+                                                {(() => {
+                                                    const mode = v.capturer_commission_mode || 'percent';
+                                                    const pct = parseFloat(v.capturer_commission_pct ?? v.editor_markup_percent ?? 0);
+                                                    const amt = parseFloat(v.capturer_commission_amount ?? 0);
+                                                    const has = mode === 'fixed' ? amt > 0 : pct > 0;
+                                                    if (!has) return null;
+                                                    const label = mode === 'fixed' ? `${amt.toFixed(0)}€` : `${pct.toFixed(1)}%`;
+                                                    return (
+                                                        <span className="px-2 py-0.5 bg-primary/10 text-primary text-[9px] font-black uppercase tracking-widest rounded-full">
+                                                            Capt. {label}{v.capturer_commission_included ? ' incl.' : ''}
+                                                        </span>
+                                                    );
+                                                })()}
+                                            </div>
+                                        </div>
+                                    </a>
+                                ))
+                            )}
+                        </div>
                     </div>
                 </div>
             )}

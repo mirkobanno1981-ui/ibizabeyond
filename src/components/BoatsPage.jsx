@@ -33,6 +33,8 @@ export default function BoatsPage() {
 
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
+            } else if (role === 'editor-boat' && user?.id) {
+                query = query.eq('created_by', user.id);
             } else if (role === 'agent' && user?.id) {
                 // Get agent profile id first
                 const { data: agentData } = await supabase
@@ -40,15 +42,19 @@ export default function BoatsPage() {
                     .select('id')
                     .eq('user_id', user.id)
                     .single();
-                
+
                 if (agentData) {
                     const { data: managedOwners } = await supabase
                         .from('owners')
                         .select('id')
                         .eq('agent_id', agentData.id);
-                    
+
                     const ownerIds = managedOwners?.map(o => o.id) || [];
-                    query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
+                    if (ownerIds.length > 0) {
+                        query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
+                    } else {
+                        query = query.eq('created_by', user.id);
+                    }
                 }
             }
             if (search) {
@@ -61,9 +67,24 @@ export default function BoatsPage() {
                 query = query.gte('guest_capacity_day', parseInt(guests));
             }
 
-            const { data, error } = await query.order('created_at', { ascending: false });
+            const { data: dataAll, error } = await query.order('created_at', { ascending: false });
             if (error) throw error;
-            if (!data) return [];
+            if (!dataAll) return [];
+
+            // Apply per-user visibility overrides (skip for super_admin)
+            let data = dataAll;
+            if (role !== 'super_admin' && user?.id) {
+                const { data: hides } = await supabase
+                    .from('entity_visibility_overrides')
+                    .select('entity_id')
+                    .eq('user_id', user.id)
+                    .eq('entity_type', 'boat')
+                    .eq('hidden', true);
+                const hiddenIds = new Set((hides || []).map(h => h.entity_id));
+                if (hiddenIds.size > 0) {
+                    data = dataAll.filter(b => !hiddenIds.has(b.v_uuid));
+                }
+            }
 
             // 1. Fetch thumbnails
             const boatUuids = data.map(b => b.v_uuid);
@@ -105,7 +126,7 @@ export default function BoatsPage() {
                         {loading ? 'Loading...' : `${boats.length} premium vessels available`}
                     </p>
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent') && (
+                {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || role === 'editor-boat') && (
                     <button 
                         onClick={() => setEditBoat({})} 
                         className="btn-primary flex items-center gap-2 text-sm self-start"
@@ -328,7 +349,7 @@ function BoatCard({ boat, onEdit, role, isSelected, onSelect }) {
                 </div>
 
                 <div className="mt-4 flex gap-2">
-                    {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent') ? (
+                    {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || role === 'editor-boat') ? (
                         <>
                             <button 
                                 onClick={onEdit}
