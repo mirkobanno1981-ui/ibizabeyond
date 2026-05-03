@@ -82,6 +82,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     });
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
+    const [success, setSuccess] = useState(null);
     const [activeTab, setActiveTab] = useState('details');
 
     // Photos state: loaded rows from DB + pending local files added in this session
@@ -363,6 +364,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     const handleSave = async () => {
         setSaving(true);
         setError(null);
+        setSuccess(null);
         try {
             // License optional: villa or apartment may not have a tourist license.
 
@@ -596,7 +598,10 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             setUploadProgress(null);
             setVideoProgress(null);
 
-            onSaved(savedVilla);
+            setSaving(false);
+            setSuccess('Villa saved successfully');
+            setTimeout(() => onSaved(savedVilla), 1200);
+            return;
         } catch (err) {
             console.error('Villa save error:', err);
             const detail = err.details ? ` | details: ${err.details}` : '';
@@ -658,6 +663,12 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                     {error && (
                         <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-lg text-sm">
                             {error}
+                        </div>
+                    )}
+                    {success && (
+                        <div className="bg-green-500/10 border border-green-500/30 text-green-400 p-3 rounded-lg text-sm flex items-center gap-2">
+                            <span className="material-symbols-outlined notranslate text-[16px]">check_circle</span>
+                            {success}
                         </div>
                     )}
 
@@ -1404,11 +1415,11 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                     </button>
                     <button
                         onClick={handleSave}
-                        disabled={saving}
+                        disabled={saving || !!success}
                         className="btn-primary text-sm disabled:opacity-50 flex items-center gap-2"
                     >
-                        <span className="material-symbols-outlined notranslate text-[16px]">{saving ? 'hourglass_empty' : 'save'}</span>
-                        {saving ? 'Saving...' : 'Save Changes'}
+                        <span className="material-symbols-outlined notranslate text-[16px]">{success ? 'check_circle' : (saving ? 'hourglass_empty' : 'save')}</span>
+                        {success ? 'Saved' : (saving ? 'Saving...' : 'Save Changes')}
                     </button>
                 </div>
             </div>
