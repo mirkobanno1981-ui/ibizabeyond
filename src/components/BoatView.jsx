@@ -35,7 +35,16 @@ export default function BoatView() {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [showPhotoModal, photos.length]);
-    
+
+    // Force list price for agents when boat is price-locked (admins keep full control).
+    useEffect(() => {
+        if (!boat?.price_locked) return;
+        if (role === 'admin' || role === 'super_admin') return;
+        setIsManualPrice(false);
+        setManualPrice(0);
+        setAgentMargin(0);
+    }, [boat?.price_locked, role]);
+
     // Quote selection states
     const [selectionStart, setSelectionStart] = useState(null);
     const [selectionEnd, setSelectionEnd] = useState(null);
@@ -288,12 +297,14 @@ export default function BoatView() {
             setClients(clientData || []);
 
             // 5. Fetch Agent's info/override
+            let agentProfileData = null;
             if (user?.id) {
                 const { data: agentProfile } = await supabase
                     .from('agents')
                     .select('admin_margin, company_name, logo_url')
                     .eq('id', user.id)
                     .maybeSingle();
+                agentProfileData = agentProfile;
                 if (agentProfile) {
                     setAgentDetails(agentProfile);
                 }
@@ -952,34 +963,43 @@ export default function BoatView() {
                                         </div>
                                     </div>
 
-                                    {/* Manual Price Override */}
-                                    <div className="space-y-3 pt-2 border-t border-border">
-                                        <div className="flex justify-between items-center">
-                                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest">Manual Price Override</label>
-                                            <label className="flex items-center gap-2 cursor-pointer group">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={isManualPrice}
-                                                    onChange={e => setIsManualPrice(e.target.checked)}
-                                                    className="accent-primary"
-                                                />
-                                            </label>
-                                        </div>
-                                        {isManualPrice && (
-                                            <div className="relative animate-in zoom-in-95 duration-200">
-                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black text-primary/30">€</span>
-                                                <input 
-                                                    type="number"
-                                                    value={manualPrice}
-                                                    onChange={e => setManualPrice(parseFloat(e.target.value) || 0)}
-                                                    className="w-full bg-primary/5 border border-primary/40 rounded-xl py-2 px-8 text-lg font-black text-primary outline-none"
-                                                />
+                                    {/* Manual Price Override — hidden for agents when boat price is locked */}
+                                    {(!boat?.price_locked || role === 'admin' || role === 'super_admin') ? (
+                                        <div className="space-y-3 pt-2 border-t border-border">
+                                            <div className="flex justify-between items-center">
+                                                <label className="text-[10px] font-black text-text-muted uppercase tracking-widest">Manual Price Override</label>
+                                                <label className="flex items-center gap-2 cursor-pointer group">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isManualPrice}
+                                                        onChange={e => setIsManualPrice(e.target.checked)}
+                                                        className="accent-primary"
+                                                    />
+                                                </label>
                                             </div>
-                                        )}
-                                        <p className="text-[10px] text-text-muted font-medium italic leading-tight">
-                                            {isManualPrice ? 'Warning: Automatic calculations are suspended.' : 'Using automatic calculation based on selection and margin.'}
-                                        </p>
-                                    </div>
+                                            {isManualPrice && (
+                                                <div className="relative animate-in zoom-in-95 duration-200">
+                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black text-primary/30">€</span>
+                                                    <input
+                                                        type="number"
+                                                        value={manualPrice}
+                                                        onChange={e => setManualPrice(parseFloat(e.target.value) || 0)}
+                                                        className="w-full bg-primary/5 border border-primary/40 rounded-xl py-2 px-8 text-lg font-black text-primary outline-none"
+                                                    />
+                                                </div>
+                                            )}
+                                            <p className="text-[10px] text-text-muted font-medium italic leading-tight">
+                                                {isManualPrice ? 'Warning: Automatic calculations are suspended.' : 'Using automatic calculation based on selection and margin.'}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="pt-2 border-t border-border">
+                                            <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                                                <span className="material-symbols-outlined notranslate text-amber-500 text-base">lock</span>
+                                                <p className="text-[11px] text-amber-500 font-bold">Listing price locked — quote uses listed daily rate, no agent mark-up.</p>
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {/* Group Qualification Section */}
                                     <div className="space-y-4 pt-4 border-t border-border">

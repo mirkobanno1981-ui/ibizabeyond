@@ -1,7 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import EntityVisibilityTab from './EntityVisibilityTab';
+import { resizeImagesIfNeeded } from '../lib/imageResize';
+import { extractPhotosFromPdf } from '../lib/pdfPhotoExtract';
+import SeasonalPricingCalendar from './SeasonalPricingCalendar';
+
+const PHOTO_ACCEPT = {
+    'image/jpeg': [], 'image/png': [], 'image/webp': [], 'application/pdf': [],
+};
 
 const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = false, placeholder = '' }) => (
     <div className={fullWidth ? 'col-span-2' : ''}>
@@ -57,21 +65,18 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         owner_id: boat.owner_id || '',
         photo_urls: boat.photo_urls || '',
         ses_establishment_code: boat.ses_establishment_code || '',
+        price_locked: !!boat.price_locked,
     });
     const [newFeature, setNewFeature] = useState('');
     const [seasonalRates, setSeasonalRates] = useState([]);
+    const [pendingRates, setPendingRates] = useState([]);
     const [loadingRates, setLoadingRates] = useState(false);
-    const [showRateForm, setShowRateForm] = useState(false);
-    const [newRate, setNewRate] = useState({
-        start_date: '',
-        end_date: '',
-        amount: 0,
-        minimum_nights: 1,
-        allowed_checkin_days: 'Flexible check in days'
-    });
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
     const [activeTab, setActiveTab] = useState('details');
+    const [pendingPhotos, setPendingPhotos] = useState([]); // [{ id, file, previewUrl, sourcePdf }]
+    const [existingPhotos, setExistingPhotos] = useState([]); // [{ id, url, thumbnail_url, sort_order, storage_path }]
+    const [extractingPdf, setExtractingPdf] = useState(false);
 
     useEffect(() => {
         if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'editor-boat' || role === 'agent') {
@@ -79,8 +84,114 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         }
         if (boat.v_uuid) {
             fetchSeasonalRates();
+            fetchExistingPhotos();
         }
     }, [role, boat.v_uuid]);
+
+    useEffect(() => () => {
+        pendingPhotos.forEach(p => p.previewUrl && URL.revokeObjectURL(p.previewUrl));
+    }, []); // eslint-disable-line
+
+    const fetchExistingPhotos = async () => {
+        const { data, error: pErr } = await supabase
+            .from('invenio_photos')
+            .select('id, url, thumbnail_url, sort_order, storage_path, caption')
+            .eq('boat_uuid', boat.v_uuid)
+            .order('sort_order', { ascending: true });
+        if (!pErr && data) setExistingPhotos(data);
+    };
+
+    const onDropPhotos = useCallback(async (accepted) => {
+        const pdfs = accepted.filter(f => f.type === 'application/pdf');
+        const images = accepted.filter(f => f.type.startsWith('image/'));
+
+        const next = images.map(f => ({
+            id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            file: f,
+            previewUrl: URL.createObjectURL(f),
+            sourcePdf: null,
+        }));
+        setPendingPhotos(prev => [...prev, ...next]);
+
+        if (pdfs.length) {
+            setExtractingPdf(true);
+            try {
+                for (const pdf of pdfs) {
+                    const photos = await extractPhotosFromPdf(pdf);
+                    if (photos.length) {
+                        const extracted = photos.map(f => ({
+                            id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                            file: f,
+                            previewUrl: URL.createObjectURL(f),
+                            sourcePdf: pdf.name,
+                        }));
+                        setPendingPhotos(prev => [...prev, ...extracted]);
+                    }
+                }
+            } catch (e) {
+                console.warn('PDF extraction failed', e);
+            } finally {
+                setExtractingPdf(false);
+            }
+        }
+    }, []);
+
+    const { getRootProps: getPhotoRootProps, getInputProps: getPhotoInputProps, isDragActive: isPhotoDragActive } = useDropzone({
+        onDrop: onDropPhotos,
+        accept: PHOTO_ACCEPT,
+        multiple: true,
+    });
+
+    const removePending = id => {
+        setPendingPhotos(prev => {
+            const target = prev.find(p => p.id === id);
+            if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+            return prev.filter(p => p.id !== id);
+        });
+    };
+
+    const deleteExistingPhoto = async (photo) => {
+        if (!window.confirm('Delete this photo permanently?')) return;
+        if (photo.storage_path) {
+            await supabase.storage.from('boat-photos').remove([photo.storage_path]).catch(() => {});
+        }
+        const { error: dErr } = await supabase.from('invenio_photos').delete().eq('id', photo.id);
+        if (dErr) {
+            setError(`Photo delete failed: ${dErr.message}`);
+            return;
+        }
+        setExistingPhotos(prev => prev.filter(p => p.id !== photo.id));
+    };
+
+    const uploadPendingPhotos = async (boatUuid) => {
+        if (!pendingPhotos.length) return;
+        const files = pendingPhotos.map(p => p.file);
+        const resized = await resizeImagesIfNeeded(files, { maxEdge: 1920, quality: 0.88 });
+        const baseSort = (existingPhotos[existingPhotos.length - 1]?.sort_order ?? -1) + 1;
+        for (let i = 0; i < resized.length; i++) {
+            const f = resized[i];
+            const ext = (f.name.split('.').pop() || 'jpg').toLowerCase();
+            const destPath = `${boatUuid}/${crypto.randomUUID()}.${ext}`;
+            const { error: upErr } = await supabase.storage
+                .from('boat-photos')
+                .upload(destPath, f, { contentType: f.type, upsert: false });
+            if (upErr) {
+                console.error('photo upload failed', upErr);
+                continue;
+            }
+            const { data: pub } = supabase.storage.from('boat-photos').getPublicUrl(destPath);
+            const url = pub?.publicUrl;
+            await supabase.from('invenio_photos').insert({
+                boat_uuid: boatUuid,
+                url,
+                thumbnail_url: url,
+                storage_path: destPath,
+                sort_order: baseSort + i,
+            });
+        }
+        pendingPhotos.forEach(p => p.previewUrl && URL.revokeObjectURL(p.previewUrl));
+        setPendingPhotos([]);
+    };
 
     const fetchSeasonalRates = async () => {
         setLoadingRates(true);
@@ -96,50 +207,56 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         setLoadingRates(false);
     };
 
-    const handleAddRate = async () => {
-        if (!newRate.start_date || !newRate.end_date || !newRate.amount) {
-            return alert('Please fill in start date, end date and amount');
+    const handleAddRate = async (rateObj) => {
+        const payload = {
+            start_date: rateObj.start_date,
+            end_date: rateObj.end_date,
+            amount: parseFloat(rateObj.amount),
+            minimum_nights: parseInt(rateObj.minimum_nights, 10) || 7,
+            allowed_checkin_days: rateObj.allowed_checkin_days || 'Flexible check in days',
+        };
+        if (!boat.v_uuid) {
+            const queued = { ...payload, id: `pending_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, _pending: true };
+            setPendingRates(prev => [...prev, queued].sort((a, b) => new Date(a.start_date) - new Date(b.start_date)));
+            return;
         }
-
         const { data, error } = await supabase
             .from('invenio_seasonal_prices')
-            .insert([{
-                ...newRate,
-                v_uuid: boat.v_uuid,
-                amount: parseFloat(newRate.amount),
-                minimum_nights: parseInt(newRate.minimum_nights)
-            }])
+            .insert([{ v_uuid: boat.v_uuid, ...payload }])
             .select()
             .single();
-
-        if (error) {
-            alert('Error adding rate: ' + error.message);
-        } else {
-            setSeasonalRates(prev => [...prev, data].sort((a, b) => new Date(a.start_date) - new Date(b.start_date)));
-            setShowRateForm(false);
-            setNewRate({
-                start_date: '',
-                end_date: '',
-                amount: 0,
-                minimum_nights: 1,
-                allowed_checkin_days: 'Flexible check in days'
-            });
-        }
+        if (error) { alert('Error adding rate: ' + error.message); return; }
+        setSeasonalRates(prev => [...prev, data].sort((a, b) => new Date(a.start_date) - new Date(b.start_date)));
     };
 
-    const handleDeleteRate = async (id) => {
-        if (!window.confirm('Are you sure you want to delete this seasonal rate?')) return;
-
-        const { error } = await supabase
-            .from('invenio_seasonal_prices')
-            .delete()
-            .eq('id', id);
-
-        if (error) {
-            alert('Error deleting rate: ' + error.message);
-        } else {
-            setSeasonalRates(prev => prev.filter(r => r.id !== id));
+    const handleDeleteRate = async (rate) => {
+        if (!window.confirm('Delete this rate?')) return;
+        if (rate._pending || String(rate.id).startsWith('pending_')) {
+            setPendingRates(prev => prev.filter(r => r.id !== rate.id));
+            return;
         }
+        const { error } = await supabase.from('invenio_seasonal_prices').delete().eq('id', rate.id);
+        if (error) { alert('Error: ' + error.message); return; }
+        setSeasonalRates(prev => prev.filter(r => r.id !== rate.id));
+    };
+
+    const flushPendingRates = async (boatUuid) => {
+        if (!pendingRates.length) return;
+        const rows = pendingRates.map(r => ({
+            v_uuid: boatUuid,
+            start_date: r.start_date,
+            end_date: r.end_date,
+            amount: r.amount,
+            minimum_nights: r.minimum_nights,
+            allowed_checkin_days: r.allowed_checkin_days,
+        }));
+        const { error: rErr } = await supabase.from('invenio_seasonal_prices').insert(rows);
+        if (rErr) {
+            console.error('seasonal rate flush failed', rErr);
+            alert(`Seasonal rates not saved: ${rErr.message}`);
+            return;
+        }
+        setPendingRates([]);
     };
 
     const fetchOwners = async () => {
@@ -193,6 +310,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                 weekly_price: parseFloat(form.weekly_price) || 0,
                 security_deposit: parseFloat(form.security_deposit) || 0,
                 cleaning_fee: parseFloat(form.cleaning_fee) || 0,
+                price_locked: !!form.price_locked,
                 owner_id: role === 'owner' ? user.id : (form.owner_id || null),
                 created_by: boat.v_uuid ? (boat.created_by || user.id) : user.id,
                 // New boats need super_admin approval before going live
@@ -216,7 +334,27 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             }
 
             if (result.error) throw result.error;
-            onSaved(result.data);
+            const savedBoat = result.data;
+            if (pendingPhotos.length) {
+                try {
+                    await uploadPendingPhotos(savedBoat.v_uuid);
+                    await fetchExistingPhotos();
+                } catch (e) {
+                    console.error('photo upload error', e);
+                    setError(`Boat saved but photo upload failed: ${e.message}`);
+                    return;
+                }
+            }
+            if (pendingRates.length) {
+                try {
+                    await flushPendingRates(savedBoat.v_uuid);
+                } catch (e) {
+                    console.error('rate flush error', e);
+                    setError(`Boat saved but seasonal rates failed: ${e.message}`);
+                    return;
+                }
+            }
+            onSaved(savedBoat);
         } catch (err) {
             setError(err.message);
         } finally {
@@ -303,17 +441,80 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                                     </select>
                                 </div>
                             </div>
-                            <Field label="Thumbnail URL" field="thumbnail_url" form={form} handleChange={handleChange} fullWidth />
-                             <Field 
-                                 label="Gallery Photo URLs (comma separated)" 
-                                 field="photo_urls" 
-                                 form={form} 
-                                 handleChange={handleChange} 
-                                 type="textarea"
-                                 fullWidth 
-                                 placeholder="https://image1.jpg, https://image2.jpg..."
-                             />
+                            <Field label="Thumbnail URL (fallback)" field="thumbnail_url" form={form} handleChange={handleChange} fullWidth />
                         </div>
+                    </section>
+
+                    {/* Photos — drag & drop */}
+                    <section>
+                        <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-4 flex items-center gap-2">
+                            <span className="material-symbols-outlined notranslate text-sm">photo_library</span>
+                            Photos
+                        </p>
+
+                        <div
+                            {...getPhotoRootProps()}
+                            className={`border-2 border-dashed rounded-xl transition-all p-6 text-center cursor-pointer ${
+                                isPhotoDragActive
+                                    ? 'border-primary bg-primary/10 scale-[1.01]'
+                                    : 'border-border hover:border-primary/50 hover:bg-surface-2'
+                            }`}
+                        >
+                            <input {...getPhotoInputProps()} />
+                            <span className="material-symbols-outlined notranslate text-3xl text-text-muted">cloud_upload</span>
+                            <p className="text-sm font-medium text-text-primary mt-2">
+                                {isPhotoDragActive ? 'Drop photos here' : 'Drag photos or PDF brochures · click to select'}
+                            </p>
+                            <p className="text-[10px] text-text-muted mt-1">
+                                JPG / PNG / WEBP — PDFs will have embedded photos extracted automatically
+                            </p>
+                        </div>
+
+                        {extractingPdf && (
+                            <p className="text-[11px] text-primary mt-2 flex items-center gap-2">
+                                <span className="material-symbols-outlined notranslate text-sm animate-spin">progress_activity</span>
+                                Extracting photos from PDF…
+                            </p>
+                        )}
+
+                        {(pendingPhotos.length > 0 || existingPhotos.length > 0) && (
+                            <div className="mt-4 grid grid-cols-3 gap-3">
+                                {existingPhotos.map(p => (
+                                    <div key={`ex_${p.id}`} className="relative rounded-lg overflow-hidden border border-border bg-surface-2 aspect-video">
+                                        <img src={p.thumbnail_url || p.url} alt="" className="w-full h-full object-cover" />
+                                        <button
+                                            type="button"
+                                            onClick={() => deleteExistingPhoto(p)}
+                                            className="absolute top-1 right-1 size-7 rounded-full bg-black/60 text-white hover:bg-red-500 flex items-center justify-center"
+                                            title="Delete"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-[14px]">delete</span>
+                                        </button>
+                                    </div>
+                                ))}
+                                {pendingPhotos.map(p => (
+                                    <div key={p.id} className="relative rounded-lg overflow-hidden border-2 border-primary/40 bg-surface-2 aspect-video">
+                                        <img src={p.previewUrl} alt="" className="w-full h-full object-cover" />
+                                        <span className="absolute top-1 left-1 px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-primary text-white">
+                                            new
+                                        </span>
+                                        {p.sourcePdf && (
+                                            <span className="absolute bottom-1 left-1 right-1 text-[9px] text-white bg-black/60 px-1.5 py-0.5 rounded truncate">
+                                                from {p.sourcePdf}
+                                            </span>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => removePending(p.id)}
+                                            className="absolute top-1 right-1 size-7 rounded-full bg-black/60 text-white hover:bg-red-500 flex items-center justify-center"
+                                            title="Remove"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-[14px]">close</span>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </section>
 
                     {/* Dimensions & Capacity */}
@@ -346,7 +547,20 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                             <Field label="Weekly Price (€)" field="weekly_price" type="number" form={form} handleChange={handleChange} />
                             <Field label="Security Deposit (€)" field="security_deposit" type="number" form={form} handleChange={handleChange} />
                             <Field label="Cleaning Fee (€)" field="cleaning_fee" type="number" form={form} handleChange={handleChange} />
-                            
+
+                            <label className="col-span-2 flex items-center gap-2 cursor-pointer p-3 bg-surface-2 rounded-lg border border-border">
+                                <input
+                                    type="checkbox"
+                                    className="accent-primary"
+                                    checked={!!form.price_locked}
+                                    onChange={e => handleChange('price_locked', e.target.checked)}
+                                />
+                                <span className="text-xs text-text-primary">
+                                    <span className="font-bold">Lock price for agents</span>
+                                    <span className="text-text-muted ml-2">— agents cannot apply mark-up or manual override; quote price = listing price</span>
+                                </span>
+                            </label>
+
                             <div>
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">Fuel Policy</label>
                                 <select 
@@ -374,129 +588,30 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                         </div>
                     </section>
 
-                    {/* Seasonal Pricing */}
-                    {boat.v_uuid && (
-                        <section>
-                            <div className="flex items-center justify-between mb-4">
-                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary flex items-center gap-2">
-                                    <span className="material-symbols-outlined notranslate text-sm">calendar_month</span>
-                                    Seasonal Pricing (Daily)
-                                </p>
-                                <button 
-                                    onClick={() => setShowRateForm(!showRateForm)}
-                                    className="text-[10px] font-bold text-primary uppercase hover:underline flex items-center gap-1"
-                                >
-                                    <span className="material-symbols-outlined notranslate text-sm">{showRateForm ? 'close' : 'add'}</span>
-                                    {showRateForm ? 'Cancel' : 'Add Seasonal Rate'}
-                                </button>
-                            </div>
-
-                            {showRateForm && (
-                                <div className="p-4 bg-primary/5 border border-primary/20 rounded-xl mb-6 space-y-4 animate-in slide-in-from-top-2">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-[10px] text-text-muted mb-1.5 font-bold uppercase">Start Date</label>
-                                            <input 
-                                                type="date"
-                                                className="input-theme w-full text-sm"
-                                                value={newRate.start_date}
-                                                onChange={e => setNewRate(p => ({ ...p, start_date: e.target.value }))}
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-[10px] text-text-muted mb-1.5 font-bold uppercase">End Date</label>
-                                            <input 
-                                                type="date"
-                                                className="input-theme w-full text-sm"
-                                                value={newRate.end_date}
-                                                onChange={e => setNewRate(p => ({ ...p, end_date: e.target.value }))}
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-[10px] text-text-muted mb-1.5 font-bold uppercase">Daily Amount (€)</label>
-                                            <input 
-                                                type="number"
-                                                className="input-theme w-full text-sm"
-                                                placeholder="0.00"
-                                                value={newRate.amount}
-                                                onChange={e => setNewRate(p => ({ ...p, amount: e.target.value }))}
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-[10px] text-text-muted mb-1.5 font-bold uppercase">Min Days</label>
-                                            <input 
-                                                type="number"
-                                                className="input-theme w-full text-sm"
-                                                value={newRate.minimum_nights}
-                                                onChange={e => setNewRate(p => ({ ...p, minimum_nights: e.target.value }))}
-                                            />
-                                        </div>
-                                        <div className="col-span-2">
-                                            <label className="block text-[10px] text-text-muted mb-1.5 font-bold uppercase">Allowed Check-in</label>
-                                            <select 
-                                                className="input-theme w-full text-sm"
-                                                value={newRate.allowed_checkin_days}
-                                                onChange={e => setNewRate(p => ({ ...p, allowed_checkin_days: e.target.value }))}
-                                            >
-                                                <option value="Flexible check in days">Flexible</option>
-                                                <option value="Strictly Saturday-Saturday">Strictly Saturday-Saturday</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <button 
-                                        onClick={handleAddRate}
-                                        className="w-full btn-primary py-2 text-xs font-bold"
-                                    >
-                                        Save Seasonal Rate
-                                    </button>
-                                </div>
+                    {/* Seasonal Pricing — calendar */}
+                    <section>
+                        <div className="flex items-center justify-between mb-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-widest text-primary flex items-center gap-2">
+                                <span className="material-symbols-outlined notranslate text-sm">calendar_month</span>
+                                Seasonal Pricing (Daily)
+                            </p>
+                            {!boat.v_uuid && pendingRates.length > 0 && (
+                                <span className="text-[10px] text-amber-400 font-black uppercase tracking-widest">
+                                    {pendingRates.length} rates pending boat save
+                                </span>
                             )}
-
-                            <div className="space-y-2">
-                                {loadingRates ? (
-                                    <p className="text-[10px] text-text-muted italic">Loading rates...</p>
-                                ) : seasonalRates.length > 0 ? (
-                                    <div className="border border-border rounded-xl overflow-hidden">
-                                        <table className="w-full text-left text-[11px]">
-                                            <thead className="bg-surface-2 text-text-muted uppercase font-bold">
-                                                <tr>
-                                                    <th className="px-4 py-2">Dates</th>
-                                                    <th className="px-4 py-2">Price</th>
-                                                    <th className="px-4 py-2">MinD/Checkin</th>
-                                                    <th className="px-4 py-2"></th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-border">
-                                                {seasonalRates.map(r => (
-                                                    <tr key={r.id} className="hover:bg-surface-2/50 transition-colors">
-                                                        <td className="px-4 py-3 font-medium">
-                                                            {new Date(r.start_date).toLocaleDateString()} - {new Date(r.end_date).toLocaleDateString()}
-                                                        </td>
-                                                        <td className="px-4 py-3 font-bold text-primary">€{r.amount.toLocaleString()}</td>
-                                                        <td className="px-4 py-3 text-text-muted">
-                                                            {r.minimum_nights}d / {r.allowed_checkin_days === 'Flexible check in days' ? 'Flex' : 'Sat'}
-                                                        </td>
-                                                        <td className="px-4 py-3 text-right">
-                                                            <button 
-                                                                onClick={() => handleDeleteRate(r.id)}
-                                                                className="text-text-muted hover:text-red-400 transition-colors"
-                                                            >
-                                                                <span className="material-symbols-outlined notranslate text-sm">delete</span>
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <p className="text-[10px] text-text-muted italic bg-surface-2 p-4 rounded-xl border border-dashed border-border text-center">
-                                        No seasonal rates defined. Default daily price will be used.
-                                    </p>
-                                )}
-                            </div>
-                        </section>
-                    )}
+                        </div>
+                        {loadingRates ? (
+                            <p className="text-[10px] text-text-muted italic">Loading rates...</p>
+                        ) : (
+                            <SeasonalPricingCalendar
+                                rates={[...seasonalRates, ...pendingRates]}
+                                onAddRate={handleAddRate}
+                                onDeleteRate={handleDeleteRate}
+                                monthsAhead={12}
+                            />
+                        )}
+                    </section>
 
                     {/* Legal & Location */}
                     <section>
