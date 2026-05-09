@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchICal, parseICal, getBlockedDates } from '../lib/calendar';
+import { computeBreakdown, snapshotToBreakdownItems, resolveEditorShare } from '../lib/quoteMath';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1567899534071-723d01397ad0?auto=format&fit=crop&w=1200&q=80';
 
@@ -56,7 +57,7 @@ export default function BoatView() {
     const [globalMargins, setGlobalMargins] = useState({ supplierToAdmin: 15, ivaPercent: 21 });
     const [platformMargin, setPlatformMargin] = useState(15);
     const [agentMargin, setAgentMargin] = useState(0);
-    const [useStripeFee, setUseStripeFee] = useState(false);
+    // Stripe fee always 3% baked into final price (was a toggle; removed for consistency).
     
     // Quick Client Create
     const [showNewClientForm, setShowNewClientForm] = useState(false);
@@ -172,76 +173,44 @@ export default function BoatView() {
     };
 
     const getQuoteBreakdown = () => {
-        if (!selectionStart || !selectionEnd) return { total: 0, profit: 0, items: [] };
-        
+        if (!selectionStart || !selectionEnd) return { total: 0, profit: 0, items: [], snapshot: null };
+
         const { total: baseTotal, items: baseItems } = getBasePriceForSelection();
-        const breakdownItems = [...baseItems];
-        
-        const adminMarkup = platformMargin;
-        const agentMarkup = agentMargin;
-            
-        const priceWithAdminMarkup = baseTotal * (1 + adminMarkup / 100);
-        const totalWithMarkup = priceWithAdminMarkup * (1 + agentMarkup / 100);
-        
-        let subtotal;
-        let finalPrice;
-        let agentProfit;
 
-        if (isManualPrice) {
-            subtotal = manualPrice;
-            agentProfit = manualPrice - baseTotal;
-            breakdownItems.push({
-                label: 'Manual Rate Adjustment',
-                amount: manualPrice - baseTotal,
-                desc: 'Price adjusted manually by agent'
-            });
-        } else {
-            subtotal = totalWithMarkup;
-        }
-
-        const extraTotal = extraServices.reduce((sum, s) => {
-            if (s.price > 0) {
-                breakdownItems.push({
-                    label: s.name || 'Extra Service',
-                    amount: s.price,
-                    desc: 'Additional service requested'
-                });
-            }
-            return sum + (parseFloat(s.price) || 0);
-        }, 0);
-
-        subtotal += extraTotal;
-        const stripeFee = useStripeFee ? subtotal * 0.015 : 0;
-        
-        if (stripeFee > 0) {
-            breakdownItems.push({
-                label: 'Stripe Processing Fee (1.5%)',
-                amount: stripeFee,
-                desc: 'Secure payment gateway processing'
-            });
-        }
-
-        const agencyServicesTotal = (subtotal - baseTotal) + stripeFee;
-        const ivaAmount = agencyServicesTotal * (globalMargins.ivaPercent / 100);
-        
-        breakdownItems.push({
-            label: `IVA (VAT) ${globalMargins.ivaPercent}%`,
-            amount: ivaAmount,
-            desc: 'Applied exclusively to agency services'
+        const editorSpec = resolveEditorShare({
+            asset: boat,
+            assetType: 'boat',
+            supplierBase: baseTotal,
         });
 
-        // For boats, base price is often not including 21% VAT, but we wait for final specifications.
-        // If it includes VAT, we're adding IVA on the margin.
+        const snapshot = computeBreakdown({
+            supplierBase: baseTotal,
+            agentPct: parseFloat(agentMargin) || 0,
+            platformPct: parseFloat(platformMargin) || 0,
+            editorShare: editorSpec.share,
+            editorIncluded: editorSpec.included,
+            extras: extraServices,
+            ivaPct: globalMargins.ivaPercent,
+            checkIn: selectionStart,
+            isManual: isManualPrice,
+            manualPrice: isManualPrice ? parseFloat(manualPrice) || 0 : null,
+        });
 
-        finalPrice = Math.round(subtotal + stripeFee + ivaAmount);
-        agentProfit = Math.round(subtotal - baseTotal);
-        
-        return { 
-            base: baseTotal, 
-            priceWithAdmin: totalWithMarkup, 
-            total: finalPrice, 
-            profit: agentProfit,
-            items: breakdownItems.map(item => ({ ...item, amount: Math.round(item.amount) }))
+        const items = [
+            ...baseItems,
+            ...snapshotToBreakdownItems(snapshot, 'Base Charter').filter(i =>
+                !i.label.includes('Base Charter')
+            ),
+        ];
+
+        const profit = Math.round(snapshot.agency_profit_eur + snapshot.platform_profit_eur);
+
+        return {
+            base: baseTotal,
+            total: snapshot.final_price,
+            profit,
+            items,
+            snapshot,
         };
     };
 
@@ -468,26 +437,36 @@ export default function BoatView() {
 
         setSavingQuote(true);
         try {
-            const { total: finalPrice, items: breakdown, base: supplierBase } = getQuoteBreakdown();
-            const activeAdminMargin = (agentDetails?.admin_margin > 0) 
-                ? agentDetails.admin_margin 
-                : globalMargins.supplierToAdmin;
+            const { items: breakdown, snapshot } = getQuoteBreakdown();
 
             const { data, error: quoteErr } = await supabase.from('quotes').insert({
                 boat_uuid: boat.v_uuid,
                 client_id: selectedClientId,
                 check_in: selectionStart,
                 check_out: selectionEnd,
-                supplier_base_price: supplierBase,
-                admin_markup: platformMargin,
-                agent_markup: agentMargin,
-                extra_services: extraServices,
-                stripe_fee_included: useStripeFee,
-                final_price: finalPrice,
+                // Snapshot fields — stripe-checkout reads these directly.
+                supplier_base_price: snapshot.supplier_base_price,
+                editor_share_eur:    snapshot.editor_share_eur,
+                editor_included:     snapshot.editor_included,
+                extras_total_eur:    snapshot.extras_total_eur,
+                agency_profit_eur:   snapshot.agency_profit_eur,
+                platform_profit_eur: snapshot.platform_profit_eur,
+                editor_iva_eur:      snapshot.editor_iva_eur,
+                agency_iva_eur:      snapshot.agency_iva_eur,
+                platform_iva_eur:    snapshot.platform_iva_eur,
+                iva_amount_eur:      snapshot.iva_amount_eur,
+                iva_percent:         snapshot.iva_percent,
+                stripe_fee_eur:      snapshot.stripe_fee_eur,
+                upfront_stay_eur:    snapshot.upfront_stay_eur,
+                final_price:         snapshot.final_price,
+                // Inputs (audit trail).
+                admin_markup:    platformMargin,
+                agent_markup:    agentMargin,
+                extra_services:  extraServices,
                 price_breakdown: breakdown,
                 is_manual_price: isManualPrice,
-                status: 'draft',
-                agent_id: user?.id,
+                status:          'draft',
+                agent_id:        user?.id,
                 group_details: {
                     type: groupType,
                     children: groupType === 'family' ? numChildren : 0,
@@ -874,15 +853,7 @@ export default function BoatView() {
                                     <div className="flex justify-between items-center p-4 rounded-2xl bg-primary/5 border border-primary/20">
                                         <div className="flex flex-col">
                                             <span className="text-xs font-bold text-text-muted uppercase tracking-widest">Total Quote Price</span>
-                                            <label className="flex items-center gap-2 mt-2 cursor-pointer group">
-                                                <input 
-                                                    type="checkbox" 
-                                                    className="accent-primary size-3" 
-                                                    checked={useStripeFee}
-                                                    onChange={e => setUseStripeFee(e.target.checked)}
-                                                />
-                                                <span className="text-[10px] text-text-muted font-bold uppercase group-hover:text-primary transition-colors">Add Stripe Fee (1.5%)</span>
-                                            </label>
+                                            <span className="text-[10px] text-text-muted mt-1">Includes 3% Stripe processing fee</span>
                                         </div>
                                         <div className="text-right">
                                             <span className="text-2xl font-black text-primary block">€{calculateQuoteTotal().toLocaleString()}</span>

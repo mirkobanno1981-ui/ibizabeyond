@@ -129,7 +129,7 @@ export default function Dashboard() {
             const quotesQuery = supabase.from('quotes').select('id', { count: 'exact', head: true });
             const clientsQuery = supabase.from('clients').select('id', { count: 'exact', head: true });
             const recentQuery = supabase.from('quotes').select(`
-                id, created_at, final_price, supplier_base_price, admin_markup, agent_markup, editor_markup, editor_markup_mode, status, agent_id, v_uuid,
+                id, created_at, final_price, supplier_base_price, admin_markup, agent_markup, editor_markup, editor_share_eur, editor_included, agency_profit_eur, platform_profit_eur, iva_amount_eur, status, agent_id, v_uuid,
                 payout_owner_sent_at, payout_collaborator_sent_at,
                 security_deposit_authorized, security_deposit_intent_id,
                 agents (company_name),
@@ -595,36 +595,30 @@ export default function Dashboard() {
                             <div className="p-4 space-y-4 max-h-[500px] overflow-y-auto custom-scrollbar">
                                 {recentQuotes.filter(q => q.status === 'booked').length > 0 ? (
                                     recentQuotes.filter(q => q.status === 'booked').map(q => {
+                                        // Snapshot fields drive the entire breakdown — no recompute.
                                         const base = parseFloat(q.supplier_base_price || 0);
-                                        const adminPct = parseFloat(q.admin_markup || 0);
                                         const finalPrice = parseFloat(q.final_price || 0);
-                                        const platformProfit = Math.round(base * (adminPct / 100));
-                                        const editorPct = parseFloat(q.editor_markup || 0);
-                                        const editorMode = q.editor_markup_mode || 'deduct';
-                                        const editorShare = Math.round(base * (editorPct / 100));
+                                        const platformProfit = parseFloat(q.platform_profit_eur || 0);
+                                        const editorShare = parseFloat(q.editor_share_eur || 0);
+                                        const editorIncluded = !!q.editor_included;
+                                        const ivaAmount = parseFloat(q.iva_amount_eur || 0);
+                                        const agencyPayout = parseFloat(q.agency_profit_eur || 0);
+
                                         const editorUserId = q.properties?.created_by;
                                         const editorInfo = editorUserId ? editorMap[editorUserId] : null;
                                         const editorLabel = editorInfo?.company_name || editorInfo?.email || (editorUserId ? editorUserId.slice(0, 8) : 'Unknown');
 
-                                        // Resolve villa.owner_id: real owner vs self-managed editor
                                         const villaOwnerId = q.properties?.owner_id;
                                         const villaOwnerInfo = villaOwnerId ? villaOwnerMap[villaOwnerId] : null;
                                         const isSelfManagedEditor = villaOwnerInfo?.source === 'editor';
                                         const ownerRecipientName = villaOwnerInfo?.name || 'Owner';
 
-                                        // IVA calculation from breakdown or estimated at 10%
-                                        const ivaItem = q.price_breakdown?.find(i => i.label?.includes('IVA'));
-                                        const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : Math.round((finalPrice - base) * 0.0909);
-
                                         // Owner payout:
-                                        //  - self-managed editor: receives base + editor commission (settles real owner manually)
-                                        //  - otherwise: base minus editor share if mode='deduct'
+                                        //  - self-managed editor: receives base + editor commission when commission added on top.
+                                        //  - otherwise: base minus editor share when commission included in base.
                                         const ownerPayout = isSelfManagedEditor
-                                            ? base + editorShare
-                                            : Math.max(0, base - (editorMode === 'deduct' ? editorShare : 0));
-
-                                        // Agency remainder unchanged (editor share already routed via owner side when self-managed)
-                                        const agencyPayout = Math.max(0, Math.round(finalPrice - base - platformProfit - ivaAmount - (editorMode === 'add' ? editorShare : 0)));
+                                            ? base + (editorIncluded ? 0 : editorShare)
+                                            : Math.max(0, base - (editorIncluded ? editorShare : 0));
 
                                         const isB2C = !q.agent_id || q.agent_id === '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
                                         const totalProfit = isB2C ? (platformProfit + agencyPayout) : platformProfit;
@@ -642,7 +636,7 @@ export default function Dashboard() {
                                                     </div>
                                                 </div>
 
-                                                <div className={`grid ${editorPct > 0 && !isSelfManagedEditor ? 'grid-cols-4' : 'grid-cols-3'} gap-2 mb-4`}>
+                                                <div className={`grid ${editorShare > 0 && !isSelfManagedEditor ? 'grid-cols-4' : 'grid-cols-3'} gap-2 mb-4`}>
                                                     <div className={`p-2 rounded-lg border ${isSelfManagedEditor ? 'bg-purple-500/5 border-purple-500/20' : 'bg-background/50 border-border/50'}`}>
                                                         <p className={`text-[8px] font-black uppercase mb-1 ${isSelfManagedEditor ? 'text-purple-400/60' : 'text-text-muted'}`}>
                                                             {isSelfManagedEditor ? 'Editor (Self-Managed)' : 'Owner Net'}
@@ -651,7 +645,7 @@ export default function Dashboard() {
                                                         {isSelfManagedEditor ? (
                                                             <p className="text-[7px] text-purple-400/70 font-bold mt-0.5 truncate" title={ownerRecipientName}>{ownerRecipientName}</p>
                                                         ) : (
-                                                            editorMode === 'deduct' && editorPct > 0 && (
+                                                            editorIncluded && editorShare > 0 && (
                                                                 <p className="text-[7px] text-purple-400 font-bold mt-0.5">- €{editorShare} editor</p>
                                                             )
                                                         )}
@@ -660,7 +654,7 @@ export default function Dashboard() {
                                                         <p className="text-[8px] text-primary/60 font-black uppercase mb-1">Platform</p>
                                                         <p className="text-xs font-mono font-bold text-primary">€{platformProfit.toLocaleString()}</p>
                                                     </div>
-                                                    {editorPct > 0 && !isSelfManagedEditor && (
+                                                    {editorShare > 0 && !isSelfManagedEditor && (
                                                         <div className="p-2 rounded-lg bg-purple-500/5 border border-purple-500/20">
                                                             <p className="text-[8px] text-purple-400/60 font-black uppercase mb-1">Editor</p>
                                                             <p className="text-xs font-mono font-bold text-purple-400">€{editorShare.toLocaleString()}</p>

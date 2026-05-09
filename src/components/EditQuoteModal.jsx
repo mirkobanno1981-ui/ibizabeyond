@@ -1,37 +1,40 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { effectiveCapturerCommission } from '../lib/capturerCommission';
+import { computeBreakdown, resolveEditorShare, snapshotToBreakdownItems } from '../lib/quoteMath';
 
 const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const { user, role, agentData } = useAuth();
-    const isAgencyLeader = agentData?.agent_type === 'agency' || agentData?.agent_type === 'agency_admin' || agentData?.agent_type === 'owner'; // 'owner' in this context often means agency owner
+    const isAgencyLeader = agentData?.agent_type === 'agency' || agentData?.agent_type === 'agency_admin' || agentData?.agent_type === 'owner';
     const canManageMargins = role === 'admin' || role === 'super_admin' || isAgencyLeader;
+
     const [margin, setMargin] = useState(quote.agent_markup || 15);
     const [platformMargin, setPlatformMargin] = useState(quote.admin_markup || 0);
+
     const _capturerSpecInit = effectiveCapturerCommission(quote.properties, quote.rental_type || 'daily');
     const [editorMargin, setEditorMargin] = useState(
         parseFloat(quote.editor_markup) || _capturerSpecInit.pct || 0
     );
-    // Default 'add' so super_admin's editor % visibly affects Total Price.
-    // If existing quote already has an explicit mode persisted, respect it.
-    const [editorMarkupMode, setEditorMarkupMode] = useState(quote.editor_markup_mode || 'add');
-    const [inputUnit, setInputUnit] = useState('pct'); // 'pct' | 'eur'
+    // editor_included: true = deducted from owner (commission inside base);
+    // false = added on top (commission grows client price).
+    const [editorIncluded, setEditorIncluded] = useState(
+        quote.editor_included != null ? !!quote.editor_included : !!_capturerSpecInit.included
+    );
+
+    const [inputUnit, setInputUnit] = useState('pct');
     const [extraServices, setExtraServices] = useState(quote.extra_services || []);
     const [manualPrice, setManualPrice] = useState(quote.final_price || 0);
     const [isManual, setIsManual] = useState(quote.is_manual_price || false);
-    const [useStripeFee, setUseStripeFee] = useState(quote.stripe_fee_included || false);
-    const [useForexFee, setUseForexFee] = useState(quote.forex_fee_included || false);
     const [saving, setSaving] = useState(false);
     const [agents, setAgents] = useState([]);
     const [assignedAgentId, setAssignedAgentId] = useState(quote.agent_id);
     const [depositPaid, setDepositPaid] = useState(quote.deposit_paid || false);
     const [balancePaid, setBalancePaid] = useState(quote.balance_paid || false);
-    const [ivaPercent, setIvaPercent] = useState(10);
+    const [ivaPercent, setIvaPercent] = useState(quote.iva_percent ?? 10);
     const [ownerPhone, setOwnerPhone] = useState('');
     const [ownerName, setOwnerName] = useState('');
-    
-    // Rental type
+
     const [rentalType, setRentalType] = useState(quote.rental_type || 'daily');
 
     const villaRentalConfigs = quote.properties?.rental_type_configs || {};
@@ -63,7 +66,6 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         applyRentalTypeDefaults(type);
     };
 
-    // Group Qualification State
     const [groupType, setGroupType] = useState(quote.group_details?.type || 'family');
     const [numChildren, setNumChildren] = useState(quote.group_details?.children || 0);
     const [friendsComposition, setFriendsComposition] = useState(quote.group_details?.composition || '');
@@ -79,24 +81,20 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             ]);
             const fetchedAgents = agentsRes.data || [];
             setAgents(fetchedAgents);
-            if (settingsRes.data) setIvaPercent(parseFloat(settingsRes.data.iva_percent) || 10);
+            // Only override IVA from settings if quote has no snapshot yet.
+            if (settingsRes.data && quote.iva_percent == null) {
+                setIvaPercent(parseFloat(settingsRes.data.iva_percent) || 10);
+            }
 
-            // Fetch current agent details to get default split/markup
             const currentAgent = fetchedAgents.find(a => a.id === assignedAgentId);
 
-            // If quote has no markup set, apply the agent's default markup (or 12% as per new rules)
             if (!quote.agent_markup && currentAgent) {
                 setMargin(currentAgent.markup_percent || 12);
             }
-
-            // Platform markup should be 0 by default now, as we split the total margin
             if (!quote.admin_markup && currentAgent) {
-                // We'll use platformMargin state to store the PLATFORM SHARE if needed, 
-                // but for now let's keep it as is and use the agent's split in calculations
                 setPlatformMargin(currentAgent.admin_margin || 0);
             }
 
-            // Fetch Owner Info (Admins only)
             const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
             if (ownerId && (role === 'admin' || role === 'super_admin')) {
                 const { data: ownerData } = await supabase
@@ -121,32 +119,44 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         setExtraServices(newServices);
     };
 
-    const calculateAutoPrice = () => {
-        const base = parseFloat(quote.supplier_base_price || 0);
-        const agentPct = parseFloat(margin || 0);
-        const platformPct = parseFloat(platformMargin || 0);
-        const editorPct = parseFloat(editorMargin || 0);
-        const editorAdds = editorMarkupMode === 'add' && editorPct > 0;
+    // Resolve agent/platform pct given role. Non-super-admin roles only edit a
+    // single combined margin %, which gets split via agent.agency_split_pct.
+    const resolvedPcts = useMemo(() => {
+        if (role === 'super_admin') {
+            return { agentPct: parseFloat(margin) || 0, platformPct: parseFloat(platformMargin) || 0 };
+        }
+        const currentAgent = agents.find(a => a.id === assignedAgentId);
+        const splitPct = currentAgent?.agency_split_pct || 67;
+        const totalPct = parseFloat(margin) || 0;
+        return {
+            agentPct: +(totalPct * splitPct / 100).toFixed(2),
+            platformPct: +(totalPct * (100 - splitPct) / 100).toFixed(2),
+        };
+    }, [role, margin, platformMargin, agents, assignedAgentId]);
 
-        const priceWithEditor = editorAdds ? base * (1 + editorPct / 100) : base;
-        const priceWithPlatform = priceWithEditor * (1 + platformPct / 100);
-        const priceWithAgent = priceWithPlatform * (1 + agentPct / 100);
+    const supplierBase = parseFloat(quote.supplier_base_price || 0);
+    const editorShareEur = useMemo(
+        () => Math.round(supplierBase * (parseFloat(editorMargin) || 0) / 100 * 100) / 100,
+        [supplierBase, editorMargin]
+    );
 
-        const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        const subtotal = priceWithAgent + extraTotal;
-        const ivaAmount = (subtotal - base) * (ivaPercent / 100);
-        const priceBeforeFees = subtotal + ivaAmount;
+    const breakdown = useMemo(() => computeBreakdown({
+        supplierBase,
+        agentPct: resolvedPcts.agentPct,
+        platformPct: resolvedPcts.platformPct,
+        editorShare: editorShareEur,
+        editorIncluded,
+        extras: extraServices,
+        ivaPct: ivaPercent,
+        checkIn: quote.check_in,
+        isManual,
+        manualPrice: isManual ? parseFloat(manualPrice) || 0 : null,
+    }), [supplierBase, resolvedPcts, editorShareEur, editorIncluded, extraServices, ivaPercent, quote.check_in, isManual, manualPrice]);
 
-        const stripeFee = useStripeFee ? priceBeforeFees * 0.03 : 0;
-        const forexFee = useForexFee ? priceBeforeFees * 0.02 : 0;
+    const computedFinalPrice = breakdown.final_price;
 
-        return Math.round(priceBeforeFees + stripeFee + forexFee);
-    };
-
-    // Convert between % and € (€ relative to supplier_base_price)
-    const base = parseFloat(quote.supplier_base_price || 0);
-    const pctToEur = (pct) => Math.round(base * (parseFloat(pct) || 0) / 100);
-    const eurToPct = (eur) => base > 0 ? +(((parseFloat(eur) || 0) / base) * 100).toFixed(2) : 0;
+    const pctToEur = (pct) => Math.round(supplierBase * (parseFloat(pct) || 0) / 100);
+    const eurToPct = (eur) => supplierBase > 0 ? +(((parseFloat(eur) || 0) / supplierBase) * 100).toFixed(2) : 0;
     const displayValue = (pct) => inputUnit === 'eur' ? pctToEur(pct) : pct;
     const handleInputChange = (raw, setter) => {
         const v = parseFloat(raw) || 0;
@@ -154,86 +164,57 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     };
 
     useEffect(() => {
-        if (!isManual) {
-            setManualPrice(calculateAutoPrice());
-        }
-    }, [margin, platformMargin, editorMargin, editorMarkupMode, extraServices, isManual, useStripeFee, useForexFee, ivaPercent]);
+        if (!isManual) setManualPrice(computedFinalPrice);
+    }, [computedFinalPrice, isManual]);
 
     const handleSave = async () => {
         setSaving(true);
         try {
-            const finalPrice = isManual ? manualPrice : calculateAutoPrice();
-            const currentAgent = agents.find(a => a.id === assignedAgentId);
+            const finalPrice = isManual ? (parseFloat(manualPrice) || 0) : computedFinalPrice;
+            const finalSnapshot = computeBreakdown({
+                supplierBase,
+                agentPct: resolvedPcts.agentPct,
+                platformPct: resolvedPcts.platformPct,
+                editorShare: editorShareEur,
+                editorIncluded,
+                extras: extraServices,
+                ivaPct: ivaPercent,
+                checkIn: quote.check_in,
+                isManual,
+                manualPrice: isManual ? finalPrice : null,
+            });
 
-            const baseAmt = parseFloat(quote.supplier_base_price || 0);
-            const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
-
-            const newBreakdown = [];
             const baseLabel = quote.properties ? 'Base Accommodation' : 'Base Charter';
-            newBreakdown.push({ label: baseLabel, amount: Math.round(baseAmt), desc: 'Base cost' });
-
-            let platformProfit;
-            let agencyProfit;
-            let editorShare = 0;
-
-            if (role === 'super_admin') {
-                // Super admin: use exact per-quote commission overrides (multiplicative chain)
-                const editorPct = parseFloat(editorMargin || 0);
-                const platformPct = parseFloat(platformMargin || 0);
-                const agentPct = parseFloat(margin || 0);
-                const editorAdds = editorMarkupMode === 'add' && editorPct > 0;
-
-                editorShare = editorAdds ? baseAmt * (editorPct / 100) : (editorMarkupMode === 'deduct' ? baseAmt * (editorPct / 100) : 0);
-                const baseForPlatform = editorAdds ? baseAmt + (baseAmt * editorPct / 100) : baseAmt;
-                platformProfit = Math.round(baseForPlatform * (platformPct / 100));
-                const baseForAgent = baseForPlatform + (baseForPlatform * platformPct / 100);
-                agencyProfit = Math.round(baseForAgent * (agentPct / 100));
-
-                if (editorAdds && editorShare > 0) {
-                    newBreakdown.push({ label: `Editor (Captatore) ${editorPct}%`, amount: Math.round(editorShare), desc: 'Captatore commission added to client price' });
-                } else if (editorMarkupMode === 'deduct' && editorPct > 0) {
-                    newBreakdown.push({ label: `Editor (deduct from owner) ${editorPct}%`, amount: Math.round(editorShare), desc: 'Captatore commission deducted from owner payout' });
-                }
-            } else {
-                // Other roles: split totalGain by agent's agency_split_pct (legacy logic)
-                const agencySplitPct = currentAgent?.agency_split_pct || 67;
-                const platformSharePct = 100 - agencySplitPct;
-                const totalGain = finalPrice - baseAmt;
-                const ivaPart = Math.round(totalGain * (ivaPercent / 100) / (1 + ivaPercent / 100));
-                const preTaxProfit = totalGain - ivaPart;
-                platformProfit = Math.round(preTaxProfit * (platformSharePct / 100));
-                agencyProfit = Math.round(preTaxProfit - platformProfit);
-            }
-
-            if (platformProfit > 0) {
-                newBreakdown.push({ label: 'Platform Profit', amount: platformProfit, desc: 'Platform service fee' });
-            }
-            if (agencyProfit !== 0) {
-                newBreakdown.push({ label: 'Agency Profit', amount: agencyProfit, desc: 'Agency commission' });
-            }
-
-            // IVA computed from the actual finalPrice gain
-            const totalGain = finalPrice - baseAmt;
-            const ivaAmount = Math.round(totalGain * (ivaPercent / 100) / (1 + ivaPercent / 100));
-            newBreakdown.push({ label: `IVA (VAT) ${ivaPercent}%`, amount: Math.round(ivaAmount), desc: 'VAT on agency services' });
+            const newBreakdown = snapshotToBreakdownItems(finalSnapshot, baseLabel);
 
             const { error } = await supabase
                 .from('quotes')
                 .update({
-                    admin_markup: platformMargin,
-                    agent_markup: margin,
-                    editor_markup: parseFloat(editorMargin) || 0,
-                    editor_markup_mode: editorMarkupMode,
-                    extra_services: extraServices,
-                    final_price: finalPrice,
-                    price_breakdown: newBreakdown,
-                    is_manual_price: isManual,
-                    stripe_fee_included: useStripeFee,
-                    forex_fee_included: useForexFee,
-                    agent_id: assignedAgentId,
-                    deposit_paid: depositPaid,
-                    balance_paid: balancePaid,
-                    rental_type: rentalType,
+                    // Snapshot fields — single source of truth for stripe-checkout.
+                    iva_percent:         finalSnapshot.iva_percent,
+                    extras_total_eur:    finalSnapshot.extras_total_eur,
+                    editor_share_eur:    finalSnapshot.editor_share_eur,
+                    editor_included:     finalSnapshot.editor_included,
+                    platform_profit_eur: finalSnapshot.platform_profit_eur,
+                    agency_profit_eur:   finalSnapshot.agency_profit_eur,
+                    editor_iva_eur:      finalSnapshot.editor_iva_eur,
+                    agency_iva_eur:      finalSnapshot.agency_iva_eur,
+                    platform_iva_eur:    finalSnapshot.platform_iva_eur,
+                    iva_amount_eur:      finalSnapshot.iva_amount_eur,
+                    stripe_fee_eur:      finalSnapshot.stripe_fee_eur,
+                    upfront_stay_eur:    finalSnapshot.upfront_stay_eur,
+                    final_price:         finalSnapshot.final_price,
+                    // Inputs (kept for audit/UI display).
+                    admin_markup:        platformMargin,
+                    agent_markup:        margin,
+                    editor_markup:       parseFloat(editorMargin) || 0,
+                    extra_services:      extraServices,
+                    price_breakdown:     newBreakdown,
+                    is_manual_price:     isManual,
+                    agent_id:            assignedAgentId,
+                    deposit_paid:        depositPaid,
+                    balance_paid:        balancePaid,
+                    rental_type:         rentalType,
                     group_details: {
                         type: groupType,
                         children: groupType === 'family' ? numChildren : 0,
@@ -252,7 +233,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             setSaving(false);
         }
     };
-    
+
     const handleAskAvailability = async () => {
         if (role === 'agent' || role === 'agency_admin') {
             const { error } = await supabase
@@ -276,11 +257,10 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
         const villaName = quote.properties?.villa_name || quote.boats?.boat_name;
         const msg = `Hello ${ownerName}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. Please confirm availability here: ${confirmUrl}`;
-        
+
         const encodedMsg = encodeURIComponent(msg);
         const waUrl = `https://wa.me/${ownerPhone.replace(/\s+/g, '')}?text=${encodedMsg}`;
 
-        // 1. Update status
         const { error } = await supabase
             .from('quotes')
             .update({ status: 'waiting_owner' })
@@ -291,7 +271,6 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             return;
         }
 
-        // 2. Open WhatsApp
         window.open(waUrl, '_blank');
         onSaved();
     };
@@ -310,7 +289,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     {/* Status Select */}
                     <div className="space-y-2">
                         <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Quote Status</label>
-                        <select 
+                        <select
                             value={quote.status}
                             onChange={async (e) => {
                                 const newStatus = e.target.value;
@@ -363,15 +342,15 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             <span className="material-symbols-outlined notranslate text-primary text-sm">groups</span>
                             <label className="text-[10px] font-black text-primary uppercase tracking-widest">Group Qualification</label>
                         </div>
-                        
+
                         <div className="grid grid-cols-2 gap-2">
-                            <button 
+                            <button
                                 onClick={() => setGroupType('family')}
                                 className={`py-2 px-3 rounded-xl border text-[10px] font-bold uppercase transition-all ${groupType === 'family' ? 'bg-primary border-primary text-white shadow-lg' : 'bg-surface border-border text-text-muted hover:border-primary/50'}`}
                             >
                                 Family
                             </button>
-                            <button 
+                            <button
                                 onClick={() => setGroupType('friends')}
                                 className={`py-2 px-3 rounded-xl border text-[10px] font-bold uppercase transition-all ${groupType === 'friends' ? 'bg-primary border-primary text-white shadow-lg' : 'bg-surface border-border text-text-muted hover:border-primary/50'}`}
                             >
@@ -382,7 +361,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                         {groupType === 'family' ? (
                             <div className="space-y-2 animate-in fade-in duration-200">
                                 <label className="text-[9px] font-bold text-text-muted uppercase px-1">Number of Children</label>
-                                <input 
+                                <input
                                     type="number"
                                     min="0"
                                     value={numChildren}
@@ -395,7 +374,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             <div className="space-y-3 animate-in fade-in duration-200">
                                 <div className="space-y-2">
                                     <label className="text-[9px] font-bold text-text-muted uppercase px-1">Composition (e.g. 4 guys, 2 girls)</label>
-                                    <input 
+                                    <input
                                         type="text"
                                         value={friendsComposition}
                                         onChange={(e) => setFriendsComposition(e.target.value)}
@@ -404,8 +383,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                     />
                                 </div>
                                 <label className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border cursor-pointer hover:border-primary/30 transition-all">
-                                    <input 
-                                        type="checkbox" 
+                                    <input
+                                        type="checkbox"
                                         checked={isCouples}
                                         onChange={e => setIsCouples(e.target.checked)}
                                         className="size-3.5 accent-primary"
@@ -416,8 +395,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                         )}
 
                         <label className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border cursor-pointer hover:border-primary/30 transition-all">
-                            <input 
-                                type="checkbox" 
+                            <input
+                                type="checkbox"
                                 checked={hasPets}
                                 onChange={e => setHasPets(e.target.checked)}
                                 className="size-3.5 accent-primary"
@@ -430,7 +409,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     </div>
 
                     {/* Ask Availability Button */}
-                    <button 
+                    <button
                         onClick={handleAskAvailability}
                         className="w-full h-12 rounded-2xl bg-[#25D366]/10 border border-[#25D366]/30 text-[#25D366] font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 hover:bg-[#25D366]/20 transition-all"
                     >
@@ -441,8 +420,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     {/* Payment Toggles */}
                     <div className="grid grid-cols-2 gap-4">
                         <label className="flex items-center gap-3 p-3 rounded-xl bg-background/50 border border-border cursor-pointer hover:border-primary/50 transition-all select-none">
-                            <input 
-                                type="checkbox" 
+                            <input
+                                type="checkbox"
                                 checked={depositPaid}
                                 onChange={e => setDepositPaid(e.target.checked)}
                                 className="size-4 accent-primary"
@@ -453,8 +432,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             </div>
                         </label>
                         <label className="flex items-center gap-3 p-3 rounded-xl bg-background/50 border border-border cursor-pointer hover:border-primary/50 transition-all select-none">
-                            <input 
-                                type="checkbox" 
+                            <input
+                                type="checkbox"
                                 checked={balancePaid}
                                 onChange={e => setBalancePaid(e.target.checked)}
                                 className="size-4 accent-primary"
@@ -530,17 +509,17 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             </div>
                             {parseFloat(editorMargin) > 0 && (
                                 <div className="flex items-center gap-2 pt-2 border-t border-purple-500/20">
-                                    <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest">Editor mode:</span>
+                                    <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest">Editor commission:</span>
                                     <button
                                         type="button"
-                                        onClick={() => setEditorMarkupMode('deduct')}
-                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${editorMarkupMode === 'deduct' ? 'bg-purple-500 text-white' : 'bg-transparent text-text-muted border border-border'}`}
-                                    >Deduct from Owner</button>
+                                        onClick={() => setEditorIncluded(true)}
+                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${editorIncluded ? 'bg-purple-500 text-white' : 'bg-transparent text-text-muted border border-border'}`}
+                                    >Inside Base (deduct from owner)</button>
                                     <button
                                         type="button"
-                                        onClick={() => setEditorMarkupMode('add')}
-                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${editorMarkupMode === 'add' ? 'bg-purple-500 text-white' : 'bg-transparent text-text-muted border border-border'}`}
-                                    >Add to Client Price</button>
+                                        onClick={() => setEditorIncluded(false)}
+                                        className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest transition-all ${!editorIncluded ? 'bg-purple-500 text-white' : 'bg-transparent text-text-muted border border-border'}`}
+                                    >On Top (add to client price)</button>
                                 </div>
                             )}
                         </div>
@@ -568,14 +547,14 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             </div>
                         </div>
                     )}
-                    
+
                     {/* Assigned Agent (Admin only) */}
                     {(role === 'admin' || role === 'super_admin' || user?.id === quote.agent_id) && (
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-text-muted uppercase tracking-widest flex items-center gap-2">
                                 <span className="material-symbols-outlined notranslate text-sm">person</span> Assigned Agent
                             </label>
-                            <select 
+                            <select
                                 value={assignedAgentId}
                                 onChange={e => setAssignedAgentId(e.target.value)}
                                 className="w-full input-theme py-2.5 px-3 font-bold text-text-primary"
@@ -599,7 +578,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                         <div className="space-y-2">
                             {extraServices.map((s, idx) => (
                                 <div key={idx} className="flex gap-2 items-center bg-background/50 p-2 rounded-xl border border-border animate-in slide-in-from-right-2">
-                                    <input 
+                                    <input
                                         placeholder="Service name (e.g. Car Rental)"
                                         className="flex-1 bg-transparent border-none text-sm text-text-primary outline-none"
                                         value={s.name}
@@ -607,7 +586,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                     />
                                     <div className="relative w-24">
                                         <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">€</span>
-                                        <input 
+                                        <input
                                             type="number"
                                             placeholder="0"
                                             className="w-full bg-transparent border-none text-sm text-right text-primary font-bold outline-none"
@@ -626,44 +605,11 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
                     {/* Final Price & Override */}
                     <div className="pt-4 border-t border-border space-y-4">
-                        {/* Fee toggles info banner */}
-                        <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3">
-                            <div className="flex items-center gap-2 mb-1">
-                                <span className="material-symbols-outlined notranslate text-amber-500 text-[18px]">info</span>
-                                <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Bank Fees to Charge the Client</span>
-                            </div>
-                            <label className="flex items-start gap-3 cursor-pointer group">
-                                <input
-                                    type="checkbox"
-                                    checked={useStripeFee}
-                                    onChange={e => setUseStripeFee(e.target.checked)}
-                                    className="accent-primary mt-0.5"
-                                />
-                                <div>
-                                    <span className="text-xs font-bold text-text-primary group-hover:text-primary transition-colors">
-                                        Stripe / Card Fee (+3%)
-                                    </span>
-                                    <p className="text-[10px] text-text-muted mt-0.5">
-                                        Select if the client pays with credit card or Revolut. Covers digital payment processing costs.
-                                    </p>
-                                </div>
-                            </label>
-                            <label className="flex items-start gap-3 cursor-pointer group">
-                                <input
-                                    type="checkbox"
-                                    checked={useForexFee}
-                                    onChange={e => setUseForexFee(e.target.checked)}
-                                    className="accent-primary mt-0.5"
-                                />
-                                <div>
-                                    <span className="text-xs font-bold text-text-primary group-hover:text-primary transition-colors">
-                                        Currency Exchange — Non-EUR Client (+2%)
-                                    </span>
-                                    <p className="text-[10px] text-text-muted mt-0.5">
-                                        Select if the client pays in a currency other than Euro (GBP, USD, etc.). Covers currency conversion costs.
-                                    </p>
-                                </div>
-                            </label>
+                        <div className="rounded-2xl bg-primary/10 border border-primary/30 p-4">
+                            <p className="text-[10px] font-black text-primary uppercase tracking-widest mb-1">Stripe processing fee (3%)</p>
+                            <p className="text-[10px] text-text-muted leading-snug">
+                                Always included in the final price. The fee covers card processing and is retained by the agent on the connected Stripe account.
+                            </p>
                         </div>
 
                         <div className="flex items-center justify-between">
@@ -680,9 +626,9 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                         </div>
                         <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-black text-primary/30">€</span>
-                            <input 
+                            <input
                                 type="number"
-                                value={isManual ? manualPrice : calculateAutoPrice()}
+                                value={isManual ? manualPrice : computedFinalPrice}
                                 onChange={e => setManualPrice(e.target.value)}
                                 readOnly={!isManual}
                                 className={`w-full bg-primary/5 border-2 ${isManual ? 'border-primary' : 'border-primary/20'} rounded-2xl py-6 px-10 text-3xl font-black text-primary outline-none transition-all`}
@@ -690,76 +636,79 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                         </div>
 
                         {/* Live Breakdown Preview */}
-                        {!isManual && (
-                            <div className="p-4 rounded-2xl bg-surface-2 border border-border space-y-3 animate-in fade-in slide-in-from-top-2">
-                                <p className="text-[9px] font-black text-text-muted uppercase tracking-widest border-b border-border pb-2">Live Calculation Breakdown</p>
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-[11px]">
-                                        <span className="text-text-secondary">Base ({quote.properties ? 'Villa' : 'Boat'} cost)</span>
-                                        <span className="font-bold text-text-primary">€{Math.round(parseFloat(quote.supplier_base_price || 0)).toLocaleString()}</span>
-                                    </div>
-                                    {parseFloat(editorMargin) > 0 && (
+                        <div className="p-4 rounded-2xl bg-surface-2 border border-border space-y-3 animate-in fade-in slide-in-from-top-2">
+                            <p className="text-[9px] font-black text-text-muted uppercase tracking-widest border-b border-border pb-2">Live Calculation Breakdown</p>
+                            <div className="space-y-2">
+                                <div className="flex justify-between text-[11px]">
+                                    <span className="text-text-secondary">Base ({quote.properties ? 'Villa' : 'Boat'} cost)</span>
+                                    <span className="font-bold font-mono text-text-primary">€{(Number(supplierBase) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                {breakdown.editor_share_eur > 0 && (
+                                    <>
                                         <div className="flex justify-between text-[11px]">
-                                            <span className="text-purple-400">Editor (Captatore) {editorMargin}% {editorMarkupMode === 'deduct' ? '(deducted from owner)' : ''}</span>
-                                            <span className={`font-bold ${editorMarkupMode === 'add' ? 'text-purple-400' : 'text-purple-400/50 line-through'}`}>
-                                                {editorMarkupMode === 'add' ? '+ ' : ''}€{Math.round(parseFloat(quote.supplier_base_price || 0) * parseFloat(editorMargin) / 100).toLocaleString()}
+                                            <span className="text-purple-400">Editor (Captatore) {breakdown.editor_included ? '(deducted from owner)' : '(added to price)'}</span>
+                                            <span className={`font-bold font-mono ${breakdown.editor_included ? 'text-purple-400/50 line-through' : 'text-purple-400'}`}>
+                                                {breakdown.editor_included ? '' : '+ '}€{(Number(breakdown.editor_share_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                             </span>
                                         </div>
-                                    )}
-                                    <div className="flex justify-between text-[11px]">
-                                        <span className="text-text-secondary">Platform + Agent ({parseFloat(margin) + parseFloat(platformMargin)}%)</span>
-                                        <span className="font-bold text-primary">+ €{Math.round(calculateAutoPrice() - parseFloat(quote.supplier_base_price || 0) - extraServices.reduce((sum, s) => sum + (s.price || 0), 0) - (editorMarkupMode === 'add' ? parseFloat(quote.supplier_base_price || 0) * parseFloat(editorMargin) / 100 : 0)).toLocaleString()}</span>
-                                    </div>
-                                    {extraServices.filter(s => s.price > 0).map((s, i) => (
-                                        <div key={i} className="flex justify-between text-[11px]">
-                                            <span className="text-text-secondary">Extra: {s.name || 'Service'}</span>
-                                            <span className="font-bold text-text-primary">+ €{Math.round(s.price).toLocaleString()}</span>
-                                        </div>
-                                    ))}
-                                    {useStripeFee && (() => {
-                                        const base2 = parseFloat(quote.supplier_base_price || 0);
-                                        const sub = base2 * (1 + parseFloat(margin || 0) / 100) + extraServices.reduce((s, x) => s + (x.price || 0), 0);
-                                        const ivaAmt = (sub - base2) * (ivaPercent / 100);
-                                        const preFees = sub + ivaAmt;
-                                        return (
-                                            <div className="flex justify-between text-[11px]">
-                                                <span className="text-amber-500">Stripe / Card Fee (3%)</span>
-                                                <span className="font-bold text-amber-500">+ €{Math.round(preFees * 0.03).toLocaleString()}</span>
+                                        {breakdown.editor_iva_eur > 0 && (
+                                            <div className="flex justify-between text-[11px] pl-3">
+                                                <span className="text-purple-400/70">↳ Editor IVA {ivaPercent}%</span>
+                                                <span className="font-bold font-mono text-purple-400/80">+ €{(Number(breakdown.editor_iva_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                             </div>
-                                        );
-                                    })()}
-                                    {useForexFee && (() => {
-                                        const base2 = parseFloat(quote.supplier_base_price || 0);
-                                        const sub = base2 * (1 + parseFloat(margin || 0) / 100) + extraServices.reduce((s, x) => s + (x.price || 0), 0);
-                                        const ivaAmt = (sub - base2) * (ivaPercent / 100);
-                                        const preFees = sub + ivaAmt;
-                                        return (
-                                            <div className="flex justify-between text-[11px]">
-                                                <span className="text-amber-500">Currency Exchange (2%)</span>
-                                                <span className="font-bold text-amber-500">+ €{Math.round(preFees * 0.02).toLocaleString()}</span>
-                                            </div>
-                                        );
-                                    })()}
-                                    <div className="pt-2 mt-2 border-t border-border flex justify-between text-xs font-black text-primary uppercase">
-                                        <span>Estimated Final Total</span>
-                                        <span>€{calculateAutoPrice().toLocaleString()}</span>
+                                        )}
+                                    </>
+                                )}
+                                <div className="flex justify-between text-[11px]">
+                                    <span className="text-text-secondary">Agency Profit</span>
+                                    <span className="font-bold font-mono text-primary">+ €{(Number(breakdown.agency_profit_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                {extraServices.filter(s => s.price > 0).map((s, i) => (
+                                    <div key={i} className="flex justify-between text-[11px] pl-3">
+                                        <span className="text-text-secondary">↳ Extra: {s.name || 'Service'}</span>
+                                        <span className="font-bold font-mono text-text-primary">+ €{(Number(s.price) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                     </div>
+                                ))}
+                                {breakdown.agency_iva_eur > 0 && (
+                                    <div className="flex justify-between text-[11px] pl-3">
+                                        <span className="text-text-muted">↳ Agency IVA {ivaPercent}% (commission + extras)</span>
+                                        <span className="font-bold font-mono text-text-primary/80">+ €{(Number(breakdown.agency_iva_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between text-[11px]">
+                                    <span className="text-text-secondary">Platform Profit</span>
+                                    <span className="font-bold font-mono text-primary">+ €{(Number(breakdown.platform_profit_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                {breakdown.platform_iva_eur > 0 && (
+                                    <div className="flex justify-between text-[11px] pl-3">
+                                        <span className="text-text-muted">↳ Platform IVA {ivaPercent}%</span>
+                                        <span className="font-bold font-mono text-text-primary/80">+ €{(Number(breakdown.platform_iva_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between text-[11px]">
+                                    <span className="text-amber-500">Stripe / Card Fee (3%)</span>
+                                    <span className="font-bold font-mono text-amber-500">+ €{(Number(breakdown.stripe_fee_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="pt-2 mt-2 border-t border-border flex justify-between text-xs font-black text-primary uppercase">
+                                    <span>Estimated Final Total</span>
+                                    <span className="font-mono">€{(Number(computedFinalPrice) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="pt-2 mt-2 border-t border-dashed border-border flex justify-between text-[9px] text-text-muted uppercase">
+                                    <span>Owner upfront cash flow at deposit</span>
+                                    <span className="font-mono">€{(Number(breakdown.upfront_stay_eur) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </div>
                             </div>
-                        )}
+                        </div>
 
                         <p className="text-[10px] text-text-muted italic text-center">
-                            {isManual ? 'Warning: Automatic calculations are suspended in manual mode.' : 'Calculated automatically based on subtotal, margin, and extras.'}
+                            {isManual ? 'Manual override active — breakdown derived backwards from final price.' : 'Calculated automatically based on supplier base, margins, extras, IVA, and Stripe fee.'}
                         </p>
-                        <div className="p-3 bg-primary/5 rounded-xl border border-primary/20">
-                            <p className="text-[8px] text-primary/60 font-medium italic leading-tight">* Includes {ivaPercent}% IVA (VAT) as per Spanish holiday rental regulations.</p>
-                        </div>
                     </div>
                 </div>
 
                 <div className="p-6 bg-background/30 flex gap-3">
                     <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-border text-text-muted font-bold hover:bg-surface-2 transition-all text-sm">Cancel</button>
-                    <button 
+                    <button
                         onClick={handleSave}
                         disabled={saving}
                         className="flex-[2] btn-primary py-3 font-bold shadow-lg shadow-primary/20 disabled:opacity-50 text-sm"

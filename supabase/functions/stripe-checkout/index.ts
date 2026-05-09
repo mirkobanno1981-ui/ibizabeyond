@@ -2,10 +2,38 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import Stripe from 'https://esm.sh/stripe@14.12.0?target=deno'
 
+// Stripe Connect Payment Flow — single source of truth.
+//
+// All money math lives in src/lib/quoteMath.js and is snapshotted onto the
+// quote row at save time:
+//   supplier_base_price, editor_share_eur, editor_included,
+//   extras_total_eur, agency_profit_eur, platform_profit_eur,
+//   iva_amount_eur, iva_percent, stripe_fee_eur, upfront_stay_eur,
+//   final_price.
+//
+// This function does NOT recompute. It reads the snapshot, splits the charge
+// into Stripe transfers, and trusts the modal's numbers.
+//
+// Cash flow (booking deposit, type !== 'security_deposit'):
+//   amountToCharge      = (final_price − supplier_base_price) + upfront_stay_eur
+//                       = agency_profit + platform_profit + extras + iva (all 3) + stripe_fee + upfront_stay
+//   application_fee     = platform_profit + platform_iva + (upfront_stay if not transferred separately)
+//   ownerTransfer       = upfront_stay − editor_share (if editor_included) else upfront_stay
+//   editorTransfer      = editor_share + editor_iva (only when not included; editor invoices IVA)
+//   agent retains       = agency_profit + agency_iva + extras + stripe_fee  (on connected account)
+//
+// IVA is split per recipient: editor, agency, and platform each invoice their
+// share of IVA on their own commission. The owner side (supplier_base) is the
+// rental supplier and carries no IVA.
+//
+// For security_deposit we hold the deposit amount on the platform with manual capture.
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
+
+const toCents = (eur: number) => Math.round((Number(eur) || 0) * 100)
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -41,34 +69,33 @@ serve(async (req) => {
   }
 
   try {
-    // 1. Fetch Quote & Related Data (incl. agent + owner stripe accounts)
     const { data: quote, error: quoteError } = await supabase
       .from('quotes')
       .select(`
         id,
         final_price,
         supplier_base_price,
-        admin_markup,
-        agent_markup,
-        editor_markup,
-        editor_markup_mode,
-        extra_services,
+        editor_share_eur,
+        editor_included,
+        extras_total_eur,
+        agency_profit_eur,
+        platform_profit_eur,
+        editor_iva_eur,
+        agency_iva_eur,
+        platform_iva_eur,
+        iva_amount_eur,
+        iva_percent,
+        stripe_fee_eur,
+        upfront_stay_eur,
         agent_id,
         v_uuid,
         boat_uuid,
         check_in,
         check_out,
-        rental_type,
         clients ( full_name, email ),
         properties (
           villa_name,
           deposit,
-          editor_markup_percent,
-          capturer_commission_mode,
-          capturer_commission_pct,
-          capturer_commission_amount,
-          capturer_commission_included,
-          rental_type_configs,
           owner_id,
           owners ( stripe_account_id, split_enabled, agent_id )
         ),
@@ -80,8 +107,7 @@ serve(async (req) => {
         agents!quotes_agent_id_fkey (
           id,
           agent_type,
-          stripe_account_id,
-          agency_split_pct
+          stripe_account_id
         )
       `)
       .eq('id', quoteId)
@@ -108,37 +134,10 @@ serve(async (req) => {
       ? !!quote.properties?.owners?.split_enabled
       : false;
 
-    // Capturer (editor) commission: per-quote override (% only) wins; otherwise
-    // fall back to the villa-level capturer commission spec (mode + pct/amount +
-    // included flag, with optional per-rental-type override of "included").
-    const villaProps: any = quote.properties || {};
-    const rentalTypeForSpec = (quote as any).rental_type || 'daily';
-    const rtCfg = (villaProps.rental_type_configs?.[rentalTypeForSpec]) || {};
-    const capMode: 'percent' | 'fixed' =
-      (villaProps.capturer_commission_mode as any) || 'percent';
-    const capPct = parseFloat(
-      villaProps.capturer_commission_pct ?? villaProps.editor_markup_percent ?? 0
-    ) || 0;
-    const capAmount = parseFloat(villaProps.capturer_commission_amount ?? 0) || 0;
-    const capIncluded =
-      rtCfg.commission_included_override === true  ? true
-    : rtCfg.commission_included_override === false ? false
-    : !!villaProps.capturer_commission_included;
+    const editorAgentId = isVilla ? quote.properties?.owners?.agent_id : null;
 
-    // Quote-level override is always interpreted as percent (legacy behaviour).
-    const quoteOverridePct = quote.editor_markup != null
-      ? parseFloat(quote.editor_markup)
-      : null;
-    const editorMarkupPct = isVilla
-      ? (quoteOverridePct != null ? quoteOverridePct : (capMode === 'percent' ? capPct : 0))
-      : 0;
-
-    const editorAgentId = isVilla
-      ? quote.properties?.owners?.agent_id
-      : null;
-
-    // Fallback: villa.owner_id may point to an editor (agents row) without a matching
-    // owners row. Treat the editor as the owner-side recipient (self-managed).
+    // Edge case: villa.owner_id points to an agent (editor) row instead of an
+    // owners row — they self-manage. Treat the editor as the owner-side recipient.
     let selfManagedEditor = false;
     if (isVilla && !ownerStripeAccount && quote.properties?.owner_id) {
       const { data: agt } = await supabase
@@ -167,15 +166,15 @@ serve(async (req) => {
     const origin = req.headers.get('origin') || 'https://ibizabeyond.com';
     let paymentMethodResolved = method || 'card';
 
-    // ---- Amount & split calc ----
-    const supplierBase = parseFloat(quote.supplier_base_price || 0);
-
-    const checkInDate = new Date(quote.check_in);
-    checkInDate.setUTCHours(0, 0, 0, 0);
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const diffDays = Math.round((checkInDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    const isLastMinute = diffDays <= 42; // 6 weeks
+    // ---- Snapshot read (no recomputation) ----
+    const supplierBase    = parseFloat(quote.supplier_base_price || 0);
+    const finalPrice      = parseFloat(quote.final_price || 0);
+    const editorShare     = parseFloat(quote.editor_share_eur || 0);
+    const editorIncluded  = !!quote.editor_included;
+    const upfrontStay     = parseFloat(quote.upfront_stay_eur || 0);
+    const platformProfit  = parseFloat(quote.platform_profit_eur || 0);
+    const editorIva       = parseFloat(quote.editor_iva_eur || 0);
+    const platformIva     = parseFloat(quote.platform_iva_eur || 0);
 
     let amountToCharge = 0;
     let applicationFeeAmount = 0;
@@ -183,96 +182,56 @@ serve(async (req) => {
     let useDirectCharge = false;
 
     if (type === 'security_deposit') {
-      // Security deposit: stays on platform (manual capture)
       amountToCharge = securityDepositAmount;
       paymentMethodResolved = 'card';
     } else {
-      // Booking deposit: 3-way split when agent has Connect account
-      const supplierBase = parseFloat(quote.supplier_base_price || 0);
-      const finalPrice = parseFloat(quote.final_price || 0);
-      
-      const upfrontStayPart = isLastMinute ? supplierBase : (supplierBase * 0.5);
-      
-      amountToCharge = (finalPrice - supplierBase) + upfrontStayPart;
+      // Booking deposit: charge everything except the deferred 50% balance.
+      amountToCharge = finalPrice - (supplierBase - upfrontStay);
 
-      const extrasTotal = Array.isArray(quote.extra_services)
-        ? quote.extra_services.reduce((s: number, x: any) => s + (parseFloat(x.price) || 0), 0)
-        : 0;
+      // Platform receives its commission + IVA on that commission. Editor and
+      // agency invoice their own IVA portions and receive them via transfers.
+      applicationFeeAmount = platformProfit + platformIva;
 
-      const ivaDivisor = 1.21; // 21% IVA
-      const finalPriceNetOfIVA = finalPrice / ivaDivisor;
-      const ivaAmount = finalPrice - finalPriceNetOfIVA;
-      const totalProfit = Math.max(0, finalPriceNetOfIVA - supplierBase - extrasTotal);
+      // Owner-side stay portion routed via metadata; webhook creates transfer.
+      supplierTransferAmount = upfrontStay;
 
-      // Per-rental-type commission split (falls back to agent-level or 67/33 default)
-      const rentalType = (quote as any).rental_type || 'daily';
-      const rtConfig = isVilla
-        ? ((quote.properties as any)?.rental_type_configs?.[rentalType] || null)
-        : null;
-      const agencySplitPct: number = rtConfig
-        ? (100 - (rtConfig.platform_retention_pct || 33))
-        : ((quote.agents as any)?.agency_split_pct || 67);
-
-      const agencyProfit = totalProfit * (agencySplitPct / 100);
-      const platformProfit = totalProfit * ((100 - agencySplitPct) / 100);
-
-      let agentPortion = agencyProfit + extrasTotal;
-      const platformPortion = platformProfit + upfrontStayPart + ivaAmount;
-
-      // Flat 3% processing fee applied to all payment methods — shown as single price to client
-      const processingFee = amountToCharge * 0.03;
-      amountToCharge += processingFee;
-      agentPortion += processingFee;
-
-      applicationFeeAmount = platformPortion;
-      supplierTransferAmount = upfrontStayPart;
-
-      // SAFETY CHECK: Stripe application fee cannot exceed the total amount
+      // SAFETY: application fee can never exceed amount charged.
       if (applicationFeeAmount >= amountToCharge) {
-        applicationFeeAmount = Math.max(0, amountToCharge - 1); // Leave at least 1 cent margin
+        applicationFeeAmount = Math.max(0, amountToCharge - 1);
       }
 
-      // Only card supports direct charges + application_fee_amount on Connect accounts
-      // revolut_pay, paypal, customer_balance (bank_transfer) require platform-side charges
+      // Direct charges + application_fee_amount only work for card on Connect.
       if (agentStripeAccount && paymentMethodResolved === 'card') {
         useDirectCharge = true;
       }
     }
 
-    // ---- Editor (captatore) commission split ----
-    // Routing rules:
-    //  - selfManagedEditor: villa.owner_id is an editor without an owners row.
-    //      Editor receives upfrontStayPart + editor commission; settles real owner manually.
-    //  - 2-recipient split: villa has a real owner with split_enabled + linked editor.
-    //  - Legacy: supplierTransferAmount -> ownerStripeAccount (single-supplier path).
+    // ---- Editor (capturer) commission split ----
+    // editor_included = true  → editorShare already inside supplierBase, deduct from owner.
+    //                           No editor IVA (commission is internal owner/editor split).
+    // editor_included = false → editor receives editorShare + editor_iva (invoices IVA on its commission).
     let ownerTransferAmount = 0;
     let ownerTransferAccount: string | null = null;
     let editorTransferAmount = 0;
     let editorTransferAccount: string | null = null;
 
     if (type !== 'security_deposit' && isVilla && ownerStripeAccount) {
-      // Resolve absolute editor (capturer) share. Quote-level override is
-      // always %; otherwise honour villa-level mode (percent or fixed €).
-      const editorShare = quoteOverridePct != null || capMode === 'percent'
-        ? supplierBase * (editorMarkupPct / 100)
-        : capAmount;
-
       if (selfManagedEditor) {
-        // Editor IS the owner-side recipient — receives both stay portion and
-        // commission. capIncluded irrelevant: same wallet anyway.
+        // Editor IS the owner-side recipient — receives stay portion + commission + editor IVA.
         ownerTransferAccount = ownerStripeAccount;
-        ownerTransferAmount = supplierTransferAmount + (capIncluded ? 0 : editorShare);
+        ownerTransferAmount = supplierTransferAmount
+          + (editorIncluded ? 0 : editorShare + editorIva);
         supplierTransferAmount = 0;
       } else if (ownerSplitEnabled && editorAgentId && editorStripeAccount) {
-        // capIncluded=true  → commission already inside supplierBase, deduct from owner.
-        // capIncluded=false → commission added on top, owner keeps full stay portion.
-        const ownerShareRaw = capIncluded
+        const ownerShare = editorIncluded
           ? Math.max(0, supplierTransferAmount - editorShare)
           : supplierTransferAmount;
         ownerTransferAccount = ownerStripeAccount;
-        ownerTransferAmount = ownerShareRaw;
+        ownerTransferAmount = ownerShare;
         editorTransferAccount = editorStripeAccount;
-        editorTransferAmount = editorShare;
+        // Editor receives commission + its IVA portion (only when commission is
+        // added on top — when included, the share is internal owner-side split).
+        editorTransferAmount = editorIncluded ? 0 : editorShare + editorIva;
         supplierTransferAmount = 0;
       }
       // else: legacy single-owner path keeps supplierTransferAmount; routed below.
@@ -282,7 +241,6 @@ serve(async (req) => {
       throw new Error(`Invalid amount: ${amountToCharge}`);
     }
 
-    // ---- Customer management ----
     const clientEmail = quote.clients?.email?.trim();
     const clientName = quote.clients?.full_name || 'Valued Client';
     const stripeOptions = useDirectCharge ? { stripeAccount: agentStripeAccount } : undefined;
@@ -303,7 +261,6 @@ serve(async (req) => {
       stripeCustomerId = customer.id;
     }
 
-    // ---- Session config ----
     const paymentTypeParam = type === 'security_deposit' ? 'security_deposit_auth' : 'deposit';
 
     const commonMetadata: Record<string, string> = {
@@ -315,16 +272,15 @@ serve(async (req) => {
     };
 
     if (useDirectCharge && supplierTransferAmount > 0 && ownerStripeAccount) {
-      commonMetadata.supplier_transfer_amount = String(Math.round(supplierTransferAmount * 100));
+      commonMetadata.supplier_transfer_amount = String(toCents(supplierTransferAmount));
       commonMetadata.supplier_account = ownerStripeAccount;
     }
-
     if (useDirectCharge && ownerTransferAccount && ownerTransferAmount > 0) {
-      commonMetadata.owner_transfer_amount = String(Math.round(ownerTransferAmount * 100));
+      commonMetadata.owner_transfer_amount = String(toCents(ownerTransferAmount));
       commonMetadata.owner_account = ownerTransferAccount;
     }
     if (useDirectCharge && editorTransferAccount && editorTransferAmount > 0) {
-      commonMetadata.editor_transfer_amount = String(Math.round(editorTransferAmount * 100));
+      commonMetadata.editor_transfer_amount = String(toCents(editorTransferAmount));
       commonMetadata.editor_account = editorTransferAccount;
     }
 
@@ -338,7 +294,7 @@ serve(async (req) => {
               name: displayName,
               description: `Reservation for ${displayName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}`,
             },
-            unit_amount: Math.round(amountToCharge * 100),
+            unit_amount: toCents(amountToCharge),
           },
           quantity: 1,
         },
@@ -377,7 +333,7 @@ serve(async (req) => {
 
     if (useDirectCharge && applicationFeeAmount > 0) {
       sessionConfig.payment_intent_data = sessionConfig.payment_intent_data || { metadata: commonMetadata };
-      sessionConfig.payment_intent_data.application_fee_amount = Math.round(applicationFeeAmount * 100);
+      sessionConfig.payment_intent_data.application_fee_amount = toCents(applicationFeeAmount);
     }
 
     console.log('DEBUG: Creating session', {
@@ -386,6 +342,8 @@ serve(async (req) => {
       amountToCharge,
       applicationFeeAmount,
       supplierTransferAmount,
+      ownerTransferAmount,
+      editorTransferAmount,
       ownerStripeAccount,
     });
 

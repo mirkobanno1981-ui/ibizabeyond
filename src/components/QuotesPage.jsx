@@ -64,34 +64,30 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico.`;
 const SUPER_ADMIN_AGENT_ID = '72241c14-09ed-4227-a01e-9bdeefdd0c8d';
 
 function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
+    // Connect Payment Flow mirrors the Live Calculation Breakdown shown in
+    // EditQuoteModal — same snapshot fields, same numbers, same labels.
+    // No recalculation. Two sections:
+    //   1. Money composition (= Live Calculation Breakdown)
+    //   2. Stripe routing (which connected account each piece lands on)
     const base = parseFloat(quote.supplier_base_price || 0);
-    const adminPct = parseFloat(quote.admin_markup || 0);
-    const editorPct = parseFloat(quote.editor_markup || 0);
-    const editorMode = quote.editor_markup_mode || 'add';
     const finalPrice = parseFloat(quote.final_price || 0);
-
-    const breakdown = Array.isArray(quote.price_breakdown) ? quote.price_breakdown : [];
-    const platformItem = breakdown.find(i => i.label?.includes('Platform'));
-    const agencyItem = breakdown.find(i => i.label?.includes('Agency'));
-    const ivaItem = breakdown.find(i => i.label?.includes('IVA'));
-    const editorItem = breakdown.find(i => i.label?.includes('Editor') || i.label?.includes('Captatore'));
-
-    const editorShare = editorItem ? parseFloat(editorItem.amount) : Math.round(base * (editorPct / 100));
-    const platformProfit = platformItem ? parseFloat(platformItem.amount) : Math.round(base * (adminPct / 100));
-    const agencyProfit = agencyItem
-        ? parseFloat(agencyItem.amount)
-        : Math.max(0, finalPrice - base - platformProfit - (ivaItem ? parseFloat(ivaItem.amount) : 0) - (editorMode === 'add' ? editorShare : 0));
-    const ivaAmount = ivaItem ? parseFloat(ivaItem.amount) : 0;
-
-    // Deposit timing
-    const checkIn = quote.check_in ? new Date(quote.check_in) : null;
-    const today = new Date();
-    if (checkIn) checkIn.setUTCHours(0, 0, 0, 0);
-    today.setUTCHours(0, 0, 0, 0);
-    const diffDays = checkIn ? Math.round((checkIn.getTime() - today.getTime()) / 86400000) : 0;
-    const isLastMinute = diffDays <= 42;
-    const upfrontStayPart = isLastMinute ? base : base * 0.5;
-    const balanceLater = base - upfrontStayPart;
+    const editorShare = parseFloat(quote.editor_share_eur || 0);
+    const editorIncluded = !!quote.editor_included;
+    const platformProfit = parseFloat(quote.platform_profit_eur || 0);
+    const agencyProfit = parseFloat(quote.agency_profit_eur || 0);
+    const editorIva = parseFloat(quote.editor_iva_eur || 0);
+    const agencyIva = parseFloat(quote.agency_iva_eur || 0);
+    const platformIva = parseFloat(quote.platform_iva_eur || 0);
+    const ivaAmount = parseFloat(quote.iva_amount_eur || 0);
+    const stripeFee = parseFloat(quote.stripe_fee_eur || 0);
+    const ivaPercent = parseFloat(quote.iva_percent || 10);
+    const extrasTotal = parseFloat(quote.extras_total_eur || 0)
+        || (Array.isArray(quote.extra_services)
+            ? quote.extra_services.reduce((s, x) => s + (parseFloat(x.price) || 0), 0)
+            : 0);
+    const upfrontStayPart = parseFloat(quote.upfront_stay_eur || 0) || (base * 0.5);
+    const balanceLater = Math.max(0, base - upfrontStayPart);
+    const isLastMinute = upfrontStayPart >= base - 0.01;
 
     const isVilla = !!quote.properties;
     const sellingAgent = quote.agents || null;
@@ -102,12 +98,24 @@ function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
     const ownerStripeAccount = villaOwnerInfo?.stripeAccount || null;
     const ownerName = villaOwnerInfo?.name || (isVilla ? 'Owner (unassigned)' : 'Boat Owner');
 
-    // Owner-side amount in deposit (combined with editor commission when self-managed)
-    const ownerSideDepositAmount = isSelfManagedEditor
-        ? upfrontStayPart + editorShare
+    // Routing — each connected account receives its commission + its own IVA portion.
+    //   Owner: upfrontStay − (editorShare if included) — no IVA, supplier role.
+    //   Editor: editorShare + editorIva (only when commission added on top).
+    //           Self-managed: folded into owner wallet.
+    //   Agency: agencyProfit + agencyIva + extras + stripeFee (retained on agent account).
+    //   Platform: platformProfit + platformIva (application_fee_amount).
+    const ownerStayNet = editorIncluded
+        ? Math.max(0, upfrontStayPart - editorShare)
         : upfrontStayPart;
+    const editorRoutingAmount = editorIncluded ? 0 : editorShare + editorIva;
+    const ownerSideDepositAmount = isSelfManagedEditor
+        ? upfrontStayPart + editorRoutingAmount
+        : ownerStayNet;
+    const agencyRetained = agencyProfit + agencyIva + extrasTotal + stripeFee;
+    const platformRetained = platformProfit + platformIva;
+    const clientDepositCharge = (finalPrice - base) + upfrontStayPart;
 
-    const fmt = (n) => `€${Math.round(n).toLocaleString()}`;
+    const fmt = (n) => `€${(Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
     const Box = ({ tone, label, name, sub, amount, account, warn, note }) => {
         const toneMap = {
@@ -139,11 +147,21 @@ function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
         </div>
     );
 
+    // Composition row — exact mirror of Live Calculation Breakdown in modal.
+    const compositionRow = (label, amount, opts = {}) => (
+        <div className={`flex justify-between text-[11px] ${opts.muted ? 'text-text-muted' : ''}`}>
+            <span className={opts.colorClass || 'text-text-secondary'}>{label}</span>
+            <span className={`font-bold font-mono ${opts.colorClass || 'text-text-primary'} ${opts.strike ? 'line-through opacity-50' : ''}`}>
+                {opts.sign || ''}{fmt(amount)}
+            </span>
+        </div>
+    );
+
     return (
         <tr className="bg-surface-2/30">
             <td colSpan={colSpan} className="px-5 py-4">
-                <div className="rounded-2xl border border-border bg-background/40 p-4">
-                    <div className="flex items-center justify-between mb-3">
+                <div className="rounded-2xl border border-border bg-background/40 p-4 space-y-5">
+                    <div className="flex items-center justify-between">
                         <h3 className="text-[10px] font-black uppercase tracking-[0.25em] text-text-primary">
                             Connect Payment Flow {isSelfManagedEditor && <span className="text-fuchsia-400 ml-2">(Self-Managed Editor)</span>}
                         </h3>
@@ -152,69 +170,119 @@ function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
                         </span>
                     </div>
 
-                    {/* Deposit row */}
-                    <p className="text-[9px] font-black uppercase tracking-widest text-text-muted mb-2">Deposit charge ({fmt((finalPrice - base) + upfrontStayPart)})</p>
-                    <div className="flex items-stretch gap-2 flex-wrap mb-4">
-                        <Box tone="client" label="Client pays" name={quote.clients?.full_name || 'Client'} amount={(finalPrice - base) + upfrontStayPart}
-                             note={isB2C ? 'Direct to platform' : `Direct charge → ${sellingAgent?.company_name || 'agency'}`} />
-                        <Arrow />
-                        <Box tone={isSelfManagedEditor ? 'editor' : 'owner'}
-                             label={isSelfManagedEditor ? 'Editor (self-managed owner)' : 'Owner'}
-                             name={ownerName}
-                             sub={isSelfManagedEditor ? 'Pays real owner manually' : undefined}
-                             amount={ownerSideDepositAmount}
-                             account={ownerStripeAccount}
-                             warn={!ownerStripeAccount && ownerSideDepositAmount > 0} />
-                        {!isSelfManagedEditor && editorShare > 0 && (
-                            <>
-                                <Arrow />
-                                <Box tone="editor" label="Editor commission" name="Linked Captatore" amount={editorShare} note="Routed only when owner.split_enabled" />
-                            </>
+                    {/* SECTION 1 — Money composition (mirrors Live Calculation Breakdown) */}
+                    <div className="rounded-xl bg-surface-2 border border-border p-4 space-y-2">
+                        <p className="text-[9px] font-black text-text-muted uppercase tracking-widest border-b border-border pb-2 mb-2">
+                            Live Calculation Breakdown
+                        </p>
+                        {compositionRow(`Base (${isVilla ? 'Villa' : 'Boat'} cost)`, base)}
+                        {editorShare > 0 && compositionRow(
+                            `Editor (Captatore) ${editorIncluded ? '(deducted from owner)' : '(added to price)'}`,
+                            editorShare,
+                            { colorClass: 'text-purple-400', sign: editorIncluded ? '' : '+ ', strike: editorIncluded }
                         )}
-                        {!isB2C && (
-                            <>
-                                <Arrow />
-                                <Box tone="agency" label="Selling Agency" name={sellingAgent?.company_name || 'Agency'} amount={agencyProfit}
-                                     account={sellingAgentAccount}
-                                     warn={!sellingAgentAccount && agencyProfit > 0} />
-                            </>
+                        {editorIva > 0 && (
+                            <div className="flex justify-between text-[11px] pl-3">
+                                <span className="text-purple-400/70">↳ Editor IVA {ivaPercent}%</span>
+                                <span className="font-bold font-mono text-purple-400/80">+ {fmt(editorIva)}</span>
+                            </div>
                         )}
-                        <Arrow />
-                        <Box tone="platform" label="Platform" name="Ibiza Beyond"
-                             amount={platformProfit + ivaAmount}
-                             note="application_fee_amount (incl. IVA)" />
+                        {compositionRow('Agency Profit', agencyProfit, { colorClass: 'text-primary', sign: '+ ' })}
+                        {extrasTotal > 0 && (
+                            <div className="flex justify-between text-[11px] pl-3">
+                                <span className="text-text-secondary">↳ Extra Services</span>
+                                <span className="font-bold font-mono text-text-primary">+ {fmt(extrasTotal)}</span>
+                            </div>
+                        )}
+                        {agencyIva > 0 && (
+                            <div className="flex justify-between text-[11px] pl-3">
+                                <span className="text-text-muted">↳ Agency IVA {ivaPercent}% (commission + extras)</span>
+                                <span className="font-bold font-mono text-text-primary/80">+ {fmt(agencyIva)}</span>
+                            </div>
+                        )}
+                        {compositionRow('Platform Profit', platformProfit, { colorClass: 'text-primary', sign: '+ ' })}
+                        {platformIva > 0 && (
+                            <div className="flex justify-between text-[11px] pl-3">
+                                <span className="text-text-muted">↳ Platform IVA {ivaPercent}%</span>
+                                <span className="font-bold font-mono text-text-primary/80">+ {fmt(platformIva)}</span>
+                            </div>
+                        )}
+                        {compositionRow('Stripe / Card Fee (3%)', stripeFee, { colorClass: 'text-amber-500', sign: '+ ' })}
+                        <div className="pt-2 mt-2 border-t border-border flex justify-between text-xs font-black text-primary uppercase">
+                            <span>Final Total (Client Pays)</span>
+                            <span className="font-mono">{fmt(finalPrice)}</span>
+                        </div>
+                        <div className="pt-2 mt-2 border-t border-dashed border-border/60 flex justify-between text-[9px] text-text-muted uppercase">
+                            <span>Owner upfront cash flow at deposit</span>
+                            <span className="font-mono">{fmt(upfrontStayPart)}</span>
+                        </div>
                     </div>
 
-                    {/* Balance row (only when split deposit) */}
+                    {/* SECTION 2 — Stripe routing (deposit) */}
+                    <div>
+                        <p className="text-[9px] font-black uppercase tracking-widest text-text-muted mb-2">
+                            Stripe Routing — Deposit Charge ({fmt(clientDepositCharge)})
+                        </p>
+                        <div className="flex items-stretch gap-2 flex-wrap mb-2">
+                            <Box tone="client" label="Client pays" name={quote.clients?.full_name || 'Client'}
+                                 amount={clientDepositCharge}
+                                 note={isB2C ? 'Direct to platform' : `Direct charge → ${sellingAgent?.company_name || 'agency'}`} />
+                            <Arrow />
+                            <Box tone={isSelfManagedEditor ? 'editor' : 'owner'}
+                                 label={isSelfManagedEditor ? 'Editor (self-managed owner)' : 'Owner'}
+                                 name={ownerName}
+                                 sub={isSelfManagedEditor
+                                     ? 'Receives stay + commission · settles real owner manually'
+                                     : (editorIncluded && editorShare > 0 ? `Stay − €${Math.round(editorShare)} editor` : undefined)}
+                                 amount={ownerSideDepositAmount}
+                                 account={ownerStripeAccount}
+                                 warn={!ownerStripeAccount && ownerSideDepositAmount > 0} />
+                            {!isSelfManagedEditor && editorRoutingAmount > 0 && (
+                                <>
+                                    <Arrow />
+                                    <Box tone="editor" label="Editor commission" name="Linked Captatore"
+                                         sub={`${fmt(editorShare)} comm + ${fmt(editorIva)} IVA`}
+                                         amount={editorRoutingAmount}
+                                         note="Routed only when owner.split_enabled" />
+                                </>
+                            )}
+                            {!isB2C && (
+                                <>
+                                    <Arrow />
+                                    <Box tone="agency" label="Selling Agency (retained)"
+                                         name={sellingAgent?.company_name || 'Agency'}
+                                         sub={`Profit ${fmt(agencyProfit)} + IVA ${fmt(agencyIva)} + extras + Stripe fee`}
+                                         amount={agencyRetained}
+                                         account={sellingAgentAccount}
+                                         warn={!sellingAgentAccount && agencyRetained > 0} />
+                                </>
+                            )}
+                            <Arrow />
+                            <Box tone="platform" label="Platform" name="Ibiza Beyond"
+                                 sub={`Profit ${fmt(platformProfit)} + IVA ${fmt(platformIva)}`}
+                                 amount={platformRetained}
+                                 note="application_fee_amount" />
+                        </div>
+                    </div>
+
+                    {/* SECTION 3 — Balance later (only when split deposit) */}
                     {!isLastMinute && balanceLater > 0 && (
-                        <>
-                            <p className="text-[9px] font-black uppercase tracking-widest text-text-muted mb-2">Balance later ({fmt(balanceLater)})</p>
+                        <div>
+                            <p className="text-[9px] font-black uppercase tracking-widest text-text-muted mb-2">
+                                Balance Later ({fmt(balanceLater)})
+                            </p>
                             <div className="flex items-stretch gap-2 flex-wrap">
-                                <Box tone="client" label="Client pays balance" name={quote.clients?.full_name || 'Client'} amount={balanceLater} />
+                                <Box tone="client" label="Client pays balance"
+                                     name={quote.clients?.full_name || 'Client'} amount={balanceLater} />
                                 <Arrow />
                                 <Box tone={isSelfManagedEditor ? 'editor' : 'owner'}
                                      label={isSelfManagedEditor ? 'Editor (self-managed)' : 'Owner'}
-                                     name={ownerName}
-                                     amount={balanceLater}
+                                     name={ownerName} amount={balanceLater}
                                      account={ownerStripeAccount}
                                      warn={!ownerStripeAccount && balanceLater > 0} />
                             </div>
-                        </>
+                        </div>
                     )}
-
-                    <div className="mt-3 pt-3 border-t border-border/40 flex flex-wrap gap-3 text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                        <span>Total client: {fmt(finalPrice)}</span>
-                        <span className="opacity-50">•</span>
-                        <span>Base (owner side): {fmt(base)}</span>
-                        <span className="opacity-50">•</span>
-                        <span>Editor: {fmt(editorShare)} ({editorMode})</span>
-                        <span className="opacity-50">•</span>
-                        <span>Platform: {fmt(platformProfit)}</span>
-                        <span className="opacity-50">•</span>
-                        <span>Agency: {fmt(agencyProfit)}</span>
-                        <span className="opacity-50">•</span>
-                        <span>IVA: {fmt(ivaAmount)}</span>
-                    </div>
                 </div>
             </td>
         </tr>
@@ -248,11 +316,21 @@ export default function QuotesPage() {
                     agent_markup,
                     extra_services,
                     is_manual_price,
-                    stripe_fee_included,
                     supplier_base_price,
                     admin_markup,
                     editor_markup,
-                    editor_markup_mode,
+                    editor_share_eur,
+                    editor_included,
+                    extras_total_eur,
+                    agency_profit_eur,
+                    platform_profit_eur,
+                    editor_iva_eur,
+                    agency_iva_eur,
+                    platform_iva_eur,
+                    iva_amount_eur,
+                    iva_percent,
+                    stripe_fee_eur,
+                    upfront_stay_eur,
                     price_breakdown,
                     documenso_document_id,
                     group_details,
