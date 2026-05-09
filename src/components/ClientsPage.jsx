@@ -145,7 +145,7 @@ export default function ClientsPage() {
         setViewingClient(client);
         const { data, error } = await supabase
             .from('quotes')
-            .select('*, invenio_properties(villa_name)')
+            .select('*, properties(villa_name)')
             .eq('client_id', client.id)
             .order('created_at', { ascending: false });
         
@@ -467,7 +467,7 @@ export default function ClientsPage() {
                                     {selectedClientQuotes.map(q => (
                                         <div key={q.id} className="glass-card p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-surface-2 transition-colors border-border">
                                             <div>
-                                                <h4 className="font-bold text-text-primary text-sm">{q.invenio_properties?.villa_name}</h4>
+                                                <h4 className="font-bold text-text-primary text-sm">{q.properties?.villa_name}</h4>
                                                 <div className="flex items-center gap-3 mt-1">
                                                     <span className="text-[10px] text-text-muted uppercase font-black flex items-center gap-1">
                                                         <span className="material-symbols-outlined notranslate text-[12px]">calendar_month</span>

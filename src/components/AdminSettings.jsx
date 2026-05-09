@@ -2,12 +2,13 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function AdminSettings() {
-    const [invenioToAdmin, setInvenioToAdmin] = useState('');
+    const [supplierToAdmin, setSupplierToAdmin] = useState('');
     const [adminToAgent, setAdminToAgent] = useState('');
     const [sesUser, setSesUser] = useState('');
     const [sesPassword, setSesPassword] = useState('');
     const [villasEnabled, setVillasEnabled] = useState(true);
     const [boatsEnabled, setBoatsEnabled] = useState(true);
+    const [servicesEnabled, setServicesEnabled] = useState(true);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState({ text: '', type: '' });
@@ -29,7 +30,7 @@ export default function AdminSettings() {
             if (error) throw error;
 
             if (data) {
-                setInvenioToAdmin(data.invenio_to_admin_margin);
+                setSupplierToAdmin(data.supplier_to_admin_margin);
                 setAdminToAgent(data.admin_to_agent_margin);
             }
 
@@ -43,6 +44,7 @@ export default function AdminSettings() {
                 setSesPassword(globalData.ses_password || '');
                 setVillasEnabled(globalData.villas_enabled ?? true);
                 setBoatsEnabled(globalData.boats_enabled ?? true);
+                setServicesEnabled(globalData.services_enabled ?? true);
             }
         } catch (error) {
             console.error("Error fetching margin settings:", error);
@@ -60,7 +62,7 @@ export default function AdminSettings() {
             const { error } = await supabase
                 .from('margin_settings')
                 .update({
-                    invenio_to_admin_margin: parseFloat(invenioToAdmin) || 0,
+                    supplier_to_admin_margin: parseFloat(supplierToAdmin) || 0,
                     admin_to_agent_margin: parseFloat(adminToAgent) || 0
                 })
                 .eq('id', 1); // Assuming single row setup
@@ -74,7 +76,8 @@ export default function AdminSettings() {
                     ses_user: sesUser,
                     ses_password: sesPassword,
                     villas_enabled: villasEnabled,
-                    boats_enabled: boatsEnabled
+                    boats_enabled: boatsEnabled,
+                    services_enabled: servicesEnabled
                 })
                 .eq('id', (await supabase.from('global_settings').select('id').single()).data?.id);
 
@@ -130,8 +133,8 @@ export default function AdminSettings() {
                                     placeholder="0.00"
                                     type="number"
                                     step="0.01"
-                                    value={invenioToAdmin}
-                                    onChange={(e) => setInvenioToAdmin(e.target.value)}
+                                    value={supplierToAdmin}
+                                    onChange={(e) => setSupplierToAdmin(e.target.value)}
                                 />
                                 <div className="absolute right-4 pointer-events-none">
                                     <span className="material-symbols-outlined notranslate text-text-muted dark:text-text-muted">percent</span>
@@ -248,6 +251,19 @@ export default function AdminSettings() {
                                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${boatsEnabled ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-700'}`}
                                 >
                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${boatsEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                                </button>
+                            </div>
+
+                            <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-700 dark:text-text-secondary">Enable Services</p>
+                                    <p className="text-[10px] text-text-muted">Global switch for services catalog (hairdresser, chef, massage, etc.).</p>
+                                </div>
+                                <button
+                                    onClick={() => setServicesEnabled(!servicesEnabled)}
+                                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${servicesEnabled ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-700'}`}
+                                >
+                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${servicesEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
                                 </button>
                             </div>
                         </div>

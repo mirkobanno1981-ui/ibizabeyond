@@ -14,7 +14,7 @@ export const GlobalSettingsProvider = ({ children }) => {
                 .maybeSingle();
             
             if (error) throw error;
-            return data || { villas_enabled: true, boats_enabled: true };
+            return data || { villas_enabled: true, boats_enabled: true, services_enabled: true };
         },
         staleTime: 1000 * 60 * 30, // 30 mins cached
         retry: 1,

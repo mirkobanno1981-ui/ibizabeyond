@@ -6,7 +6,7 @@ export default function PayoutManager() {
     const { role } = useAuth();
     const [quotes, setQuotes] = useState([]);
     const [stats, setStats] = useState({ totalProfit: 0, pendingOwner: 0, pendingAgency: 0 });
-    const [marginSettings, setMarginSettings] = useState({ iva_percent: 0, invenio_to_admin_margin: 0 });
+    const [marginSettings, setMarginSettings] = useState({ iva_percent: 0, supplier_to_admin_margin: 0 });
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -29,7 +29,7 @@ export default function PayoutManager() {
                     id, created_at, final_price, status, supplier_base_price, admin_markup, agent_markup, agent_id,
                     payout_owner_sent_at, payout_collaborator_sent_at,
                     clients (full_name),
-                    invenio_properties (villa_name)
+                    properties (villa_name)
                 `)
                 .eq('status', 'booked')
                 .order('created_at', { ascending: false });
@@ -136,7 +136,7 @@ export default function PayoutManager() {
             {/* Quick Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="glass-card p-6 border-emerald-500/20 bg-emerald-500/5">
-                    <p className="text-[10px] text-emerald-400 font-black uppercase tracking-[0.2em] mb-2 text-center text-glow">Invenio Net Profit</p>
+                    <p className="text-[10px] text-emerald-400 font-black uppercase tracking-[0.2em] mb-2 text-center text-glow">Net Profit</p>
                     <p className="text-4xl font-black text-emerald-400 text-center drop-shadow-[0_0_15px_rgba(52,211,153,0.3)]">€{stats.totalProfit.toLocaleString()}</p>
                     <p className="text-[8px] text-text-muted mt-2 text-center uppercase tracking-widest font-bold">Total Platform + B2C Commissions</p>
                 </div>
@@ -189,7 +189,7 @@ export default function PayoutManager() {
                                     const platformIva = platformNet * (ivaPct / 100);
                                     const platformGross = Math.round(platformNet + platformIva);
 
-                                    // The residual markup after Invenio's cut and VAT is the agency share
+                                    // The residual markup after platform commission and VAT is the agency share
                                     const agencyGross = Math.max(0, Math.round(markup - platformGross));
                                     
                                     const ownerShare = Math.round(base);
@@ -199,7 +199,7 @@ export default function PayoutManager() {
                                         <tr key={q.id} className="hover:bg-primary/5 transition-all group border-l-2 border-transparent hover:border-primary">
                                             <td className="px-6 py-5">
                                                 <p className="text-text-primary font-black uppercase tracking-tight text-[11px]">{q.clients?.full_name || 'Guest'}</p>
-                                                <p className="text-[9px] text-primary font-bold uppercase tracking-widest mt-0.5">{q.invenio_properties?.villa_name}</p>
+                                                <p className="text-[9px] text-primary font-bold uppercase tracking-widest mt-0.5">{q.properties?.villa_name}</p>
                                                 <p className="text-[8px] text-text-muted mt-1 uppercase tracking-tighter">REF: {q.id.slice(0, 8)}</p>
                                             </td>
                                             <td className="px-6 py-5 text-center font-black text-text-primary text-[14px]">

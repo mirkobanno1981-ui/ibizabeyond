@@ -22,7 +22,7 @@ serve(async (req) => {
     // 1. Fetch quote, property/boat, guests and owner credentials
     const { data: quote, error: quoteErr } = await supabaseClient
       .from('quotes')
-      .select('*, invenio_properties(*, owners(*)), invenio_boats(*, owners(*))')
+      .select('*, properties(*, owners(*)), boats(*, owners(*))')
       .eq('id', quoteId)
       .single()
 
@@ -39,8 +39,8 @@ serve(async (req) => {
     }
 
     // 2. Extract Configuration (handle both Property and Boat)
-    const property = quote.invenio_properties
-    const boat = quote.invenio_boats
+    const property = quote.properties
+    const boat = quote.boats
     const owner = property?.owners || boat?.owners
     
     const sesUser = owner?.ses_user

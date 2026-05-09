@@ -380,7 +380,7 @@ async function handleCommit(opts: {
   }
 
   const { data: inserted, error: insErr } = await supaUser
-    .from('invenio_boats')
+    .from('boats')
     .insert([insertRow])
     .select()
     .single()
@@ -390,7 +390,7 @@ async function handleCommit(opts: {
   }
   const vUuid = inserted.v_uuid
 
-  // Move photos from villa-ingest-tmp -> boat-photos and insert invenio_photos rows.
+  // Move photos from villa-ingest-tmp -> boat-photos and insert property_photos rows.
   let coverUrl: string | null = null
   let photosInserted = 0
   for (let i = 0; i < photos.length; i++) {
@@ -415,7 +415,7 @@ async function handleCommit(opts: {
       const { data: pub } = supaService.storage.from('boat-photos').getPublicUrl(destPath)
       const url = pub?.publicUrl
       const { error: photoInsErr } = await supaService
-        .from('invenio_photos')
+        .from('property_photos')
         .insert({
           boat_uuid: vUuid,
           url,
@@ -452,7 +452,7 @@ async function handleCommit(opts: {
       }))
     if (rows.length) {
       const { error: rErr, count } = await supaService
-        .from('invenio_seasonal_prices')
+        .from('seasonal_prices')
         .insert(rows, { count: 'exact' })
       if (rErr) {
         console.error('seasonal rate insert failed', rErr)
@@ -466,7 +466,7 @@ async function handleCommit(opts: {
   // Update cover thumbnail.
   if (coverUrl) {
     await supaService
-      .from('invenio_boats')
+      .from('boats')
       .update({ thumbnail_url: coverUrl })
       .eq('v_uuid', vUuid)
   }

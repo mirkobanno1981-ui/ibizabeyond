@@ -41,7 +41,7 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
             // Fetch seasonal rates for selected boats
             const boatUuids = selectedBoats.map(b => b.v_uuid);
             const { data: seasonalRates } = await supabase
-                .from('invenio_seasonal_prices')
+                .from('seasonal_prices')
                 .select('*')
                 .in('v_uuid', boatUuids);
 

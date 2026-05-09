@@ -47,8 +47,14 @@ serve(async (req) => {
       const quoteId = md.quote_id || md.quoteId
       const paymentType = md.payment_type || md.type
       const useDirectCharge = md.use_direct_charge === 'true'
-      const invenioTransferAmount = md.invenio_transfer_amount ? parseInt(md.invenio_transfer_amount, 10) : 0
-      const invenioAccount = md.invenio_account
+      // Dual-read for grace period: prefer supplier_*, fall back to legacy invenio_*.
+      // Remove legacy fallback after 2026-08-08 (90 days post-rename).
+      const supplierTransferAmount = md.supplier_transfer_amount
+        ? parseInt(md.supplier_transfer_amount, 10)
+        : md.invenio_transfer_amount
+          ? parseInt(md.invenio_transfer_amount, 10)
+          : 0
+      const supplierAccount = md.supplier_account ?? md.invenio_account
       const ownerTransferAmount = md.owner_transfer_amount ? parseInt(md.owner_transfer_amount, 10) : 0
       const ownerAccount = md.owner_account
       const editorTransferAmount = md.editor_transfer_amount ? parseInt(md.editor_transfer_amount, 10) : 0
@@ -66,8 +72,8 @@ serve(async (req) => {
 
       // ---- Transfer routing ----
       // Direct charge → application_fee lands on platform; transfer remaining shares.
-      // Legacy single-owner path: invenio_* metadata.
-      // New split path: owner_* and/or editor_* metadata (overrides invenio_*).
+      // Legacy single-supplier path: supplier_* metadata (was invenio_*; dual-read above).
+      // New split path: owner_* and/or editor_* metadata (overrides supplier_*).
       const transfers: Array<{ amount: number; account: string; label: string }> = []
 
       if (useDirectCharge) {
@@ -77,8 +83,8 @@ serve(async (req) => {
         if (editorTransferAmount > 0 && editorAccount) {
           transfers.push({ amount: editorTransferAmount, account: editorAccount, label: 'editor' })
         }
-        if (transfers.length === 0 && invenioTransferAmount > 0 && invenioAccount) {
-          transfers.push({ amount: invenioTransferAmount, account: invenioAccount, label: 'invenio_legacy' })
+        if (transfers.length === 0 && supplierTransferAmount > 0 && supplierAccount) {
+          transfers.push({ amount: supplierTransferAmount, account: supplierAccount, label: 'supplier_legacy' })
         }
       }
 

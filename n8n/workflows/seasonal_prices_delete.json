@@ -90,7 +90,7 @@
     {
       "parameters": {
         "operation": "delete",
-        "tableId": "invenio_seasonal_prices",
+        "tableId": "seasonal_prices",
         "filters": {
           "conditions": [
             {

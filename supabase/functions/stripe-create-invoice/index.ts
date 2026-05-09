@@ -40,7 +40,7 @@ serve(async (req) => {
           company_name,
           stripe_account_id
         ),
-        invenio_properties (villa_name)
+        properties (villa_name)
       `)
       .eq('id', quoteId)
       .single();
@@ -94,7 +94,7 @@ serve(async (req) => {
       customer: customer.id,
       amount: totalAmountCents,
       currency: 'eur',
-      description: `Platform Service Fee - Villa: ${quote.invenio_properties.villa_name} (Quote: ${quoteId.slice(0, 8)})`,
+      description: `Platform Service Fee - Villa: ${quote.properties.villa_name} (Quote: ${quoteId.slice(0, 8)})`,
     });
 
     // 6. Create and Finalize Invoice
@@ -103,7 +103,7 @@ serve(async (req) => {
       auto_advance: true, // Automatically finalize and pay if possible, or send
       collection_method: 'send_invoice',
       days_until_due: 7,
-      description: `Invenio Platform Service Fee for booking of ${quote.invenio_properties.villa_name}`,
+      description: `Platform Service Fee for booking of ${quote.properties.villa_name}`,
       metadata: { quoteId: quoteId }
     });
 

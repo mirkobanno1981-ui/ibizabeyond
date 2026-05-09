@@ -86,11 +86,11 @@ export default function BookingCalendar({ bookings }) {
                         isCheckOut ? 'bg-red-500/20 text-red-500 border-l-2 border-red-500' : 
                         'bg-primary/10 text-primary border-l-2 border-primary/50'
                       }`}
-                      title={`${b.invenio_properties?.villa_name} - ${b.clients?.full_name}`}
+                      title={`${b.properties?.villa_name} - ${b.clients?.full_name}`}
                     >
                       {isCheckIn && <span className="material-symbols-outlined notranslate text-[10px]">login</span>}
                       {isCheckOut && <span className="material-symbols-outlined notranslate text-[10px]">logout</span>}
-                      <span className="flex-1 truncate">{b.invenio_properties?.villa_name}</span>
+                      <span className="flex-1 truncate">{b.properties?.villa_name}</span>
                       {isPaid && <span className="size-1.5 rounded-full bg-blue-500"></span>}
                     </div>
                   );

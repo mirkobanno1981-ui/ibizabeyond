@@ -26,6 +26,7 @@ import PrivacyPolicy from './components/PrivacyPolicy';
 import TermsAndConditions from './components/TermsAndConditions';
 import BoatsPage from './components/BoatsPage';
 import BoatView from './components/BoatView';
+import ServicesPage from './components/ServicesPage';
 
 import GuestPublicFormView from './components/GuestFormPublicView';
 import OwnerConfirmationView from './components/OwnerConfirmationView';
@@ -118,6 +119,7 @@ function App() {
                     <Route path="villas/:id" element={<VillaView />} />
                     <Route path="boats" element={<BoatsPage />} />
                     <Route path="boats/:id" element={<BoatView />} />
+                    <Route path="services" element={<ServicesPage />} />
                     <Route path="clients" element={<ClientsPage />} />
                     <Route path="quotes" element={<QuotesPage />} />
                     <Route path="bookings" element={<BookingsPage />} />

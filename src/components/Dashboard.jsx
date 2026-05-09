@@ -135,25 +135,25 @@ export default function Dashboard() {
                 agents (company_name),
                 price_breakdown,
                 clients (full_name),
-                invenio_properties (villa_name, deposit, created_by, owner_id)
+                properties (villa_name, deposit, created_by, owner_id)
             `).order('created_at', { ascending: false }).limit(20);
 
             let depositsQuery = supabase.from('quotes').select(`
                 id, created_at, final_price, status,
                 security_deposit_authorized, security_deposit_intent_id,
                 clients (full_name),
-                invenio_properties (villa_name, deposit)
+                properties (villa_name, deposit)
             `).eq('security_deposit_authorized', true);
             
             let approvalsQuery = supabase.from('quotes').select(`
                 id, created_at, final_price, status,
                 clients (full_name),
-                invenio_properties (villa_name)
+                properties (villa_name)
             `).eq('status', 'waiting_owner');
 
             // Role Filtering
             if (role === 'owner') {
-                const { data: ownedVillas } = await supabase.from('invenio_properties').select('v_uuid').eq('owner_id', user.id);
+                const { data: ownedVillas } = await supabase.from('properties').select('v_uuid').eq('owner_id', user.id);
                 const villaIds = (ownedVillas || []).map(v => v.v_uuid);
                 if (villaIds.length > 0) {
                     quotesQuery.in('v_uuid', villaIds);
@@ -190,7 +190,7 @@ export default function Dashboard() {
 
                     const [villasRes, agentsRes] = await Promise.all([
                         supabase
-                            .from('invenio_properties')
+                            .from('properties')
                             .select('v_uuid, villa_name, areaname, district, thumbnail_url, created_at, created_by, owner_id, source')
                             .in('created_by', editorIds)
                             .order('created_at', { ascending: false })
@@ -221,11 +221,11 @@ export default function Dashboard() {
                 : Promise.resolve({ data: [], editorMap: {}, ownerMap: {} });
 
             const [villasRes, boatsRes, quotesRes, clientsRes, areasRes, recentRes, depositsRes, approvalsRes, editorVillasRes] = await Promise.all([
-                supabase.from('invenio_properties').select('v_uuid', { count: 'exact', head: true }),
-                supabase.from('invenio_boats').select('*', { count: 'exact', head: true }),
+                supabase.from('properties').select('v_uuid', { count: 'exact', head: true }),
+                supabase.from('boats').select('*', { count: 'exact', head: true }),
                 quotesQuery,
                 clientsQuery,
-                supabase.from('invenio_properties').select('areaname').limit(1000),
+                supabase.from('properties').select('areaname').limit(1000),
                 recentQuery,
                 depositsQuery,
                 role === 'owner' ? approvalsQuery : Promise.resolve({ data: [] }),
@@ -243,12 +243,12 @@ export default function Dashboard() {
                 .slice(0, 5)
                 .map(([label, value]) => ({ label, value }));
 
-            // villaOwnerMap: resolve villa.owner_id from quotes.invenio_properties
+            // villaOwnerMap: resolve villa.owner_id from quotes.properties
             // to either a real owner (owners table) or a self-managed editor (agents table).
             const villaOwnerMap = {};
             const recentOwnerIds = Array.from(new Set(
                 (recentRes.data || [])
-                    .map(q => q.invenio_properties?.owner_id)
+                    .map(q => q.properties?.owner_id)
                     .filter(Boolean)
             ));
             if (recentOwnerIds.length > 0) {
@@ -486,7 +486,7 @@ export default function Dashboard() {
                                         <div key={q.id} className="p-4 rounded-xl bg-surface-2/40 border border-border group hover:border-primary/30 transition-all">
                                             <div className="flex items-start justify-between mb-3">
                                                 <div className="flex-1">
-                                                    <p className="text-sm font-bold text-text-primary">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name}</p>
+                                                    <p className="text-sm font-bold text-text-primary">{q.properties?.villa_name || q.boats?.boat_name}</p>
                                                     <p className="text-[10px] text-text-muted uppercase tracking-wider font-medium">Guest: {q.clients?.full_name || 'Guest'} • Ref: {q.id?.slice(0, 8)}</p>
                                                     <div className="flex items-center gap-2 mt-2">
                                                         <span className="text-[10px] bg-background/50 px-2 py-1 rounded border border-border text-text-muted font-bold">€{parseFloat(q.final_price || 0).toLocaleString()}</span>
@@ -546,11 +546,11 @@ export default function Dashboard() {
                                         <div key={q.id} className="p-4 rounded-xl bg-surface-2/40 border border-border group hover:border-amber-500/30 transition-all">
                                             <div className="flex items-start justify-between mb-3">
                                                 <div>
-                                                    <p className="text-sm font-bold text-text-primary">{q.invenio_properties?.villa_name}</p>
+                                                    <p className="text-sm font-bold text-text-primary">{q.properties?.villa_name}</p>
                                                     <p className="text-[10px] text-text-muted uppercase tracking-wider font-medium">{q.clients?.full_name || 'Guest'} • REF: {q.id?.slice(0, 8)}</p>
                                                 </div>
                                                 <div className="text-right">
-                                                    <p className="text-sm font-black text-amber-500">€{parseFloat(q.invenio_properties?.deposit || 0).toLocaleString()}</p>
+                                                    <p className="text-sm font-black text-amber-500">€{parseFloat(q.properties?.deposit || 0).toLocaleString()}</p>
                                                     <p className="text-[9px] text-text-muted font-bold">FROZEN DEPOSIT</p>
                                                 </div>
                                             </div>
@@ -564,7 +564,7 @@ export default function Dashboard() {
                                                 </button>
                                                 <button 
                                                     onClick={() => {
-                                                        const amount = prompt("Enter amount to capture for damages (EUR):", q.invenio_properties?.deposit);
+                                                        const amount = prompt("Enter amount to capture for damages (EUR):", q.properties?.deposit);
                                                         if (amount) handleManageDeposit(q.id, 'capture', parseFloat(amount));
                                                     }}
                                                     className="flex-1 bg-red-500/10 text-red-500 border border-red-500/20 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-red-500/20 transition-all font-bold"
@@ -602,12 +602,12 @@ export default function Dashboard() {
                                         const editorPct = parseFloat(q.editor_markup || 0);
                                         const editorMode = q.editor_markup_mode || 'deduct';
                                         const editorShare = Math.round(base * (editorPct / 100));
-                                        const editorUserId = q.invenio_properties?.created_by;
+                                        const editorUserId = q.properties?.created_by;
                                         const editorInfo = editorUserId ? editorMap[editorUserId] : null;
                                         const editorLabel = editorInfo?.company_name || editorInfo?.email || (editorUserId ? editorUserId.slice(0, 8) : 'Unknown');
 
                                         // Resolve villa.owner_id: real owner vs self-managed editor
-                                        const villaOwnerId = q.invenio_properties?.owner_id;
+                                        const villaOwnerId = q.properties?.owner_id;
                                         const villaOwnerInfo = villaOwnerId ? villaOwnerMap[villaOwnerId] : null;
                                         const isSelfManagedEditor = villaOwnerInfo?.source === 'editor';
                                         const ownerRecipientName = villaOwnerInfo?.name || 'Owner';
@@ -633,7 +633,7 @@ export default function Dashboard() {
                                             <div key={q.id} className="p-4 rounded-xl bg-surface-2/40 border border-border group hover:border-primary/30 transition-all">
                                                 <div className="flex items-start justify-between mb-3">
                                                     <div>
-                                                        <p className="text-sm font-bold text-text-primary">{q.invenio_properties?.villa_name}</p>
+                                                        <p className="text-sm font-bold text-text-primary">{q.properties?.villa_name}</p>
                                                         <p className="text-[10px] text-text-muted uppercase tracking-wider font-medium">Ref: {q.id?.slice(0, 8)} • {q.agents?.company_name || 'Direct B2C'}</p>
                                                     </div>
                                                     <div className="text-right">
@@ -675,7 +675,7 @@ export default function Dashboard() {
 
                                                 <div className="flex items-center justify-between pt-3 border-t border-border/50">
                                                     <div className="flex flex-col">
-                                                        <span className="text-[9px] text-text-muted uppercase font-bold">Invenio Net Profit</span>
+                                                        <span className="text-[9px] text-text-muted uppercase font-bold">Net Profit</span>
                                                         <span className="text-sm font-black text-emerald-500">€{totalProfit.toLocaleString()}</span>
                                                     </div>
                                                     <div className="flex gap-2">

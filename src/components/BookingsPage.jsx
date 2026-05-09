@@ -21,12 +21,12 @@ export default function BookingsPage() {
         setLoading(true);
         let query = supabase
             .from('quotes')
-            .select('*, invenio_properties(villa_name, thumbnail_url, owner_id), clients(full_name, email)')
+            .select('*, properties(villa_name, thumbnail_url, owner_id), clients(full_name, email)')
             .eq('status', 'booked');
 
         if (role === 'owner') {
             const { data: ownedVillas } = await supabase
-                .from('invenio_properties')
+                .from('properties')
                 .select('v_uuid')
                 .eq('owner_id', user.id);
             const villaIds = (ownedVillas || []).map(v => v.v_uuid);
@@ -160,7 +160,7 @@ export default function BookingsPage() {
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-3">
                                                     <div>
-                                                        <p className="font-bold text-text-primary">{b.invenio_properties?.villa_name}</p>
+                                                        <p className="font-bold text-text-primary">{b.properties?.villa_name}</p>
                                                         <p className="text-[11px] text-text-muted font-medium">{b.clients?.full_name}</p>
                                                     </div>
                                                 </div>

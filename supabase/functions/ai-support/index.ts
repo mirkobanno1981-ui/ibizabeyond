@@ -46,8 +46,8 @@ serve(async (req) => {
 
     // General products search
     if (message.toLowerCase().includes("villa") || message.toLowerCase().includes("boat") || message.toLowerCase().includes("search") || message.toLowerCase().includes("find") || message.toLowerCase().includes("property")) {
-      const { data: villas } = await supabase.from('invenio_properties').select('villa_name, bedrooms, sleeps, areaname, tagline').limit(10);
-      const { data: boats } = await supabase.from('invenio_boats').select('boat_name, type, length_ft, daily_price').limit(5);
+      const { data: villas } = await supabase.from('properties').select('villa_name, bedrooms, sleeps, areaname, tagline').limit(10);
+      const { data: boats } = await supabase.from('boats').select('boat_name, type, length_ft, daily_price').limit(5);
       
       if (villas && villas.length > 0) {
         context += "Available Villas: " + villas.map(v => `${v.villa_name} (${v.bedrooms}BR, sleeps ${v.sleeps}) in ${v.areaname}`).join(", ") + "\n";
@@ -64,7 +64,7 @@ serve(async (req) => {
         .from('quotes')
         .select(`
           id, status, check_in, check_out, total_price,
-          invenio_properties(villa_name),
+          properties(villa_name),
           clients(full_name, email),
           agents(full_name)
         `)
@@ -73,7 +73,7 @@ serve(async (req) => {
 
       if (quotes && quotes.length > 0) {
         context += "\nRelevant Quotes (filtered by permissions): " + quotes.map(q => 
-          `Quote ${q.id} (Status: ${q.status}): Client ${q.clients?.full_name} for Property ${q.invenio_properties?.villa_name} from ${q.check_in} to ${q.check_out}. Agent: ${q.agents?.full_name}. Total: €${q.total_price || 0}`
+          `Quote ${q.id} (Status: ${q.status}): Client ${q.clients?.full_name} for Property ${q.properties?.villa_name} from ${q.check_in} to ${q.check_out}. Agent: ${q.agents?.full_name}. Total: €${q.total_price || 0}`
         ).join("; \n") + "\n";
       } else {
         context += "\nNo relevant quotes found or you do not have permission to view them.\n";

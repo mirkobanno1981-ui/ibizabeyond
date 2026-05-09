@@ -50,7 +50,7 @@ export default function GuestFormPublicView() {
         try {
             const { data, error: err } = await supabase
                 .from('quotes')
-                .select('*, invenio_properties(*)')
+                .select('*, properties(*)')
                 .eq('guest_form_token', token)
                 .single();
 
@@ -58,7 +58,7 @@ export default function GuestFormPublicView() {
             if (data.status !== 'booked') throw new Error('This form is only available for confirmed bookings.');
 
             setQuote(data);
-            setVilla(data.invenio_properties);
+            setVilla(data.properties);
             
             // Check if already filled
             const { data: existingGuests } = await supabase

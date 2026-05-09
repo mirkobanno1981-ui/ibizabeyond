@@ -28,8 +28,8 @@ export default function OwnerConfirmationView() {
                 .from('quotes')
                 .select(`
                     *,
-                    invenio_properties(*),
-                    invenio_boats(*),
+                    properties(*),
+                    boats(*),
                     clients(full_name)
                 `)
                 .eq('id', id)
@@ -39,8 +39,8 @@ export default function OwnerConfirmationView() {
             if (!quoteData) throw new Error('Request not found');
 
             setQuote(quoteData);
-            setVilla(quoteData.invenio_properties);
-            setBoat(quoteData.invenio_boats);
+            setVilla(quoteData.properties);
+            setBoat(quoteData.boats);
 
             if (quoteData.status === 'sent' || quoteData.status === 'booked' || quoteData.status === 'check_in_ready') {
                 setStatus('confirmed');
@@ -50,7 +50,7 @@ export default function OwnerConfirmationView() {
 
             // Fetch Photos
             const { data: photoData } = await supabase
-                .from('invenio_photos')
+                .from('property_photos')
                 .select('url, sort_order')
                 .or(`v_uuid.eq.${quoteData.v_uuid || '00000000-0000-0000-0000-000000000000'},boat_uuid.eq.${quoteData.boat_uuid || '00000000-0000-0000-0000-000000000000'}`)
                 .order('sort_order', { ascending: true })

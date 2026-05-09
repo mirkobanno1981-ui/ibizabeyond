@@ -35,7 +35,7 @@ serve(async (req) => {
       .from('quotes')
       .select(`
         *,
-        invenio_properties (
+        properties (
           owner_id,
           owners (stripe_account_id)
         ),
@@ -50,13 +50,13 @@ serve(async (req) => {
     let description = '';
 
     if (targetType === 'owner') {
-      destinationAccount = quote.invenio_properties?.owners?.stripe_account_id || null;
+      destinationAccount = quote.properties?.owners?.stripe_account_id || null;
       // Fallback: editor (agents row) acting as self-managed owner
-      if (!destinationAccount && quote.invenio_properties?.owner_id) {
+      if (!destinationAccount && quote.properties?.owner_id) {
         const { data: agt } = await supabase
           .from('agents')
           .select('stripe_account_id')
-          .eq('id', quote.invenio_properties.owner_id)
+          .eq('id', quote.properties.owner_id)
           .single();
         destinationAccount = agt?.stripe_account_id || null;
       }

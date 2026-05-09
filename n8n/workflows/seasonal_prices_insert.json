@@ -89,7 +89,7 @@
     },
     {
       "parameters": {
-        "tableId": "invenio_seasonal_prices",
+        "tableId": "seasonal_prices",
         "dataToSend": "autoMapInputData"
       },
       "id": "e8475f50-e6a4-40be-8251-1e7c477f1478",

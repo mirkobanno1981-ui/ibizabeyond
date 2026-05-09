@@ -26,8 +26,8 @@ serve(async (req) => {
         status,
         final_price,
         agent_id,
-        invenio_properties (villa_name, owner_id),
-        invenio_boats (boat_name, owner_id),
+        properties (villa_name, owner_id),
+        boats (boat_name, owner_id),
         clients (full_name)
       `)
       .eq('id', quoteId)
@@ -35,8 +35,8 @@ serve(async (req) => {
 
     if (quoteError || !quote) throw quoteError || new Error('Quote not found');
 
-    const ownerId = quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id;
-    const assetName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name;
+    const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
+    const assetName = quote.properties?.villa_name || quote.boats?.boat_name;
     const clientName = quote.clients?.full_name;
 
     // Logic for notifications

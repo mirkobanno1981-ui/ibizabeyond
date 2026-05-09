@@ -33,8 +33,8 @@ serve(async (req) => {
             .select(`
                 *,
                 clients ( full_name, email, passport_id, address ),
-                invenio_properties ( title, villa_name ),
-                invenio_boats ( boat_name )
+                properties ( title, villa_name ),
+                boats ( boat_name )
             `)
             .eq('id', quoteId)
             .single();
@@ -51,7 +51,7 @@ serve(async (req) => {
 
         // Template Selection Logic
         let targetTemplateId = documensoTemplateId;
-        if (quote.invenio_boat_id && agentProfile?.boat_contract_template) {
+        if (quote.boat_uuid && agentProfile?.boat_contract_template) {
             targetTemplateId = agentProfile.boat_contract_template; 
         } else if (agentProfile?.contract_template) {
             targetTemplateId = agentProfile.contract_template; 
@@ -83,7 +83,7 @@ serve(async (req) => {
 
         if (!signerEmail) throw new Error("Signer email is missing. Check client or agent profile.");
 
-        const propertyName = quote.invenio_properties?.title || quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || "Unknown Property";
+        const propertyName = quote.properties?.title || quote.properties?.villa_name || quote.boats?.boat_name || "Unknown Property";
         const totalCost = quote.final_price || 0;
         
         // Prepare Documenso API Payload

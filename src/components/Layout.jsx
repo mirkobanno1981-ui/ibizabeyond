@@ -25,7 +25,7 @@ const NavItem = ({ to, icon, label, end = false }) => (
 export default function Layout() {
     const { user, role, agentData, signOut } = useAuth();
     const { theme, toggleTheme } = useTheme();
-    const { villas_enabled, boats_enabled } = useGlobalSettings();
+    const { villas_enabled, boats_enabled, services_enabled } = useGlobalSettings();
     const navigate = useNavigate();
     const [mobileOpen, setMobileOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -99,7 +99,7 @@ export default function Layout() {
         try {
             const [villasRes, clientsRes] = await Promise.all([
                 supabase
-                    .from('invenio_properties')
+                    .from('properties')
                     .select('v_uuid, villa_name, areaname')
                     .or(`villa_name.ilike.%${query}%,areaname.ilike.%${query}%`)
                     .limit(villas_enabled ? 5 : 0),
@@ -179,6 +179,7 @@ export default function Layout() {
                 <NavItem to="/" icon="dashboard" label="Dashboard" end />
                 {villas_enabled && <NavItem to="/villas" icon="villa" label="Villa Inventory" />}
                 {boats_enabled && <NavItem to="/boats" icon="directions_boat" label="Boat Charter" />}
+                {services_enabled && <NavItem to="/services" icon="concierge" label="Services" />}
 
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-semibold px-3 pt-4 pb-1">Business</p>
                 <NavItem to="/clients" icon="group" label="Clients" />

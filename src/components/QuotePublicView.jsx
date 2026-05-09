@@ -281,8 +281,8 @@ export default function QuotePublicView() {
                 .from('quotes')
                 .select(`
                     *,
-                    invenio_properties(*),
-                    invenio_boats(*),
+                    properties(*),
+                    boats(*),
                     agents!quotes_agent_id_fkey(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details),
                     clients(full_name, email, phone_number, address_street, id_number, dob)
                 `);
@@ -311,17 +311,17 @@ export default function QuotePublicView() {
             const currentQuote = allQuotes[activeQuoteIndex] || allQuotes[0];
             
             setQuote(currentQuote);
-            setVilla(currentQuote.invenio_properties);
-            setBoat(currentQuote.invenio_boats);
+            setVilla(currentQuote.properties);
+            setBoat(currentQuote.boats);
             setAgent(currentQuote.agents);
 
             // Fetch Photos for the active quote (Gallery & Detail use different logic)
             // Use IDs from joined objects as they are more consistent
-            const targetVUuid = currentQuote.invenio_properties?.v_uuid || currentQuote.v_uuid;
-            const targetBoatUuid = currentQuote.invenio_boats?.v_uuid || currentQuote.boat_uuid;
+            const targetVUuid = currentQuote.properties?.v_uuid || currentQuote.v_uuid;
+            const targetBoatUuid = currentQuote.boats?.v_uuid || currentQuote.boat_uuid;
 
             const { data: photoData } = await supabase
-                .from('invenio_photos')
+                .from('property_photos')
                 .select('url, thumbnail_url, sort_order')
                 .or(`v_uuid.eq.${targetVUuid || '00000000-0000-0000-0000-000000000000'},boat_uuid.eq.${targetBoatUuid || '00000000-0000-0000-0000-000000000000'}`)
                 .order('sort_order', { ascending: true });
@@ -329,8 +329,8 @@ export default function QuotePublicView() {
             let currentPhotos = photoData || [];
 
             // Add photos from comma-separated field if it's a boat
-            if (currentQuote.invenio_boats?.photo_urls) {
-                const manualPhotos = currentQuote.invenio_boats.photo_urls
+            if (currentQuote.boats?.photo_urls) {
+                const manualPhotos = currentQuote.boats.photo_urls
                     .split(',')
                     .map(url => url.trim())
                     .filter(url => url.length > 5)
@@ -342,19 +342,19 @@ export default function QuotePublicView() {
                 currentPhotos = [...currentPhotos, ...manualPhotos];
             }
 
-            // Fallback: Use images array or thumbnail_url from invenio_properties if no photos found in invenio_photos table
+            // Fallback: Use images array or thumbnail_url from properties if no photos found in property_photos table
             if (currentPhotos.length === 0) {
-                if (currentQuote.invenio_properties?.images?.length > 0) {
-                    const villaImages = currentQuote.invenio_properties.images.map((url, index) => ({
+                if (currentQuote.properties?.images?.length > 0) {
+                    const villaImages = currentQuote.properties.images.map((url, index) => ({
                         url,
                         thumbnail_url: url,
                         sort_order: 2000 + index
                     }));
                     currentPhotos = villaImages;
-                } else if (currentQuote.invenio_properties?.thumbnail_url) {
+                } else if (currentQuote.properties?.thumbnail_url) {
                     currentPhotos = [{
-                        url: currentQuote.invenio_properties.thumbnail_url,
-                        thumbnail_url: currentQuote.invenio_properties.thumbnail_url,
+                        url: currentQuote.properties.thumbnail_url,
+                        thumbnail_url: currentQuote.properties.thumbnail_url,
                         sort_order: 3000
                     }];
                 }
@@ -373,11 +373,11 @@ export default function QuotePublicView() {
 
             // Fetch Primary Photos for all multi-quotes (for the Gallery)
             if (quotesData.length > 1) {
-                const vUuids = quotesData.map(q => q.invenio_properties?.v_uuid || q.v_uuid).filter(Boolean);
-                const boatUuids = quotesData.map(q => q.invenio_boats?.v_uuid || q.boat_uuid).filter(Boolean);
+                const vUuids = quotesData.map(q => q.properties?.v_uuid || q.v_uuid).filter(Boolean);
+                const boatUuids = quotesData.map(q => q.boats?.v_uuid || q.boat_uuid).filter(Boolean);
                 
                 const { data: allPrimaryPhotos } = await supabase
-                    .from('invenio_photos')
+                    .from('property_photos')
                     .select('url, v_uuid, boat_uuid')
                     .or(`v_uuid.in.(${vUuids.join(',')}),boat_uuid.in.(${boatUuids.join(',')})`)
                     .order('sort_order', { ascending: true });
@@ -391,13 +391,13 @@ export default function QuotePublicView() {
                 // Attach photos to multiQuotes for gallery rendering
                 const updatedMulti = quotesData.map(q => ({
                     ...q,
-                    primary_photo: galleryPhotosMap[q.v_uuid || q.boat_uuid] || (q.invenio_boats?.photo_urls?.split(',')[0] || FALLBACK_IMG)
+                    primary_photo: galleryPhotosMap[q.v_uuid || q.boat_uuid] || (q.boats?.photo_urls?.split(',')[0] || FALLBACK_IMG)
                 }));
                 setMultiQuotes(updatedMulti);
             }
 
             // Fetch Owner Info
-            const ownerId = currentQuote.invenio_properties?.owner_id || currentQuote.invenio_boats?.owner_id;
+            const ownerId = currentQuote.properties?.owner_id || currentQuote.boats?.owner_id;
             if (ownerId) {
                 const { data: ownerData } = await supabase
                     .from('owners')
@@ -419,7 +419,7 @@ export default function QuotePublicView() {
         if (!quote) return 'Loading agreement...';
 
         const fallback = contractLang === 'es' ? DEFAULT_B2C_CONTRACT_ES : DEFAULT_B2C_CONTRACT_EN;
-        let content = quote.invenio_boats
+        let content = quote.boats
             ? (agent?.boat_contract_template || agent?.contract_template || fallback)
             : (agent?.contract_template || fallback);
 
@@ -446,12 +446,12 @@ export default function QuotePublicView() {
             '{{agency_email}}': agent?.email || '—',
             '{{agency_phone}}': agent?.phone_number || '—',
 
-            '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
-            '{{villa_license}}': quote.invenio_properties?.license || '—',
-            '{{villa_address}}': quote.invenio_properties?.location || 'Ibiza',
-            '{{max_guests}}': quote.invenio_properties?.sleeps || quote.invenio_boats?.capacity_day || '—',
+            '{{villa_name}}': quote.properties?.villa_name || quote.boats?.boat_name || 'Our Listing',
+            '{{villa_license}}': quote.properties?.license || '—',
+            '{{villa_address}}': quote.properties?.location || 'Ibiza',
+            '{{max_guests}}': quote.properties?.sleeps || quote.boats?.capacity_day || '—',
             
-            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
+            '{{boat_name}}': quote.boats?.boat_name || '',
             '{{platform_name}}': 'Ibiza Beyond',
             '{{today}}': new Date().toLocaleDateString('en-GB'),
             
@@ -467,13 +467,13 @@ export default function QuotePublicView() {
             // Explicit mappings for Italian labels in [BRACKETS]
             '[NOME CLIENTE]': quote.clients?.full_name || 'Valued Client',
             '[NOME AGENTE/SOCIETÀ]': agent?.company_name || 'Ibiza Beyond',
-            '[NOME VILLA]': quote.invenio_properties?.villa_name || 'Villa',
+            '[NOME VILLA]': quote.properties?.villa_name || 'Villa',
             '[DATA CHECK-IN]': quote.check_in ? new Date(quote.check_in).toLocaleDateString('en-GB') : '—',
             '[DATA CHECK-OUT]': quote.check_out ? new Date(quote.check_out).toLocaleDateString('en-GB') : '—',
             '[IMPORTO TOTALE]': parseFloat(quote.final_price || 0).toLocaleString('en-IE', { style: 'currency', currency: 'EUR' }),
             '[IMPORTO DEPOSITO]': parseFloat(villa?.deposit || boat?.security_deposit || 0).toLocaleString('en-IE', { style: 'currency', currency: 'EUR' }),
-            '[NUMERO LICENZA ETV]': quote.invenio_properties?.license || '—',
-            '[INDIRIZZO VILLA]': quote.invenio_properties?.location || 'Ibiza',
+            '[NUMERO LICENZA ETV]': quote.properties?.license || '—',
+            '[INDIRIZZO VILLA]': quote.properties?.location || 'Ibiza',
             '[NOME PIATTAFORMA]': 'Ibiza Beyond'
         };
 
@@ -876,7 +876,7 @@ export default function QuotePublicView() {
                                                     </div>
                                                     <div className="flex-1 min-w-0">
                                                         <h4 className="text-[11px] font-black text-text-primary truncate uppercase tracking-tight group-hover/rank:text-primary transition-colors">
-                                                            {q.invenio_properties?.villa_name || q.invenio_boats?.boat_name}
+                                                            {q.properties?.villa_name || q.boats?.boat_name}
                                                         </h4>
                                                         <div className="flex items-center gap-2 mt-0.5">
                                                             <span className="text-[9px] font-black text-primary uppercase tracking-widest">{vData.count} {vData.count === 1 ? 'Vote' : 'Votes'}</span>
@@ -945,12 +945,12 @@ export default function QuotePublicView() {
                                             <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between">
                                                 <div>
                                                     <div className="flex items-center gap-2 text-primary font-bold mb-1">
-                                                        <span className="material-symbols-outlined notranslate text-sm">{q.invenio_boats ? 'directions_boat' : 'location_on'}</span>
+                                                        <span className="material-symbols-outlined notranslate text-sm">{q.boats ? 'directions_boat' : 'location_on'}</span>
                                                         <span className="text-[10px] uppercase tracking-widest">
-                                                            {q.invenio_properties ? (q.invenio_properties.areaname || q.invenio_properties.district) : (q.invenio_boats?.location_base_port || 'Ibiza')}
+                                                            {q.properties ? (q.properties.areaname || q.properties.district) : (q.boats?.location_base_port || 'Ibiza')}
                                                         </span>
                                                     </div>
-                                                    <h3 className="text-2xl font-black text-white tracking-tight">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name}</h3>
+                                                    <h3 className="text-2xl font-black text-white tracking-tight">{q.properties?.villa_name || q.boats?.boat_name}</h3>
                                                 </div>
                                                 <div className="bg-primary/90 backdrop-blur-md px-4 py-2 rounded-xl text-background-dark font-black text-sm shadow-xl">
                                                     €{parseFloat(q.final_price || 0).toLocaleString()}
@@ -959,34 +959,34 @@ export default function QuotePublicView() {
                                         </div>
                                         <div className="p-8 flex flex-col flex-1 justify-between gap-6">
                                             <div className="grid grid-cols-3 gap-4">
-                                                {q.invenio_properties ? (
+                                                {q.properties ? (
                                                     <>
                                                         <div className="flex flex-col items-center gap-1">
                                                             <span className="material-symbols-outlined notranslate text-primary/60">bed</span>
-                                                            <span className="text-xs font-bold text-text-primary">{q.invenio_properties.bedrooms} Rooms</span>
+                                                            <span className="text-xs font-bold text-text-primary">{q.properties.bedrooms} Rooms</span>
                                                         </div>
                                                         <div className="flex flex-col items-center gap-1">
                                                             <span className="material-symbols-outlined notranslate text-primary/60">groups</span>
-                                                            <span className="text-xs font-bold text-text-primary">{q.invenio_properties.sleeps} Sleeps</span>
+                                                            <span className="text-xs font-bold text-text-primary">{q.properties.sleeps} Sleeps</span>
                                                         </div>
                                                         <div className="flex flex-col items-center gap-1">
                                                             <span className="material-symbols-outlined notranslate text-primary/60">shower</span>
-                                                            <span className="text-xs font-bold text-text-primary">{q.invenio_properties.bathrooms} Baths</span>
+                                                            <span className="text-xs font-bold text-text-primary">{q.properties.bathrooms} Baths</span>
                                                         </div>
                                                     </>
                                                 ) : (
                                                     <>
                                                         <div className="flex flex-col items-center gap-1">
                                                             <span className="material-symbols-outlined notranslate text-primary/60">straighten</span>
-                                                            <span className="text-xs font-bold text-text-primary">{q.invenio_boats?.length_m}m</span>
+                                                            <span className="text-xs font-bold text-text-primary">{q.boats?.length_m}m</span>
                                                         </div>
                                                         <div className="flex flex-col items-center gap-1">
                                                             <span className="material-symbols-outlined notranslate text-primary/60">groups</span>
-                                                            <span className="text-xs font-bold text-text-primary">{q.invenio_boats?.capacity_day} Day</span>
+                                                            <span className="text-xs font-bold text-text-primary">{q.boats?.capacity_day} Day</span>
                                                         </div>
                                                         <div className="flex flex-col items-center gap-1">
                                                             <span className="material-symbols-outlined notranslate text-primary/60">bed</span>
-                                                            <span className="text-xs font-bold text-text-primary">{q.invenio_boats?.cabins || '—'} Cabins</span>
+                                                            <span className="text-xs font-bold text-text-primary">{q.boats?.cabins || '—'} Cabins</span>
                                                         </div>
                                                     </>
                                                 )}

@@ -11,7 +11,7 @@ export default function FeatureCombobox({ selected, onChange }) {
         let mounted = true;
         (async () => {
             const { data, error } = await supabase
-                .from('invenio_properties')
+                .from('properties')
                 .select('features')
                 .not('features', 'is', null);
             if (error || !mounted) return;

@@ -42,7 +42,7 @@ serve(async (req) => {
     // Per-villa feed: booked quotes for this villa + villa_blocked_dates rows
     const { data: bookings } = await supabase
       .from('quotes')
-      .select('id, check_in, check_out, status, clients(full_name), invenio_properties(villa_name)')
+      .select('id, check_in, check_out, status, clients(full_name), properties(villa_name)')
       .eq('v_uuid', villaId)
       .eq('status', 'booked')
 
@@ -53,7 +53,7 @@ serve(async (req) => {
       ical.push(`DTSTART;VALUE=DATE:${fmtDate(b.check_in)}`)
       ical.push(`DTEND;VALUE=DATE:${fmtDate(b.check_out)}`)
       ical.push(`SUMMARY:BOOKED - ${b.clients?.full_name || 'Guest'}`)
-      ical.push(`DESCRIPTION:Villa: ${b.invenio_properties?.villa_name || ''}\\nGuest: ${b.clients?.full_name || ''}`)
+      ical.push(`DESCRIPTION:Villa: ${b.properties?.villa_name || ''}\\nGuest: ${b.clients?.full_name || ''}`)
       ical.push('END:VEVENT')
     })
 
@@ -75,7 +75,7 @@ serve(async (req) => {
     // Per-agent feed: existing behavior
     const { data: bookings, error } = await supabase
       .from('quotes')
-      .select('*, invenio_properties(villa_name), clients(full_name)')
+      .select('*, properties(villa_name), clients(full_name)')
       .eq('agent_id', agentId)
       .eq('status', 'booked')
 
@@ -89,8 +89,8 @@ serve(async (req) => {
       ical.push(`DTSTAMP:${stamp}`)
       ical.push(`DTSTART;VALUE=DATE:${fmtDate(b.check_in)}`)
       ical.push(`DTEND;VALUE=DATE:${fmtDate(b.check_out)}`)
-      ical.push(`SUMMARY:BOOKING: ${b.invenio_properties?.villa_name} - ${b.clients?.full_name}`)
-      ical.push(`DESCRIPTION:Guest: ${b.clients?.full_name}\\nVilla: ${b.invenio_properties?.villa_name}\\nStatus: ${b.status}\\nTotal: €${b.final_price}`)
+      ical.push(`SUMMARY:BOOKING: ${b.properties?.villa_name} - ${b.clients?.full_name}`)
+      ical.push(`DESCRIPTION:Guest: ${b.clients?.full_name}\\nVilla: ${b.properties?.villa_name}\\nStatus: ${b.status}\\nTotal: €${b.final_price}`)
       ical.push('END:VEVENT')
     })
   }

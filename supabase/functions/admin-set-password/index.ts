@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
       .single()
 
     if (roleData?.role !== 'admin' && roleData?.role !== 'super_admin') {
-      // Check hardcoded bypass for Invenio
+      // Hardcoded super-user bypass
       if (caller.id !== '72241c14-09ed-4227-a01e-9bdeefdd0c8d') {
         throw new Error('Unauthorized: Insufficient permissions')
       }

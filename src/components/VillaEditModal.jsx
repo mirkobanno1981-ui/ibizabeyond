@@ -88,7 +88,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     // Photos state: loaded rows from DB + pending local files added in this session
     const [photos, setPhotos] = useState([]);
     const [pendingFiles, setPendingFiles] = useState([]); // { id, file, previewUrl }
-    const [deletedPhotoIds, setDeletedPhotoIds] = useState([]); // invenio_photos.id list
+    const [deletedPhotoIds, setDeletedPhotoIds] = useState([]); // property_photos.id list
     const [photoError, setPhotoError] = useState(null);
     const [uploadProgress, setUploadProgress] = useState(null); // { done, total }
 
@@ -177,7 +177,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
 
     const fetchPhotos = async () => {
         const { data, error } = await supabase
-            .from('invenio_photos')
+            .from('property_photos')
             .select('id, url, thumbnail_url, sort_order, storage_path, caption')
             .eq('v_uuid', villa.v_uuid)
             .order('sort_order', { ascending: true });
@@ -186,7 +186,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
 
     const fetchVideos = async () => {
         const { data, error } = await supabase
-            .from('invenio_videos')
+            .from('property_videos')
             .select('id, url, storage_path, caption, sort_order')
             .eq('v_uuid', villa.v_uuid)
             .order('sort_order', { ascending: true });
@@ -195,7 +195,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
 
     const fetchSeasonalRates = async () => {
         const { data, error } = await supabase
-            .from('invenio_seasonal_prices')
+            .from('seasonal_prices')
             .select('*')
             .eq('v_uuid', villa.v_uuid)
             .order('start_date', { ascending: true });
@@ -336,7 +336,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             return;
         }
         const { data, error } = await supabase
-            .from('invenio_seasonal_prices')
+            .from('seasonal_prices')
             .insert([{ v_uuid: villa.v_uuid, ...payload }])
             .select()
             .single();
@@ -350,7 +350,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             setPendingRates(prev => prev.filter(r => r.id !== rate.id));
             return;
         }
-        const { error } = await supabase.from('invenio_seasonal_prices').delete().eq('id', rate.id);
+        const { error } = await supabase.from('seasonal_prices').delete().eq('id', rate.id);
         if (error) { alert('Error: ' + error.message); return; }
         setSeasonalRates(prev => prev.filter(r => r.id !== rate.id));
     };
@@ -430,7 +430,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             let savedVilla;
             if (isNew) {
                 const { data, error: insErr } = await supabase
-                    .from('invenio_properties')
+                    .from('properties')
                     .insert([villaData])
                     .select()
                     .single();
@@ -447,7 +447,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         allowed_checkin_days: r.allowed_checkin_days,
                     }));
                     const { data: inserted, error: ratesErr } = await supabase
-                        .from('invenio_seasonal_prices')
+                        .from('seasonal_prices')
                         .insert(rows)
                         .select();
                     if (ratesErr) console.error('Failed to flush seasonal rates:', ratesErr);
@@ -458,7 +458,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 }
             } else {
                 const { data, error: updErr } = await supabase
-                    .from('invenio_properties')
+                    .from('properties')
                     .update(villaData)
                     .eq('v_uuid', villa.v_uuid)
                     .select()
@@ -472,7 +472,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             // 1) Apply deleted photos: remove storage objects + rows
             if (deletedPhotoIds.length) {
                 const { data: toDelete } = await supabase
-                    .from('invenio_photos')
+                    .from('property_photos')
                     .select('id, storage_path')
                     .in('id', deletedPhotoIds);
                 if (toDelete && toDelete.length) {
@@ -481,7 +481,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         await supabase.storage.from('villa-photos').remove(paths);
                     }
                 }
-                await supabase.from('invenio_photos').delete().in('id', deletedPhotoIds);
+                await supabase.from('property_photos').delete().in('id', deletedPhotoIds);
             }
 
             // 2) Upload pending files, insert rows
@@ -501,7 +501,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                     storage_path,
                 };
                 const { data: inserted, error: photoInsErr } = await supabase
-                    .from('invenio_photos')
+                    .from('property_photos')
                     .insert([row])
                     .select()
                     .single();
@@ -516,7 +516,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             // 3) Persist reordering for existing photos (sort_order may have changed via setAsCover / movePhoto)
             for (const p of photos) {
                 await supabase
-                    .from('invenio_photos')
+                    .from('property_photos')
                     .update({ sort_order: p.sort_order })
                     .eq('id', p.id);
             }
@@ -525,7 +525,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             const finalPhotos = [...photos, ...insertedPhotos].sort((a, b) => a.sort_order - b.sort_order);
             if (finalPhotos.length && finalPhotos[0].url !== savedVilla.thumbnail_url) {
                 const { data: updated } = await supabase
-                    .from('invenio_properties')
+                    .from('properties')
                     .update({ thumbnail_url: finalPhotos[0].url })
                     .eq('v_uuid', vUuid)
                     .select()
@@ -536,7 +536,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             // 5) Apply deleted videos: storage + rows
             if (deletedVideoIds.length) {
                 const { data: toDelete } = await supabase
-                    .from('invenio_videos')
+                    .from('property_videos')
                     .select('id, storage_path')
                     .in('id', deletedVideoIds);
                 if (toDelete && toDelete.length) {
@@ -545,7 +545,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         await supabase.storage.from('villa-videos').remove(paths);
                     }
                 }
-                await supabase.from('invenio_videos').delete().in('id', deletedVideoIds);
+                await supabase.from('property_videos').delete().in('id', deletedVideoIds);
             }
 
             // 6) Upload pending videos, insert rows
@@ -564,7 +564,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                     storage_path,
                 };
                 const { data: inserted, error: vidInsErr } = await supabase
-                    .from('invenio_videos')
+                    .from('property_videos')
                     .insert([row])
                     .select()
                     .single();
@@ -579,7 +579,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             // 7) Persist video reordering
             for (const v of videos) {
                 await supabase
-                    .from('invenio_videos')
+                    .from('property_videos')
                     .update({ sort_order: v.sort_order })
                     .eq('id', v.id);
             }

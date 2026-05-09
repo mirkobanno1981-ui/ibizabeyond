@@ -53,7 +53,7 @@ export default function BoatView() {
     const [clientSearch, setClientSearch] = useState('');
     const [savingQuote, setSavingQuote] = useState(false);
     const [agentDetails, setAgentDetails] = useState(null);
-    const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 15, ivaPercent: 21 });
+    const [globalMargins, setGlobalMargins] = useState({ supplierToAdmin: 15, ivaPercent: 21 });
     const [platformMargin, setPlatformMargin] = useState(15);
     const [agentMargin, setAgentMargin] = useState(0);
     const [useStripeFee, setUseStripeFee] = useState(false);
@@ -257,7 +257,7 @@ export default function BoatView() {
         try {
             // 1. Fetch Boat Info
             const { data: boatData, error: boatErr } = await supabase
-                .from('invenio_boats')
+                .from('boats')
                 .select('*')
                 .eq('v_uuid', id)
                 .single();
@@ -266,12 +266,12 @@ export default function BoatView() {
 
             // 2. Fetch All Photos
             const { data: photoData } = await supabase
-                .from('invenio_photos')
+                .from('property_photos')
                 .select('url, thumbnail_url, sort_order')
                 .eq('boat_uuid', id)
                 .order('sort_order', { ascending: true });
             
-            // Allow comma separated photo_urls if invenio_photos is empty
+            // Allow comma separated photo_urls if property_photos is empty
             let finalPhotos = photoData || [];
             if (finalPhotos.length === 0 && boatData.photo_urls) {
                 const urls = boatData.photo_urls.split(',').map(u => u.trim()).filter(u => u.length > 5);
@@ -282,7 +282,7 @@ export default function BoatView() {
 
             // 3. Fetch Seasonal Rates
             const { data: rateData } = await supabase
-                .from('invenio_seasonal_prices')
+                .from('seasonal_prices')
                 .select('*')
                 .eq('v_uuid', id)
                 .order('start_date', { ascending: true });
@@ -318,14 +318,14 @@ export default function BoatView() {
                 .single();
             if (marginData) {
                 setGlobalMargins({
-                    invenioToAdmin: marginData.invenio_to_admin_margin || 15,
+                    supplierToAdmin: marginData.supplier_to_admin_margin || 15,
                     ivaPercent: marginData.iva_percent || 21 // Default boats VAT
                 });
 
                 // Initialize creation margins
                 const activeAdminMargin = (role !== 'admin' && agentProfileData?.admin_margin > 0) 
                     ? agentProfileData.admin_margin 
-                    : (marginData.invenio_to_admin_margin || 15);
+                    : (marginData.supplier_to_admin_margin || 15);
                 setPlatformMargin(activeAdminMargin);
                 setAgentMargin(0);
             }
@@ -471,7 +471,7 @@ export default function BoatView() {
             const { total: finalPrice, items: breakdown, base: supplierBase } = getQuoteBreakdown();
             const activeAdminMargin = (agentDetails?.admin_margin > 0) 
                 ? agentDetails.admin_margin 
-                : globalMargins.invenioToAdmin;
+                : globalMargins.supplierToAdmin;
 
             const { data, error: quoteErr } = await supabase.from('quotes').insert({
                 boat_uuid: boat.v_uuid,
@@ -738,7 +738,7 @@ export default function BoatView() {
                             <div className="flex items-baseline gap-2 mb-6">
                                 <span className="text-4xl font-extrabold text-text-primary">
                                     €{Math.round(
-                                        parseFloat(boat.daily_price || 0) * (1 + ((role !== 'admin' && agentDetails?.admin_margin > 0) ? agentDetails.admin_margin : globalMargins.invenioToAdmin) / 100)
+                                        parseFloat(boat.daily_price || 0) * (1 + ((role !== 'admin' && agentDetails?.admin_margin > 0) ? agentDetails.admin_margin : globalMargins.supplierToAdmin) / 100)
                                     ).toLocaleString()}
                                 </span>
                                 <span className="text-text-muted text-sm">/ day</span>

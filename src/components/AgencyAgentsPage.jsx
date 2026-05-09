@@ -73,8 +73,8 @@ export default function AgencyAgentsPage() {
                 .select(`
                     *,
                     clients (full_name, email),
-                    invenio_properties (villa_name, v_uuid),
-                    invenio_boats (boat_name)
+                    properties (villa_name, v_uuid),
+                    boats (boat_name)
                 `)
                 .in('agent_id', agentIds)
                 .order('created_at', { ascending: false });
@@ -375,9 +375,9 @@ export default function AgencyAgentsPage() {
                                                 <tr key={quote.id} className="hover:bg-white/2 transition-colors">
                                                     <td className="px-6 py-4">
                                                         <p className="text-sm font-black text-text-primary uppercase tracking-tighter">
-                                                            {quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name}
+                                                            {quote.properties?.villa_name || quote.boats?.boat_name}
                                                         </p>
-                                                        <p className="text-[10px] text-text-muted mt-0.5">{quote.invenio_properties?.villa_name ? 'Villa' : 'Boat'}</p>
+                                                        <p className="text-[10px] text-text-muted mt-0.5">{quote.properties?.villa_name ? 'Villa' : 'Boat'}</p>
                                                     </td>
                                                     <td className="px-6 py-4">
                                                         <p className="text-[11px] font-bold text-text-primary">{quote.clients?.full_name}</p>
@@ -435,7 +435,7 @@ export default function AgencyAgentsPage() {
                                                 <tr key={quote.id} className="hover:bg-white/2 transition-colors">
                                                     <td className="px-6 py-4">
                                                         <p className="text-sm font-black text-text-primary uppercase tracking-tighter">
-                                                            {quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name}
+                                                            {quote.properties?.villa_name || quote.boats?.boat_name}
                                                         </p>
                                                     </td>
                                                     <td className="px-6 py-4">
@@ -696,7 +696,7 @@ export default function AgencyAgentsPage() {
                                                     <tr key={q.id} className="hover:bg-white/2 transition-colors">
                                                         <td className="px-6 py-4 text-text-muted font-mono">{new Date(q.created_at).toLocaleDateString()}</td>
                                                         <td className="px-6 py-4">
-                                                            <p className="text-xs font-black text-text-primary uppercase tracking-tight">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name}</p>
+                                                            <p className="text-xs font-black text-text-primary uppercase tracking-tight">{q.properties?.villa_name || q.boats?.boat_name}</p>
                                                         </td>
                                                         <td className="px-6 py-4 text-center">
                                                             <span className={`px-2.5 py-1 rounded-full text-[8px] font-black uppercase tracking-tighter shadow-sm ${

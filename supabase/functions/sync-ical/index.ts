@@ -96,7 +96,7 @@ serve(async (req) => {
   const singleUuid = url.searchParams.get('v_uuid')
 
   let query = supabase
-    .from('invenio_properties')
+    .from('properties')
     .select('v_uuid, ical_url')
     .not('ical_url', 'is', null)
     .neq('ical_url', '')

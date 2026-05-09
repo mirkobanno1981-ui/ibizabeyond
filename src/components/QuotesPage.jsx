@@ -93,7 +93,7 @@ function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
     const upfrontStayPart = isLastMinute ? base : base * 0.5;
     const balanceLater = base - upfrontStayPart;
 
-    const isVilla = !!quote.invenio_properties;
+    const isVilla = !!quote.properties;
     const sellingAgent = quote.agents || null;
     const sellingAgentAccount = sellingAgent?.stripe_account_id || null;
     const isB2C = !quote.agent_id || quote.agent_id === SUPER_ADMIN_AGENT_ID;
@@ -258,8 +258,8 @@ export default function QuotesPage() {
                     group_details,
                     rental_type,
                     clients(full_name, email, phone_number, dob, id_number, address_street),
-                    invenio_properties(*, owners(name, stripe_account_id)),
-                    invenio_boats(*),
+                    properties(*),
+                    boats(*),
                     agents!quotes_agent_id_fkey(company_name, contract_template, boat_contract_template, phone_number, agency_details, stripe_account_id)
                 `)
                 .order('created_at', { ascending: false });
@@ -297,7 +297,7 @@ export default function QuotesPage() {
     // Resolve villa.owner_id -> {name, source: 'owner'|'editor', stripeAccount} so the
     // payment-flow viewer can show self-managed editors (owner_id pointing to an agents row).
     const ownerIdsForLookup = Array.from(new Set(
-        (quotes || []).map(q => q.invenio_properties?.owner_id).filter(Boolean)
+        (quotes || []).map(q => q.properties?.owner_id).filter(Boolean)
     ));
     const { data: villaOwnerMap = {} } = useQuery({
         queryKey: ['villaOwnerMap', ownerIdsForLookup.sort().join(',')],
@@ -381,7 +381,7 @@ export default function QuotesPage() {
         }
 
         const url = `${window.location.origin}/quote/${quote.id}`;
-        const propertyName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'your stay in Ibiza';
+        const propertyName = quote.properties?.villa_name || quote.boats?.boat_name || 'your stay in Ibiza';
         const message = `Hello ${quote.clients?.full_name || 'there'}! This exclusive proposal was prepared specifically for you: ${url}\n\nPlease note this offer is valid for 3 days, as properties can be booked by others at any time.`;
         const whatsappUrl = `https://wa.me/${quote.clients?.phone_number?.replace(/\+/g, '').replace(/\s/g, '') || ''}?text=${encodeURIComponent(message)}`;
         window.open(whatsappUrl, '_blank');
@@ -398,7 +398,7 @@ export default function QuotesPage() {
             return;
         }
 
-        const ownerId = quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id;
+        const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
         if (!ownerId) {
             alert("This property does not have an owner assigned.");
             return;
@@ -416,7 +416,7 @@ export default function QuotesPage() {
         }
 
         const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
-        const villaName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name;
+        const villaName = quote.properties?.villa_name || quote.boats?.boat_name;
         const msg = `Hello ${ownerData.name}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. Please confirm availability here: ${confirmUrl}`;
         
         const encodedMsg = encodeURIComponent(msg);
@@ -468,15 +468,15 @@ export default function QuotesPage() {
 
     const generatePDF = async (quote) => {
         const { data: propertyPhotos } = await supabase
-            .from('invenio_photos')
+            .from('property_photos')
             .select('url')
-            .or(`v_uuid.eq.${quote.invenio_properties?.v_uuid},boat_uuid.eq.${quote.invenio_boats?.v_uuid}`)
+            .or(`v_uuid.eq.${quote.properties?.v_uuid},boat_uuid.eq.${quote.boats?.v_uuid}`)
             .order('sort_order', { ascending: true })
             .limit(4);
 
         const doc = new jsPDF('p', 'mm', 'a4');
-        const villa = quote.invenio_properties;
-        const boat = quote.invenio_boats;
+        const villa = quote.properties;
+        const boat = quote.boats;
         const property = villa || boat;
         const marginX = 20;
 
@@ -564,7 +564,7 @@ export default function QuotesPage() {
 
         // Fetch Contract Template & Prepare Data
         const agent = quote.agents;
-        const contractTemplate = quote.invenio_boats 
+        const contractTemplate = quote.boats 
             ? (agent?.boat_contract_template || agent?.contract_template || DEFAULT_B2C_CONTRACT) 
             : (agent?.contract_template || DEFAULT_B2C_CONTRACT);
         
@@ -589,14 +589,14 @@ export default function QuotesPage() {
             '{{agency_email}}': agent?.email || '—',
             '{{agency_phone}}': agent?.phone_number || '—',
 
-            '{{villa_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
-            '{{property_name}}': quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name || 'Our Listing',
-            '{{villa_license}}': quote.invenio_properties?.license || '—',
-            '{{villa_address}}': quote.invenio_properties?.location || 'Ibiza',
-            '{{property_location}}': quote.invenio_properties?.location || 'Ibiza',
-            '{{max_guests}}': quote.invenio_properties?.sleeps || quote.invenio_boats?.capacity_day || '—',
+            '{{villa_name}}': quote.properties?.villa_name || quote.boats?.boat_name || 'Our Listing',
+            '{{property_name}}': quote.properties?.villa_name || quote.boats?.boat_name || 'Our Listing',
+            '{{villa_license}}': quote.properties?.license || '—',
+            '{{villa_address}}': quote.properties?.location || 'Ibiza',
+            '{{property_location}}': quote.properties?.location || 'Ibiza',
+            '{{max_guests}}': quote.properties?.sleeps || quote.boats?.capacity_day || '—',
             
-            '{{boat_name}}': quote.invenio_boats?.boat_name || '',
+            '{{boat_name}}': quote.boats?.boat_name || '',
             '{{platform_name}}': 'Ibiza Beyond',
             '{{today}}': new Date().toLocaleDateString('it-IT'),
             
@@ -607,18 +607,18 @@ export default function QuotesPage() {
             '{{deposit_percent}}': isLastMinute ? '100' : '50',
             '{{balance_percent}}': isLastMinute ? '0' : '50',
             '{{balance_due_days}}': '30',
-            '{{security_deposit_amount}}': parseFloat(quote.invenio_properties?.security_deposit || quote.invenio_boats?.security_deposit || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' }),
+            '{{security_deposit_amount}}': parseFloat(quote.properties?.security_deposit || quote.boats?.security_deposit || 0).toLocaleString('en-GB', { style: 'currency', currency: 'EUR' }),
 
             // Explicit mappings for Italian labels in [BRACKETS]
             '[NOME CLIENTE]': quote.clients?.full_name || 'Valued Client',
             '[NOME AGENTE/SOCIETÀ]': agent?.company_name || 'Ibiza Beyond',
-            '[NOME VILLA]': quote.invenio_properties?.villa_name || 'Villa',
+            '[NOME VILLA]': quote.properties?.villa_name || 'Villa',
             '[DATA CHECK-IN]': quote.check_in ? new Date(quote.check_in).toLocaleDateString('it-IT') : '—',
             '[DATA CHECK-OUT]': quote.check_out ? new Date(quote.check_out).toLocaleDateString('it-IT') : '—',
             '[IMPORTO TOTALE]': parseFloat(quote.final_price || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
-            '[IMPORTO DEPOSITO]': parseFloat(quote.invenio_properties?.security_deposit || quote.invenio_boats?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
-            '[NUMERO LICENZA ETV]': quote.invenio_properties?.license || '—',
-            '[INDIRIZZO VILLA]': quote.invenio_properties?.location || 'Ibiza',
+            '[IMPORTO DEPOSITO]': parseFloat(quote.properties?.security_deposit || quote.boats?.security_deposit || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }),
+            '[NUMERO LICENZA ETV]': quote.properties?.license || '—',
+            '[INDIRIZZO VILLA]': quote.properties?.location || 'Ibiza',
             '[NOME PIATTAFORMA]': 'Ibiza Beyond'
         };
 
@@ -902,9 +902,9 @@ export default function QuotesPage() {
                                             </td>
                                             <td className="px-5 py-4 font-bold text-text-primary max-w-[180px] truncate">
                                                 <div className="flex flex-col">
-                                                    <span className="truncate">{q.invenio_properties?.villa_name || q.invenio_boats?.boat_name || '—'}</span>
+                                                    <span className="truncate">{q.properties?.villa_name || q.boats?.boat_name || '—'}</span>
                                                     <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">
-                                                        {q.invenio_properties ? 'Villa' : q.invenio_boats ? 'Boat' : 'Unknown'}
+                                                        {q.properties ? 'Villa' : q.boats ? 'Boat' : 'Unknown'}
                                                     </span>
                                                 </div>
                                             </td>
@@ -1067,7 +1067,7 @@ export default function QuotesPage() {
                                                             </button>
                                                         )}
 
-                                                        {(role === 'admin' || role === 'super_admin') && (q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.invenio_properties?.owner_id || q.invenio_boats?.owner_id) && (
+                                                        {(role === 'admin' || role === 'super_admin') && (q.status === 'draft' || q.status === 'details_requested' || q.status === 'waiting_owner') && (q.properties?.owner_id || q.boats?.owner_id) && (
                                                             <button
                                                                 onClick={() => handleAskAvailability(q)}
                                                                 className="size-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/20 transition-all"
@@ -1083,7 +1083,7 @@ export default function QuotesPage() {
                                         {role === 'super_admin' && flowOpenIds[q.id] && (
                                             <PaymentFlowDiagram
                                                 quote={q}
-                                                villaOwnerInfo={q.invenio_properties?.owner_id ? villaOwnerMap[q.invenio_properties.owner_id] : null}
+                                                villaOwnerInfo={q.properties?.owner_id ? villaOwnerMap[q.properties.owner_id] : null}
                                                 colSpan={colCount}
                                             />
                                         )}
@@ -1304,7 +1304,7 @@ export default function QuotesPage() {
                                 }}
                                 className="w-full input-theme p-2 text-sm"
                             >
-                                <option value="">Invenio Administration</option>
+                                <option value="">Platform Administration</option>
                                 <AgentsList />
                             </select>
                         </div>
@@ -1444,7 +1444,7 @@ function BulkEditQuotesModal({ ids, role, onClose, onSaved }) {
                             className="w-full input-theme p-2 text-sm"
                         >
                             <option value="">— Leave unchanged —</option>
-                            <option value="72241c14-09ed-4227-a01e-9bdeefdd0c8d">Invenio Administration</option>
+                            <option value="72241c14-09ed-4227-a01e-9bdeefdd0c8d">Platform Administration</option>
                             <AgentsList />
                         </select>
                     </div>

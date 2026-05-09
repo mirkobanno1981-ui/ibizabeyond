@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import BoatEditModal from './BoatEditModal';
+import BoatIngestModal from './BoatIngestModal';
 import BoatQuoteModal from './BoatQuoteModal';
 
 const FALLBACK_BOAT_IMG = 'https://images.unsplash.com/photo-1567899534071-723d01397ad0?auto=format&fit=crop&w=800&q=80';
@@ -17,16 +18,18 @@ export default function BoatsPage() {
     const [search, setSearch] = useState('');
     const [typeFilter, setTypeFilter] = useState('All');
     const [editBoat, setEditBoat] = useState(null);
+    const [showIngest, setShowIngest] = useState(false);
     const [selectedBoatIds, setSelectedBoatIds] = useState([]);
+    const [boatScope, setBoatScope] = useState('mine'); // 'mine' | 'all' for editor-boat tab
     const [showQuoteModal, setShowQuoteModal] = useState(false);
     const [checkIn, setCheckIn] = useState('');
     const [checkOut, setCheckOut] = useState('');
     const [guests, setGuests] = useState('');
 
     const { data: boats = [], isLoading: loading } = useQuery({
-        queryKey: ['boats', role, user?.id, search, typeFilter, guests],
+        queryKey: ['boats', role, user?.id, search, typeFilter, guests, boatScope],
         queryFn: async () => {
-            let query = supabase.from('invenio_boats').select(`
+            let query = supabase.from('boats').select(`
                 *,
                 owners (name, company_name)
             `);
@@ -34,7 +37,9 @@ export default function BoatsPage() {
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
             } else if (role === 'editor-boat' && user?.id) {
-                query = query.eq('created_by', user.id);
+                if (boatScope === 'mine') {
+                    query = query.eq('created_by', user.id);
+                } // else 'all' — no filter, sees full platform
             } else if (role === 'agent' && user?.id) {
                 // Get agent profile id first
                 const { data: agentData } = await supabase
@@ -89,7 +94,7 @@ export default function BoatsPage() {
             // 1. Fetch thumbnails
             const boatUuids = data.map(b => b.v_uuid);
             const { data: photos } = await supabase
-                .from('invenio_photos')
+                .from('property_photos')
                 .select('boat_uuid, thumbnail_url')
                 .in('boat_uuid', boatUuids)
                 .eq('sort_order', 0);
@@ -117,6 +122,31 @@ export default function BoatsPage() {
         queryClient.invalidateQueries({ queryKey: ['boats'] });
     };
 
+    const canManageBoat = (boat) =>
+        role === 'super_admin' || role === 'admin'
+        || (role === 'editor-boat' && boat.created_by === user?.id)
+        || (role === 'owner' && boat.owner_id === user?.id);
+
+    const handleToggleActive = async (boat) => {
+        if (!canManageBoat(boat)) { alert('Access denied.'); return; }
+        const { error } = await supabase
+            .from('boats')
+            .update({ is_active: !boat.is_active })
+            .eq('v_uuid', boat.v_uuid);
+        if (error) { alert(error.message); return; }
+        queryClient.invalidateQueries({ queryKey: ['boats'] });
+    };
+
+    const handleHardDelete = async (boat) => {
+        if (!canManageBoat(boat)) { alert('Access denied.'); return; }
+        if (!confirm(`Permanently delete "${boat.boat_name}"? This action is irreversible.`)) return;
+        await supabase.from('seasonal_prices').delete().eq('v_uuid', boat.v_uuid);
+        await supabase.from('property_photos').delete().eq('boat_uuid', boat.v_uuid);
+        const { error } = await supabase.from('boats').delete().eq('v_uuid', boat.v_uuid);
+        if (error) { alert(error.message); return; }
+        queryClient.invalidateQueries({ queryKey: ['boats'] });
+    };
+
     return (
         <div className="p-6 md:p-8 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -125,15 +155,48 @@ export default function BoatsPage() {
                     <p className="text-text-muted text-sm mt-0.5">
                         {loading ? 'Loading...' : `${boats.length} premium vessels available`}
                     </p>
+                    {role === 'editor-boat' && (
+                        <div className="mt-3 inline-flex bg-surface-2 border border-border rounded-xl p-1 gap-1">
+                            <button
+                                onClick={() => setBoatScope('mine')}
+                                className={`px-4 py-1.5 text-[11px] font-bold uppercase tracking-widest rounded-lg transition-all ${
+                                    boatScope === 'mine'
+                                        ? 'bg-primary text-white shadow'
+                                        : 'text-text-muted hover:text-text-primary'
+                                }`}
+                            >
+                                My boats
+                            </button>
+                            <button
+                                onClick={() => setBoatScope('all')}
+                                className={`px-4 py-1.5 text-[11px] font-bold uppercase tracking-widest rounded-lg transition-all ${
+                                    boatScope === 'all'
+                                        ? 'bg-primary text-white shadow'
+                                        : 'text-text-muted hover:text-text-primary'
+                                }`}
+                            >
+                                All on platform
+                            </button>
+                        </div>
+                    )}
                 </div>
                 {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || role === 'editor-boat') && (
-                    <button 
-                        onClick={() => setEditBoat({})} 
-                        className="btn-primary flex items-center gap-2 text-sm self-start"
-                    >
-                        <span className="material-symbols-outlined notranslate text-[16px]">add</span>
-                        Add Boat
-                    </button>
+                    <div className="flex gap-2 self-start">
+                        <button
+                            onClick={() => setShowIngest(true)}
+                            className="flex items-center gap-2 text-sm px-4 py-2 rounded-xl border border-primary/30 bg-primary/10 text-primary font-bold hover:bg-primary/20 transition-all"
+                        >
+                            <span className="material-symbols-outlined notranslate text-[16px]">auto_awesome</span>
+                            Add with AI
+                        </button>
+                        <button
+                            onClick={() => setEditBoat({})}
+                            className="btn-primary flex items-center gap-2 text-sm"
+                        >
+                            <span className="material-symbols-outlined notranslate text-[16px]">add</span>
+                            Add Boat
+                        </button>
+                    </div>
                 )}
             </div>
 
@@ -252,14 +315,17 @@ export default function BoatsPage() {
             ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
                     {boats.map(boat => (
-                        <BoatCard 
-                            key={boat.v_uuid} 
-                            boat={boat} 
+                        <BoatCard
+                            key={boat.v_uuid}
+                            boat={boat}
                             onEdit={() => setEditBoat(boat)}
                             role={role}
+                            canManage={canManageBoat(boat)}
+                            onToggleActive={() => handleToggleActive(boat)}
+                            onHardDelete={() => handleHardDelete(boat)}
                             isSelected={selectedBoatIds.includes(boat.v_uuid)}
                             onSelect={() => {
-                                setSelectedBoatIds(prev => 
+                                setSelectedBoatIds(prev =>
                                     prev.includes(boat.v_uuid)
                                         ? prev.filter(id => id !== boat.v_uuid)
                                         : [...prev, boat.v_uuid]
@@ -271,10 +337,20 @@ export default function BoatsPage() {
             )}
 
             {editBoat && (
-                <BoatEditModal 
-                    boat={editBoat} 
-                    onClose={() => setEditBoat(null)} 
+                <BoatEditModal
+                    boat={editBoat}
+                    onClose={() => setEditBoat(null)}
                     onSaved={handleSaved}
+                />
+            )}
+
+            {showIngest && (
+                <BoatIngestModal
+                    onClose={() => setShowIngest(false)}
+                    onSaved={() => {
+                        setShowIngest(false);
+                        queryClient.invalidateQueries({ queryKey: ['boats'] });
+                    }}
                 />
             )}
 
@@ -295,9 +371,10 @@ export default function BoatsPage() {
     );
 }
 
-function BoatCard({ boat, onEdit, role, isSelected, onSelect }) {
+function BoatCard({ boat, onEdit, role, isSelected, onSelect, canManage, onToggleActive, onHardDelete }) {
+    const isActive = boat.is_active !== false;
     return (
-        <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'}`}>
+        <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'} ${!isActive ? 'opacity-60' : ''}`}>
             {/* Selection Checkbox Overlay */}
             <div 
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}
@@ -312,8 +389,13 @@ function BoatCard({ boat, onEdit, role, isSelected, onSelect }) {
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     alt={boat.boat_name}
                 />
-                <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2 py-1 rounded text-[10px] font-bold text-white uppercase tracking-wider">
-                    {boat.type}
+                <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                    {!isActive && (
+                        <span className="bg-amber-500/90 px-2 py-1 rounded text-[10px] font-bold text-white uppercase tracking-wider">Inactive</span>
+                    )}
+                    <span className="bg-black/60 backdrop-blur-md px-2 py-1 rounded text-[10px] font-bold text-white uppercase tracking-wider">
+                        {boat.type}
+                    </span>
                 </div>
                 <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-md border border-border px-2.5 py-1 rounded-lg">
                     <span className="text-primary font-bold text-sm">
@@ -348,26 +430,50 @@ function BoatCard({ boat, onEdit, role, isSelected, onSelect }) {
                     </div>
                 </div>
 
-                <div className="mt-4 flex gap-2">
+                <div className="mt-4 flex flex-col gap-2">
                     {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || role === 'editor-boat') ? (
                         <>
-                            <button 
-                                onClick={onEdit}
-                                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:border-primary/40 hover:text-primary transition-all"
-                            >
-                                <span className="material-symbols-outlined notranslate text-[13px]">edit</span>
-                                Manage
-                            </button>
-                            <button 
-                                onClick={() => window.location.href = `/boats/${boat.v_uuid}`}
-                                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-primary/10 text-xs font-semibold text-primary hover:bg-primary/20 transition-all"
-                            >
-                                <span className="material-symbols-outlined notranslate text-[13px]">visibility</span>
-                                View
-                            </button>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={onEdit}
+                                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:border-primary/40 hover:text-primary transition-all"
+                                >
+                                    <span className="material-symbols-outlined notranslate text-[13px]">edit</span>
+                                    Manage
+                                </button>
+                                <button
+                                    onClick={() => window.location.href = `/boats/${boat.v_uuid}`}
+                                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-primary/10 text-xs font-semibold text-primary hover:bg-primary/20 transition-all"
+                                >
+                                    <span className="material-symbols-outlined notranslate text-[13px]">visibility</span>
+                                    View
+                                </button>
+                            </div>
+                            {canManage && (
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={onToggleActive}
+                                        className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all ${
+                                            isActive
+                                                ? 'border border-amber-500/40 text-amber-500 hover:bg-amber-500/10'
+                                                : 'border border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/10'
+                                        }`}
+                                    >
+                                        <span className="material-symbols-outlined notranslate text-[13px]">{isActive ? 'visibility_off' : 'visibility'}</span>
+                                        {isActive ? 'Disable' : 'Activate'}
+                                    </button>
+                                    <button
+                                        onClick={onHardDelete}
+                                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-red-500/40 text-red-500 hover:bg-red-500/10 text-[11px] font-bold uppercase tracking-wider transition-all"
+                                    >
+                                        <span className="material-symbols-outlined notranslate text-[13px]">delete</span>
+                                        Delete
+                                    </button>
+                                </div>
+                            )}
                         </>
                     ) : (
-                        <button 
+                        <button
                             onClick={() => window.location.href = `/boats/${boat.v_uuid}`}
                             className="w-full py-2 rounded-lg bg-primary text-background-dark text-xs font-bold hover:bg-primary/90 transition-all"
                         >

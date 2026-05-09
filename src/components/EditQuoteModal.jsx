@@ -9,7 +9,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const canManageMargins = role === 'admin' || role === 'super_admin' || isAgencyLeader;
     const [margin, setMargin] = useState(quote.agent_markup || 15);
     const [platformMargin, setPlatformMargin] = useState(quote.admin_markup || 0);
-    const _capturerSpecInit = effectiveCapturerCommission(quote.invenio_properties, quote.rental_type || 'daily');
+    const _capturerSpecInit = effectiveCapturerCommission(quote.properties, quote.rental_type || 'daily');
     const [editorMargin, setEditorMargin] = useState(
         parseFloat(quote.editor_markup) || _capturerSpecInit.pct || 0
     );
@@ -34,7 +34,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     // Rental type
     const [rentalType, setRentalType] = useState(quote.rental_type || 'daily');
 
-    const villaRentalConfigs = quote.invenio_properties?.rental_type_configs || {};
+    const villaRentalConfigs = quote.properties?.rental_type_configs || {};
     const RENTAL_TYPE_LABELS = {
         daily: 'Daily / Nightly',
         monthly: 'Monthly',
@@ -97,7 +97,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             }
 
             // Fetch Owner Info (Admins only)
-            const ownerId = quote.invenio_properties?.owner_id || quote.invenio_boats?.owner_id;
+            const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
             if (ownerId && (role === 'admin' || role === 'super_admin')) {
                 const { data: ownerData } = await supabase
                     .from('owners')
@@ -169,7 +169,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             const extraTotal = extraServices.reduce((sum, s) => sum + (s.price || 0), 0);
 
             const newBreakdown = [];
-            const baseLabel = quote.invenio_properties ? 'Base Accommodation' : 'Base Charter';
+            const baseLabel = quote.properties ? 'Base Accommodation' : 'Base Charter';
             newBreakdown.push({ label: baseLabel, amount: Math.round(baseAmt), desc: 'Base cost' });
 
             let platformProfit;
@@ -274,7 +274,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         }
 
         const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
-        const villaName = quote.invenio_properties?.villa_name || quote.invenio_boats?.boat_name;
+        const villaName = quote.properties?.villa_name || quote.boats?.boat_name;
         const msg = `Hello ${ownerName}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. Please confirm availability here: ${confirmUrl}`;
         
         const encodedMsg = encodeURIComponent(msg);
@@ -335,7 +335,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                     </div>
 
                     {/* Rental Type */}
-                    {quote.invenio_properties && (
+                    {quote.properties && (
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-text-muted uppercase tracking-widest block">Rental Type</label>
                             <select
@@ -580,7 +580,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                 onChange={e => setAssignedAgentId(e.target.value)}
                                 className="w-full input-theme py-2.5 px-3 font-bold text-text-primary"
                             >
-                                <option value="">Invenio Administration</option>
+                                <option value="">Platform Administration</option>
                                 {agents.map(a => (
                                     <option key={a.id} value={a.id}>{a.company_name || 'Unnamed Agency'}</option>
                                 ))}
@@ -695,7 +695,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                                 <p className="text-[9px] font-black text-text-muted uppercase tracking-widest border-b border-border pb-2">Live Calculation Breakdown</p>
                                 <div className="space-y-2">
                                     <div className="flex justify-between text-[11px]">
-                                        <span className="text-text-secondary">Base ({quote.invenio_properties ? 'Villa' : 'Boat'} cost)</span>
+                                        <span className="text-text-secondary">Base ({quote.properties ? 'Villa' : 'Boat'} cost)</span>
                                         <span className="font-bold text-text-primary">€{Math.round(parseFloat(quote.supplier_base_price || 0)).toLocaleString()}</span>
                                     </div>
                                     {parseFloat(editorMargin) > 0 && (

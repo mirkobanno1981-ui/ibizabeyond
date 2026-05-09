@@ -202,7 +202,7 @@ export default function OwnersPage() {
         setVillasModal(owner);
         setVillasModalList([]);
         const { data } = await supabase
-            .from('invenio_properties')
+            .from('properties')
             .select('v_uuid, villa_name, license, editor_markup_percent, capturer_commission_mode, capturer_commission_pct, capturer_commission_amount, capturer_commission_included, is_active')
             .eq('owner_id', owner.id)
             .order('villa_name');
@@ -451,7 +451,7 @@ export default function OwnersPage() {
                                         className="input-theme w-full h-12" 
                                         value={editOwner.company_name || ''} 
                                         onChange={e => setEditOwner({...editOwner, company_name: e.target.value})} 
-                                        placeholder="e.g. Invenio Luxury Villas"
+                                        placeholder="e.g. Sunset Villas"
                                     />
                                 </div>
                                 <div className="space-y-1.5">
@@ -618,7 +618,7 @@ export default function OwnersPage() {
                                         className="input-theme w-full h-12" 
                                         value={newOwner.company_name} 
                                         onChange={e => setNewOwner({...newOwner, company_name: e.target.value})} 
-                                        placeholder="e.g. Invenio Management"
+                                        placeholder="e.g. Estate Management"
                                     />
                                 </div>
                                 <div className="space-y-1.5">

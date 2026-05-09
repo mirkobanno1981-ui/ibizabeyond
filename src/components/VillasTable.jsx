@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import VillaEditModal from './VillaEditModal';
+import PropertyIngestModal from './PropertyIngestModal';
 // iCal availability is now resolved via the villa_blocked_dates table,
 // populated server-side by the sync-ical edge function (see supabase/functions/sync-ical).
 import VillaMap from './VillaMap';
@@ -37,12 +38,14 @@ export default function VillasTable() {
     const [checkInRule, setCheckInRule] = useState('Any');
     const [minStayFilter, setMinStayFilter] = useState('Any');
     const [destinationFilter, setDestinationFilter] = useState('Any');
+    const [propertyTypeFilter, setPropertyTypeFilter] = useState('Any');
     
     const [viewMode, setViewMode] = useState('grid');
     const [myVillasOnly, setMyVillasOnly] = useState(false);
     const featuresMenuRef = useRef(null);
     const [isFeaturesOpen, setIsFeaturesOpen] = useState(false);
     const [editVilla, setEditVilla] = useState(null);
+    const [showIngestModal, setShowIngestModal] = useState(false);
 
     // Bulk selection state
     const [selectedVillaIds, setSelectedVillaIds] = useState([]);
@@ -54,12 +57,12 @@ export default function VillasTable() {
         queryFn: async () => {
             const { data: mData } = await supabase
                 .from('margin_settings')
-                .select('invenio_to_admin_margin, admin_to_agent_margin, iva_percent')
+                .select('supplier_to_admin_margin, admin_to_agent_margin, iva_percent')
                 .limit(1)
                 .maybeSingle();
 
             let currentMargins = { 
-                invenioToAdmin: parseFloat(mData?.invenio_to_admin_margin) || 0, 
+                supplierToAdmin: parseFloat(mData?.supplier_to_admin_margin) || 0, 
                 adminToAgent: parseFloat(mData?.admin_to_agent_margin) || 0,
                 ivaPercent: parseFloat(mData?.iva_percent) || 21
             };
@@ -72,7 +75,7 @@ export default function VillasTable() {
                     .single();
                 
                 if (agentProfile?.admin_margin > 0) {
-                    currentMargins.invenioToAdmin = parseFloat(agentProfile.admin_margin);
+                    currentMargins.supplierToAdmin = parseFloat(agentProfile.admin_margin);
                 }
             }
             return currentMargins;
@@ -80,31 +83,19 @@ export default function VillasTable() {
         staleTime: 1000 * 60 * 30, // 30 mins
     });
 
-    const margins = marginDataObj || { invenioToAdmin: 0, adminToAgent: 0, ivaPercent: 21 };
+    const margins = marginDataObj || { supplierToAdmin: 0, adminToAgent: 0, ivaPercent: 21 };
 
     const { data: villasData = { list: [], total: 0 }, isLoading: loading, error: queryError } = useQuery({
-        queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, destinationFilter, sortBy, myVillasOnly],
+        queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, destinationFilter, propertyTypeFilter, sortBy, myVillasOnly],
         queryFn: async () => {
             // 1. Fetch Villas (All matching base filters)
-            let query = supabase.from('invenio_properties').select('*');
+            let query = supabase.from('properties').select('*');
 
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
-            } else if (role === 'agent' && user?.id) {
-                const agentId = agentData?.id || user.id;
-
-                const { data: managedOwners } = await supabase
-                    .from('owners')
-                    .select('id')
-                    .eq('agent_id', agentId);
-
-                const ownerIds = managedOwners?.map(o => o.id) || [];
-                const ownerFilter = ownerIds.length > 0
-                    ? `owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`
-                    : `created_by.eq.${user.id}`;
-                query = query.or(ownerFilter);
             }
-            // editor: sees all villas for quoting, edit permission gated in VillaCard
+            // agent + editor: see all villas for quoting; "My Villas Only" toggle filters to own.
+            // Edit permission gated in VillaEditModal/VillaCard.
             if (myVillasOnly && user?.id) {
                 query = query.eq('created_by', user.id);
             }
@@ -131,6 +122,9 @@ export default function VillasTable() {
             }
             if (destinationFilter !== 'Any') {
                 query = query.eq('destination', destinationFilter);
+            }
+            if (propertyTypeFilter !== 'Any') {
+                query = query.eq('property_type', propertyTypeFilter);
             }
 
             const { data: villasRaw, error: vErr } = await query;
@@ -160,7 +154,7 @@ export default function VillasTable() {
             // 2. Fetch Photos
             const villaUuids = activeVillas.map(v => v.v_uuid);
             const { data: photosData } = await supabase
-                .from('invenio_photos')
+                .from('property_photos')
                 .select('v_uuid, thumbnail_url')
                 .in('v_uuid', villaUuids)
                 .eq('sort_order', 0);
@@ -172,7 +166,7 @@ export default function VillasTable() {
             let seasonalRatesMap = {};
             if (checkIn && checkOut) {
                 const { data: ratesData } = await supabase
-                    .from('invenio_seasonal_prices')
+                    .from('seasonal_prices')
                     .select('*')
                     .in('v_uuid', villaUuids)
                     .lte('start_date', checkOut)
@@ -267,7 +261,7 @@ export default function VillasTable() {
                 }
 
                 if (!isValid) continue;
-                const displayPrice = totalBase * (1 + margins.invenioToAdmin / 100);
+                const displayPrice = totalBase * (1 + margins.supplierToAdmin / 100);
                 if (isShortStay && checkIn && checkOut && displayPrice < 3500) continue;
 
                 formatted.push({
@@ -307,7 +301,7 @@ export default function VillasTable() {
         // Fetch unique features once
         async function fetchFeatures() {
             try {
-                const { data, error } = await supabase.from('invenio_properties').select('features');
+                const { data, error } = await supabase.from('properties').select('features');
                 if (error) throw error;
                 const feats = new Set();
                 data?.forEach(v => (v.features || []).forEach(f => feats.add(f)));
@@ -347,9 +341,19 @@ export default function VillasTable() {
                     </p>
                 </div>
                 {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
-                    <button 
-                        onClick={() => setEditVilla({ 
-                            v_uuid: null, 
+                    <button
+                        onClick={() => setShowIngestModal(true)}
+                        className="btn-primary flex items-center gap-2 text-sm self-start bg-gradient-to-r from-primary to-primary/70"
+                        title="Crea proprietà con AI multimodale (testo, foto, PDF, audio)"
+                    >
+                        <span className="material-symbols-outlined notranslate text-[16px]">auto_awesome</span>
+                        + AI
+                    </button>
+                )}
+                {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                    <button
+                        onClick={() => setEditVilla({
+                            v_uuid: null,
                             villa_name: '', 
                             areaname: '', 
                             district: '', 
@@ -448,6 +452,19 @@ export default function VillasTable() {
                             </div>
 
                             <div className="w-full md:w-auto flex flex-wrap gap-4">
+                                <div className="w-44 space-y-2">
+                                    <label className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] ml-1">Property Type</label>
+                                    <select
+                                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-primary/40 rounded-2xl px-5 py-4 text-sm text-slate-800 outline-none transition-all cursor-pointer"
+                                        value={propertyTypeFilter}
+                                        onChange={e => setPropertyTypeFilter(e.target.value)}
+                                    >
+                                        <option value="Any">All Properties</option>
+                                        <option value="villa">Villas</option>
+                                        <option value="apartment">Apartments</option>
+                                    </select>
+                                </div>
+
                                 <div className="w-44 space-y-2">
                                     <label className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] ml-1">Destination</label>
                                     <select
@@ -699,7 +716,7 @@ export default function VillasTable() {
                                             return;
                                         }
                                         await supabase
-                                            .from('invenio_properties')
+                                            .from('properties')
                                             .update({ is_active: !villa.is_active })
                                             .eq('v_uuid', villa.v_uuid);
                                         queryClient.invalidateQueries({ queryKey: ['villas'] });
@@ -709,9 +726,9 @@ export default function VillasTable() {
                                         const canDelete = role === 'super_admin' || role === 'admin'
                                             || (role === 'editor' && villa.created_by === user?.id);
                                         if (!canDelete) { alert('Access denied.'); return; }
-                                        await supabase.from('invenio_seasonal_prices').delete().eq('v_uuid', villa.v_uuid);
-                                        await supabase.from('invenio_photos').delete().eq('v_uuid', villa.v_uuid);
-                                        const { error } = await supabase.from('invenio_properties').delete().eq('v_uuid', villa.v_uuid);
+                                        await supabase.from('seasonal_prices').delete().eq('v_uuid', villa.v_uuid);
+                                        await supabase.from('property_photos').delete().eq('v_uuid', villa.v_uuid);
+                                        const { error } = await supabase.from('properties').delete().eq('v_uuid', villa.v_uuid);
                                         if (error) { alert(error.message); return; }
                                         queryClient.invalidateQueries({ queryKey: ['villas'] });
                                     }}
@@ -774,6 +791,16 @@ export default function VillasTable() {
                     villa={editVilla}
                     onClose={() => setEditVilla(null)}
                     onSaved={handleSaved}
+                />
+            )}
+
+            {showIngestModal && (
+                <PropertyIngestModal
+                    onClose={() => setShowIngestModal(false)}
+                    onSaved={() => {
+                        setShowIngestModal(false);
+                        queryClient.invalidateQueries({ queryKey: ['villas'] });
+                    }}
                 />
             )}
 
@@ -1011,7 +1038,7 @@ function BulkQuoteModal({ selectedVillas, checkIn, checkOut, margins, onClose, o
         setSaving(true);
         try {
             const quoteInserts = selectedVillas.map(villa => {
-                const adminMarkup = margins.invenioToAdmin;
+                const adminMarkup = margins.supplierToAdmin;
                 const supplierBase = villa.supplierPrice || (villa.displayPrice / (1 + adminMarkup/100)); // Fallback
 
                 let subtotal = supplierBase * (1 + adminMarkup / 100); 

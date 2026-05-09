@@ -10,7 +10,7 @@ export default function AgentsPage() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(null);
     const [message, setMessage] = useState(null);
-    const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 0, ivaPercent: 10 });
+    const [globalMargins, setGlobalMargins] = useState({ supplierToAdmin: 0, ivaPercent: 10 });
     const [showAddModal, setShowAddModal] = useState(false);
     const [newAgent, setNewAgent] = useState({ email: '', password: '', firstName: '', lastName: '', company_name: '', agent_type: 'individual' });
     const [editAgent, setEditAgent] = useState(null);
@@ -97,7 +97,7 @@ export default function AgentsPage() {
 
             if (marginsRes.data) {
                 setGlobalMargins({
-                    invenioToAdmin: parseFloat(marginsRes.data.invenio_to_admin_margin) || 0,
+                    supplierToAdmin: parseFloat(marginsRes.data.supplier_to_admin_margin) || 0,
                     ivaPercent: parseFloat(marginsRes.data.iva_percent) || 10,
                 });
             }
@@ -256,7 +256,7 @@ export default function AgentsPage() {
             const { error } = await supabase
                 .from('margin_settings')
                 .update({ 
-                    invenio_to_admin_margin: parseFloat(globalMargins.invenioToAdmin) || 0,
+                    supplier_to_admin_margin: parseFloat(globalMargins.supplierToAdmin) || 0,
                     iva_percent: parseFloat(globalMargins.ivaPercent) || 10
                 })
                 .eq('id', 1);
@@ -276,7 +276,7 @@ export default function AgentsPage() {
         try {
             const [villasRes, ownersRes] = await Promise.all([
                 supabase
-                    .from('invenio_properties')
+                    .from('properties')
                     .select('id, villa_name, location, owner_id, created_at, is_active')
                     .eq('created_by', editorId)
                     .order('created_at', { ascending: false }),
@@ -303,7 +303,7 @@ export default function AgentsPage() {
         try {
             const { data, error } = await supabase
                 .from('quotes')
-                .select('*, invenio_properties(villa_name), clients(full_name)')
+                .select('*, properties(villa_name), clients(full_name)')
                 .eq('agent_id', agentId)
                 .order('created_at', { ascending: false });
             if (error) throw error;
@@ -360,8 +360,8 @@ export default function AgentsPage() {
                             <label className="block text-xs text-text-muted mb-1.5 font-medium">Property Cost → Admin Margin (%)</label>
                             <input
                                 type="number" step="0.01" className="input-theme w-full px-4"
-                                value={globalMargins.invenioToAdmin}
-                                onChange={e => setGlobalMargins({ ...globalMargins, invenioToAdmin: e.target.value })}
+                                value={globalMargins.supplierToAdmin}
+                                onChange={e => setGlobalMargins({ ...globalMargins, supplierToAdmin: e.target.value })}
                             />
                         </div>
                         <div>
@@ -771,7 +771,7 @@ export default function AgentsPage() {
                                                         {new Date(q.created_at).toLocaleDateString()}
                                                     </td>
                                                     <td className="px-4 py-3 text-text-primary font-bold">
-                                                        {q.invenio_properties?.villa_name}
+                                                        {q.properties?.villa_name}
                                                     </td>
                                                     <td className="px-4 py-3 text-text-muted">
                                                         {q.clients?.full_name}
@@ -953,7 +953,7 @@ export default function AgentsPage() {
                                             className="input-theme w-full h-12" 
                                             value={newAgent.company_name} 
                                             onChange={e => setNewAgent({...newAgent, company_name: e.target.value})} 
-                                            placeholder="e.g. Invenio Luxury Estates"
+                                            placeholder="e.g. Sunset Villas"
                                         />
                                     </div>
                                 ) : (

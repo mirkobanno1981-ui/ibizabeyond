@@ -54,7 +54,7 @@ export default function VillaView() {
     const [clientSearch, setClientSearch] = useState('');
     const [savingQuote, setSavingQuote] = useState(false);
     const [agentDetails, setAgentDetails] = useState(null);
-    const [globalMargins, setGlobalMargins] = useState({ invenioToAdmin: 15, ivaPercent: 10 });
+    const [globalMargins, setGlobalMargins] = useState({ supplierToAdmin: 15, ivaPercent: 10 });
     const [useStripeFee, setUseStripeFee] = useState(false);
     const [useForexFee, setUseForexFee] = useState(false);
     const [platformMargin, setPlatformMargin] = useState(15);
@@ -104,7 +104,7 @@ export default function VillaView() {
             // AGENTS see their specific margin (fallback to global).
             const adminMarkup = (role !== 'admin' && agentDetails?.admin_margin > 0) 
                 ? agentDetails.admin_margin 
-                : globalMargins.invenioToAdmin;
+                : globalMargins.supplierToAdmin;
             return Math.round(amount * (1 + adminMarkup / 100));
         }
 
@@ -391,7 +391,7 @@ export default function VillaView() {
         try {
             // 1. Fetch Villa Info
             const { data: villaData, error: villaErr } = await supabase
-                .from('invenio_properties')
+                .from('properties')
                 .select('*')
                 .eq('v_uuid', id)
                 .single();
@@ -400,7 +400,7 @@ export default function VillaView() {
 
             // 2. Fetch All Photos
             const { data: photoData } = await supabase
-                .from('invenio_photos')
+                .from('property_photos')
                 .select('url, thumbnail_url, sort_order')
                 .eq('v_uuid', id)
                 .order('sort_order', { ascending: true });
@@ -408,7 +408,7 @@ export default function VillaView() {
 
             // 2b. Fetch All Videos
             const { data: videoData } = await supabase
-                .from('invenio_videos')
+                .from('property_videos')
                 .select('id, url, caption, sort_order')
                 .eq('v_uuid', id)
                 .order('sort_order', { ascending: true });
@@ -416,7 +416,7 @@ export default function VillaView() {
 
             // 3. Fetch Seasonal Rates
             const { data: rateData } = await supabase
-                .from('invenio_seasonal_prices')
+                .from('seasonal_prices')
                 .select('*')
                 .eq('v_uuid', id)
                 .order('start_date', { ascending: true });
@@ -452,14 +452,14 @@ export default function VillaView() {
                 .single();
             if (marginData) {
                 setGlobalMargins({
-                    invenioToAdmin: marginData.invenio_to_admin_margin || 15,
+                    supplierToAdmin: marginData.supplier_to_admin_margin || 15,
                     ivaPercent: marginData.iva_percent || 10
                 });
                 
                 // Initialize creation margins
                 const activeAdminMargin = (role !== 'admin' && agentProfileData?.admin_margin > 0) 
                     ? agentProfileData.admin_margin 
-                    : (marginData.invenio_to_admin_margin || 15);
+                    : (marginData.supplier_to_admin_margin || 15);
                 setPlatformMargin(activeAdminMargin);
                 setAgentMargin(0); // Default villa agent margin is 0
                 setEditorMargin(
@@ -660,7 +660,7 @@ export default function VillaView() {
             const { total: finalPrice, items: breakdown, base: supplierBase } = getQuoteBreakdown();
             const activeAdminMargin = (agentDetails?.admin_margin > 0) 
                 ? agentDetails.admin_margin 
-                : globalMargins.invenioToAdmin;
+                : globalMargins.supplierToAdmin;
 
             const { data, error: quoteErr } = await supabase.from('quotes').insert({
                 v_uuid: villa.v_uuid,
@@ -1134,7 +1134,7 @@ export default function VillaView() {
                             <div className="flex items-baseline gap-2 mb-6">
                                 <span className="text-4xl font-extrabold text-text-primary">
                                     €{Math.round(
-                                        parseFloat(villa.minimum_price || 0) * (1 + ((role !== 'admin' && agentDetails?.admin_margin > 0) ? agentDetails.admin_margin : globalMargins.invenioToAdmin) / 100)
+                                        parseFloat(villa.minimum_price || 0) * (1 + ((role !== 'admin' && agentDetails?.admin_margin > 0) ? agentDetails.admin_margin : globalMargins.supplierToAdmin) / 100)
                                     ).toLocaleString()}
                                 </span>
                                 <span className="text-text-muted text-sm">/ week</span>

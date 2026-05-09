@@ -17,7 +17,7 @@ const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 
 async function fetchQuoteMeta(firstId) {
-    const select = 'clients(full_name),invenio_properties(villa_name,images,thumbnail_url),invenio_boats(boat_name,photo_urls)';
+    const select = 'clients(full_name),properties(villa_name,images,thumbnail_url),boats(boat_name,photo_urls)';
     const url = `${SUPABASE_URL}/rest/v1/quotes?id=eq.${encodeURIComponent(firstId)}&select=${encodeURIComponent(select)}`;
     const res = await fetch(url, {
         headers: {
@@ -31,8 +31,8 @@ async function fetchQuoteMeta(firstId) {
 }
 
 function pickImage(quote) {
-    const villa = quote?.invenio_properties;
-    const boat = quote?.invenio_boats;
+    const villa = quote?.properties;
+    const boat = quote?.boats;
     if (villa?.images?.length) return villa.images[0];
     if (villa?.thumbnail_url) return villa.thumbnail_url;
     if (boat?.photo_urls) {
@@ -43,8 +43,8 @@ function pickImage(quote) {
 }
 
 function buildMeta(quote, isMulti) {
-    const villa = quote?.invenio_properties;
-    const boat = quote?.invenio_boats;
+    const villa = quote?.properties;
+    const boat = quote?.boats;
     const client = quote?.clients;
     const propertyName = villa?.villa_name || boat?.boat_name || 'Ibiza';
     const clientName = client?.full_name || '';

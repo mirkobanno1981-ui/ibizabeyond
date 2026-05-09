@@ -94,7 +94,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
 
     const fetchExistingPhotos = async () => {
         const { data, error: pErr } = await supabase
-            .from('invenio_photos')
+            .from('property_photos')
             .select('id, url, thumbnail_url, sort_order, storage_path, caption')
             .eq('boat_uuid', boat.v_uuid)
             .order('sort_order', { ascending: true });
@@ -155,7 +155,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         if (photo.storage_path) {
             await supabase.storage.from('boat-photos').remove([photo.storage_path]).catch(() => {});
         }
-        const { error: dErr } = await supabase.from('invenio_photos').delete().eq('id', photo.id);
+        const { error: dErr } = await supabase.from('property_photos').delete().eq('id', photo.id);
         if (dErr) {
             setError(`Photo delete failed: ${dErr.message}`);
             return;
@@ -181,7 +181,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             }
             const { data: pub } = supabase.storage.from('boat-photos').getPublicUrl(destPath);
             const url = pub?.publicUrl;
-            await supabase.from('invenio_photos').insert({
+            await supabase.from('property_photos').insert({
                 boat_uuid: boatUuid,
                 url,
                 thumbnail_url: url,
@@ -196,7 +196,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     const fetchSeasonalRates = async () => {
         setLoadingRates(true);
         const { data, error } = await supabase
-            .from('invenio_seasonal_prices')
+            .from('seasonal_prices')
             .select('*')
             .eq('v_uuid', boat.v_uuid)
             .order('start_date', { ascending: true });
@@ -221,7 +221,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             return;
         }
         const { data, error } = await supabase
-            .from('invenio_seasonal_prices')
+            .from('seasonal_prices')
             .insert([{ v_uuid: boat.v_uuid, ...payload }])
             .select()
             .single();
@@ -235,7 +235,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             setPendingRates(prev => prev.filter(r => r.id !== rate.id));
             return;
         }
-        const { error } = await supabase.from('invenio_seasonal_prices').delete().eq('id', rate.id);
+        const { error } = await supabase.from('seasonal_prices').delete().eq('id', rate.id);
         if (error) { alert('Error: ' + error.message); return; }
         setSeasonalRates(prev => prev.filter(r => r.id !== rate.id));
     };
@@ -250,7 +250,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             minimum_nights: r.minimum_nights,
             allowed_checkin_days: r.allowed_checkin_days,
         }));
-        const { error: rErr } = await supabase.from('invenio_seasonal_prices').insert(rows);
+        const { error: rErr } = await supabase.from('seasonal_prices').insert(rows);
         if (rErr) {
             console.error('seasonal rate flush failed', rErr);
             alert(`Seasonal rates not saved: ${rErr.message}`);
@@ -320,14 +320,14 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             let result;
             if (boat.v_uuid) {
                 result = await supabase
-                    .from('invenio_boats')
+                    .from('boats')
                     .update(boatData)
                     .eq('v_uuid', boat.v_uuid)
                     .select()
                     .single();
             } else {
                 result = await supabase
-                    .from('invenio_boats')
+                    .from('boats')
                     .insert([boatData])
                     .select()
                     .single();

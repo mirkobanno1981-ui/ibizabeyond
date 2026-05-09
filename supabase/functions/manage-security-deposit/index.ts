@@ -36,7 +36,7 @@ serve(async (req) => {
       .select(`
         id,
         security_deposit_intent_id,
-        invenio_properties (
+        properties (
           owner_id,
           deposit
         )
@@ -52,7 +52,7 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
     if (authError || !user) throw new Error('Unauthorized');
 
-    const isOwner = quote.invenio_properties?.owner_id === user.id;
+    const isOwner = quote.properties?.owner_id === user.id;
     
     // Check role from user_roles table
     const { data: roleData } = await supabase.from('user_roles').select('role').eq('user_id', user.id).single();
