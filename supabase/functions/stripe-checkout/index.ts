@@ -93,17 +93,8 @@ serve(async (req) => {
         check_in,
         check_out,
         clients ( full_name, email ),
-        properties (
-          villa_name,
-          deposit,
-          owner_id,
-          owners ( stripe_account_id, split_enabled, agent_id )
-        ),
-        boats (
-          boat_name,
-          security_deposit,
-          owners ( stripe_account_id )
-        ),
+        properties ( villa_name, deposit, owner_id ),
+        boats ( boat_name, security_deposit, owner_id ),
         agents!quotes_agent_id_fkey (
           id,
           agent_type,
@@ -126,25 +117,32 @@ serve(async (req) => {
       ? parseFloat(quote.properties?.deposit || 0)
       : parseFloat(quote.boats?.security_deposit || 0);
 
-    let ownerStripeAccount: string | null = isVilla
-      ? (quote.properties?.owners?.stripe_account_id || null)
-      : (quote.boats?.owners?.stripe_account_id || null);
+    // properties.owner_id / boats.owner_id FK points to auth.users; owners table
+    // is fetched separately by id (no PostgREST relationship between the two).
+    const propertyOwnerId = isVilla ? quote.properties?.owner_id : quote.boats?.owner_id;
+    let ownerRecord: { stripe_account_id?: string | null; split_enabled?: boolean | null; agent_id?: string | null } | null = null;
+    if (propertyOwnerId) {
+      const { data: ownerRow } = await supabase
+        .from('owners')
+        .select('stripe_account_id, split_enabled, agent_id')
+        .eq('id', propertyOwnerId)
+        .maybeSingle();
+      ownerRecord = ownerRow || null;
+    }
 
-    const ownerSplitEnabled = isVilla
-      ? !!quote.properties?.owners?.split_enabled
-      : false;
-
-    const editorAgentId = isVilla ? quote.properties?.owners?.agent_id : null;
+    let ownerStripeAccount: string | null = ownerRecord?.stripe_account_id || null;
+    const ownerSplitEnabled = isVilla ? !!ownerRecord?.split_enabled : false;
+    const editorAgentId = isVilla ? (ownerRecord?.agent_id || null) : null;
 
     // Edge case: villa.owner_id points to an agent (editor) row instead of an
     // owners row — they self-manage. Treat the editor as the owner-side recipient.
     let selfManagedEditor = false;
-    if (isVilla && !ownerStripeAccount && quote.properties?.owner_id) {
+    if (isVilla && !ownerStripeAccount && propertyOwnerId) {
       const { data: agt } = await supabase
         .from('agents')
         .select('id, company_name, stripe_account_id')
-        .eq('id', quote.properties.owner_id)
-        .single();
+        .eq('id', propertyOwnerId)
+        .maybeSingle();
       if (agt?.stripe_account_id) {
         ownerStripeAccount = agt.stripe_account_id;
         selfManagedEditor = true;
