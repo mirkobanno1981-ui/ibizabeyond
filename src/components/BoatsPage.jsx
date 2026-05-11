@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import BoatEditModal from './BoatEditModal';
 import BoatIngestModal from './BoatIngestModal';
 import BoatQuoteModal from './BoatQuoteModal';
+import { getStartingFromPrice, getTotalForRange } from '../lib/boatPricing';
 
 const FALLBACK_BOAT_IMG = 'https://images.unsplash.com/photo-1567899534071-723d01397ad0?auto=format&fit=crop&w=800&q=80';
 
@@ -25,6 +26,7 @@ export default function BoatsPage() {
     const [checkIn, setCheckIn] = useState('');
     const [checkOut, setCheckOut] = useState('');
     const [guests, setGuests] = useState('');
+    const [budget, setBudget] = useState('');
 
     const { data: boats = [], isLoading: loading } = useQuery({
         queryKey: ['boats', role, user?.id, search, typeFilter, guests, boatScope],
@@ -41,25 +43,17 @@ export default function BoatsPage() {
                     query = query.eq('created_by', user.id);
                 } // else 'all' — no filter, sees full platform
             } else if (role === 'agent' && user?.id) {
-                // Get agent profile id first
-                const { data: agentData } = await supabase
-                    .from('agents')
+                // agents.id IS the auth user uuid (no separate user_id column).
+                const { data: managedOwners } = await supabase
+                    .from('owners')
                     .select('id')
-                    .eq('user_id', user.id)
-                    .single();
+                    .eq('agent_id', user.id);
 
-                if (agentData) {
-                    const { data: managedOwners } = await supabase
-                        .from('owners')
-                        .select('id')
-                        .eq('agent_id', agentData.id);
-
-                    const ownerIds = managedOwners?.map(o => o.id) || [];
-                    if (ownerIds.length > 0) {
-                        query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
-                    } else {
-                        query = query.eq('created_by', user.id);
-                    }
+                const ownerIds = managedOwners?.map(o => o.id) || [];
+                if (ownerIds.length > 0) {
+                    query = query.or(`owner_id.in.(${ownerIds.join(',')}),created_by.eq.${user.id}`);
+                } else {
+                    query = query.eq('created_by', user.id);
                 }
             }
             if (search) {
@@ -91,31 +85,63 @@ export default function BoatsPage() {
                 }
             }
 
-            // 1. Fetch thumbnails
+            // 1. Fetch thumbnails + seasonal prices in parallel
             const boatUuids = data.map(b => b.v_uuid);
-            const { data: photos } = await supabase
-                .from('property_photos')
-                .select('boat_uuid, thumbnail_url')
-                .in('boat_uuid', boatUuids)
-                .eq('sort_order', 0);
+            const [photosRes, ratesRes] = await Promise.all([
+                supabase
+                    .from('property_photos')
+                    .select('boat_uuid, thumbnail_url')
+                    .in('boat_uuid', boatUuids)
+                    .eq('sort_order', 0),
+                supabase
+                    .from('seasonal_prices')
+                    .select('v_uuid, amount, start_date, end_date')
+                    .in('v_uuid', boatUuids),
+            ]);
 
             const photoMap = {};
-            photos?.forEach(p => { if (p.boat_uuid) photoMap[p.boat_uuid] = p.thumbnail_url; });
+            photosRes.data?.forEach(p => { if (p.boat_uuid) photoMap[p.boat_uuid] = p.thumbnail_url; });
 
-            // 2. Map thumbnails
+            const ratesMap = {};
+            ratesRes.data?.forEach(r => {
+                if (!ratesMap[r.v_uuid]) ratesMap[r.v_uuid] = [];
+                ratesMap[r.v_uuid].push(r);
+            });
+
+            // 2. Map thumbnails + startingFromPrice + per-boat rates for downstream budget filter
             return data.map(b => {
                 let thumbnail = photoMap[b.v_uuid] || b.thumbnail_url || null;
                 if (!thumbnail && b.photo_urls) {
                     const first = b.photo_urls.split(',')[0]?.trim();
                     if (first && first.length > 5) thumbnail = first;
                 }
-                return { ...b, thumbnail };
+                const rates = ratesMap[b.v_uuid] || [];
+                return {
+                    ...b,
+                    thumbnail,
+                    startingFromPrice: getStartingFromPrice(b, rates),
+                    _seasonalRates: rates,
+                };
             });
         },
         enabled: !!user?.id,
         staleTime: 1000 * 60 * 5, // 5 mins
     });
 
+
+    // Budget filter (client-side). With dates: estimated total for stay <= budget.
+    // Without dates: startingFromPrice <= budget. Boats with no priced day are filtered out.
+    const filteredBoats = useMemo(() => {
+        const budgetNum = parseFloat(budget);
+        if (!budgetNum || budgetNum <= 0) return boats;
+        return boats.filter(b => {
+            if (checkIn) {
+                const total = getTotalForRange(b, b._seasonalRates || [], checkIn, checkOut || checkIn);
+                return total > 0 && total <= budgetNum;
+            }
+            return b.startingFromPrice != null && b.startingFromPrice <= budgetNum;
+        });
+    }, [boats, budget, checkIn, checkOut]);
 
     const handleSaved = () => {
         setEditBoat(null);
@@ -153,7 +179,7 @@ export default function BoatsPage() {
                 <div>
                     <h1 className="text-2xl font-bold text-text-primary">Boat Charter Inventory</h1>
                     <p className="text-text-muted text-sm mt-0.5">
-                        {loading ? 'Loading...' : `${boats.length} premium vessels available`}
+                        {loading ? 'Loading...' : `${filteredBoats.length} premium vessels available`}
                     </p>
                     {role === 'editor-boat' && (
                         <div className="mt-3 inline-flex bg-surface-2 border border-border rounded-xl p-1 gap-1">
@@ -226,7 +252,7 @@ export default function BoatsPage() {
                                 onChange={e => {
                                     const val = e.target.value;
                                     setCheckIn(val);
-                                    if (checkOut && val >= checkOut) {
+                                    if (checkOut && val > checkOut) {
                                         setCheckOut('');
                                     }
                                 }}
@@ -239,7 +265,7 @@ export default function BoatsPage() {
                                 type="date"
                                 className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-primary/40 rounded-2xl px-5 py-4 text-sm text-slate-800 outline-none transition-all [color-scheme:light]"
                                 value={checkOut}
-                                min={checkIn ? new Date(new Date(checkIn).getTime() + 86400000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]}
+                                min={checkIn || new Date().toISOString().split('T')[0]}
                                 onChange={e => setCheckOut(e.target.value)}
                             />
                         </div>
@@ -271,16 +297,30 @@ export default function BoatsPage() {
                         />
                     </div>
 
+                    <div className="w-40 space-y-1.5">
+                        <label className="text-[10px] text-slate-400 font-bold uppercase tracking-widest ml-1">Budget (€)</label>
+                        <input
+                            type="number"
+                            min="0"
+                            placeholder="Max total"
+                            title={checkIn ? 'Total for selected stay' : 'Starting price'}
+                            className="w-full bg-white border border-slate-200 hover:border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none transition-all"
+                            value={budget}
+                            onChange={e => setBudget(e.target.value)}
+                        />
+                    </div>
+
                     <div className="flex items-center gap-3 ml-auto pt-4">
-                        {(search || typeFilter !== 'All' || guests || checkIn || checkOut) && (
+                        {(search || typeFilter !== 'All' || guests || checkIn || checkOut || budget) && (
                             <button
                                 className="h-10 px-4 text-[10px] font-black uppercase tracking-widest text-[#ff4b4b] hover:bg-[#ff4b4b]/5 transition-all flex items-center gap-2 rounded-xl"
-                                onClick={() => { 
-                                    setSearch(''); 
-                                    setTypeFilter('All'); 
-                                    setGuests(''); 
-                                    setCheckIn(''); 
-                                    setCheckOut(''); 
+                                onClick={() => {
+                                    setSearch('');
+                                    setTypeFilter('All');
+                                    setGuests('');
+                                    setCheckIn('');
+                                    setCheckOut('');
+                                    setBudget('');
                                     setSelectedBoatIds([]);
                                 }}
                             >
@@ -307,14 +347,14 @@ export default function BoatsPage() {
                         <div key={i} className="glass-card animate-pulse h-80" />
                     ))}
                 </div>
-            ) : boats.length === 0 ? (
+            ) : filteredBoats.length === 0 ? (
                 <div className="glass-card p-12 text-center opacity-50">
                     <span className="material-symbols-outlined notranslate text-4xl block mb-2">directions_boat</span>
                     <p className="text-sm font-bold uppercase tracking-widest">No boats found</p>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                    {boats.map(boat => (
+                    {filteredBoats.map(boat => (
                         <BoatCard
                             key={boat.v_uuid}
                             boat={boat}
@@ -397,12 +437,14 @@ function BoatCard({ boat, onEdit, role, isSelected, onSelect, canManage, onToggl
                         {boat.type}
                     </span>
                 </div>
-                <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-md border border-border px-2.5 py-1 rounded-lg">
-                    <span className="text-primary font-bold text-sm">
-                        €{parseFloat(boat.daily_price || 0).toLocaleString()}
-                    </span>
-                    <span className="text-text-muted text-[10px] ml-1">/day</span>
-                </div>
+                {boat.startingFromPrice != null && (
+                    <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-md border border-border px-2.5 py-1 rounded-lg">
+                        <span className="text-text-muted text-[9px] uppercase tracking-widest font-bold mr-1.5">From</span>
+                        <span className="text-primary font-bold text-sm">
+                            €{boat.startingFromPrice.toLocaleString()}
+                        </span>
+                    </div>
+                )}
             </div>
 
             <div className="p-4 flex-1 flex flex-col">

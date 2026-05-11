@@ -37,6 +37,7 @@ const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = fa
 export default function BoatEditModal({ boat, onClose, onSaved }) {
     const { role, user } = useAuth();
     const [owners, setOwners] = useState([]);
+    const [captatorAgent, setCaptatorAgent] = useState(null);
     const [form, setForm] = useState({
         boat_name: boat.boat_name || '',
         manufacturer: boat.manufacturer || '',
@@ -66,6 +67,9 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         photo_urls: boat.photo_urls || '',
         ses_establishment_code: boat.ses_establishment_code || '',
         price_locked: !!boat.price_locked,
+        ical_url: boat.ical_url || '',
+        editor_commission_pct: boat.editor_commission_pct ?? 5,
+        editor_commission_included: boat.editor_commission_included !== false,
     });
     const [newFeature, setNewFeature] = useState('');
     const [seasonalRates, setSeasonalRates] = useState([]);
@@ -263,22 +267,12 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         try {
             let query = supabase
                 .from('owners')
-                .select('id, name')
+                .select('id, name, agent_id, agents:agent_id(id, company_name)')
                 .eq('is_active', true);
-            
+
             if (role === 'agent') {
-                const { data: agentData } = await supabase
-                    .from('agents')
-                    .select('id')
-                    .eq('user_id', user.id)
-                    .single();
-                
-                if (agentData) {
-                    query = query.eq('agent_id', agentData.id);
-                } else {
-                    setOwners([]);
-                    return;
-                }
+                // agents.id IS the auth user uuid.
+                query = query.eq('agent_id', user.id);
             }
 
             const { data, error } = await query.order('name');
@@ -290,12 +284,21 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
         }
     };
 
+    // Resolve the captator (the agent on owners.agent_id of the boat's owner).
+    useEffect(() => {
+        const own = owners.find(o => o.id === form.owner_id);
+        setCaptatorAgent(own?.agents || null);
+    }, [owners, form.owner_id]);
+
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
 
     const handleSave = async () => {
         setSaving(true);
         setError(null);
         try {
+            // Captator commission floor: 5%. Default + clamp so the locked-price
+            // 5+5+10 model holds even if someone edits the form down.
+            const captatorPct = Math.max(5, parseFloat(form.editor_commission_pct) || 5);
             const boatData = {
                 ...form,
                 year: parseInt(form.year) || 0,
@@ -311,6 +314,9 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                 security_deposit: parseFloat(form.security_deposit) || 0,
                 cleaning_fee: parseFloat(form.cleaning_fee) || 0,
                 price_locked: !!form.price_locked,
+                ical_url: form.ical_url?.trim() || null,
+                editor_commission_pct: captatorPct,
+                editor_commission_included: !!form.editor_commission_included,
                 owner_id: role === 'owner' ? user.id : (form.owner_id || null),
                 created_by: boat.v_uuid ? (boat.created_by || user.id) : user.id,
                 // New boats need super_admin approval before going live
@@ -557,9 +563,39 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                                 />
                                 <span className="text-xs text-text-primary">
                                     <span className="font-bold">Lock price for agents</span>
-                                    <span className="text-text-muted ml-2">— agents cannot apply mark-up or manual override; quote price = listing price</span>
+                                    <span className="text-text-muted ml-2">— locked: total commission ≥ 20% (captator 5 / platform 5 / B2C agent 10). Unlocked: 5 + 5 baseline, agent sets the rest freely.</span>
                                 </span>
                             </label>
+
+                            {/* Captator commission */}
+                            <div className="col-span-2 grid grid-cols-2 gap-4 p-3 bg-surface-2/60 rounded-lg border border-border">
+                                <div>
+                                    <label className="block text-xs text-text-muted mb-1.5 font-medium">Captator Commission (%)</label>
+                                    <input
+                                        type="number"
+                                        min={5}
+                                        step="0.5"
+                                        className="input-theme w-full"
+                                        value={form.editor_commission_pct}
+                                        onChange={e => handleChange('editor_commission_pct', e.target.value)}
+                                    />
+                                    <p className="text-[10px] text-text-muted mt-1 italic">Fee earned by the captator agent on every booking. Minimum 5%.</p>
+                                </div>
+                                <div className="flex items-end">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="accent-primary"
+                                            checked={!!form.editor_commission_included}
+                                            onChange={e => handleChange('editor_commission_included', e.target.checked)}
+                                        />
+                                        <span className="text-xs text-text-primary">
+                                            <span className="font-bold">Commission included in base price</span>
+                                            <span className="block text-[10px] text-text-muted">If off, captator fee is added on top of the listing price.</span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
 
                             <div>
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">Fuel Policy</label>
@@ -624,11 +660,11 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                             <Field label="Base Port" field="location_base_port" form={form} handleChange={handleChange} />
                             <Field label="SES Establishment Code" field="ses_establishment_code" form={form} handleChange={handleChange} />
                             {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'editor-boat' || role === 'agent') && (
-                                <div className="col-span-2">
+                                <div className="col-span-2 space-y-2">
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">
                                         {role === 'agent' ? 'Associated Owner (Contact)' : 'Yacht Owner'}
                                     </label>
-                                    <select 
+                                    <select
                                         className="input-theme w-full"
                                         value={form.owner_id}
                                         onChange={e => handleChange('owner_id', e.target.value)}
@@ -639,13 +675,33 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                                             <option key={o.id} value={o.id}>{o.name}</option>
                                         ))}
                                     </select>
-                                    <p className="text-[10px] text-text-muted mt-2 italic">
-                                        {role === 'agent' 
+                                    <p className="text-[10px] text-text-muted mt-1 italic">
+                                        {role === 'agent'
                                             ? 'You can only select owners that you manage as direct contacts.'
                                             : 'Note: Owners must be registered as users first.'}
                                     </p>
+                                    {(role === 'super_admin' || role === 'admin') && form.owner_id && (
+                                        <div className="px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg flex items-center justify-between">
+                                            <span className="text-[10px] text-text-muted uppercase tracking-widest font-bold">Captator Agent</span>
+                                            <span className="text-xs font-bold text-primary">
+                                                {captatorAgent?.company_name || '— (owner unmanaged)'}
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
                             )}
+
+                            <div className="col-span-2">
+                                <label className="block text-xs text-text-muted mb-1.5 font-medium">iCal Availability URL</label>
+                                <input
+                                    type="text"
+                                    className="input-theme w-full"
+                                    placeholder="https://airbnb.com/.../calendar.ics"
+                                    value={form.ical_url}
+                                    onChange={e => handleChange('ical_url', e.target.value)}
+                                />
+                                <p className="text-[10px] text-text-muted mt-1 italic">Hourly server sync — blocked dates appear on the booking calendar.</p>
+                            </div>
                         </div>
                     </section>
 

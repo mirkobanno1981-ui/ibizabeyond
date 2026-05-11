@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchICal, parseICal, getBlockedDates } from '../lib/calendar';
+import { monthHasPricing } from '../lib/boatPricing';
 import { computeBreakdown, snapshotToBreakdownItems, resolveEditorShare } from '../lib/quoteMath';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1567899534071-723d01397ad0?auto=format&fit=crop&w=1200&q=80';
@@ -194,6 +195,7 @@ export default function BoatView() {
             checkIn: selectionStart,
             isManual: isManualPrice,
             manualPrice: isManualPrice ? parseFloat(manualPrice) || 0 : null,
+            lockedPrice: !!boat?.price_locked,
         });
 
         const items = [
@@ -299,14 +301,22 @@ export default function BoatView() {
                 setAgentMargin(0);
             }
 
-            // 7. Fetch iCal Availability (if boats use it)
-            if (boatData.ical_url) {
-                const icalData = await fetchICal(boatData.ical_url);
-                if (icalData) {
-                    const events = parseICal(icalData);
-                    setBlockedDates(getBlockedDates(events));
+            // 7. Fetch synced iCal availability from server cache (boat_blocked_dates).
+            const { data: blockedRows } = await supabase
+                .from('boat_blocked_dates')
+                .select('start_date, end_date')
+                .eq('v_uuid', id);
+            const allBlocked = [];
+            (blockedRows || []).forEach(row => {
+                const s = new Date(row.start_date);
+                const e = new Date(row.end_date);
+                const d = new Date(s);
+                while (d <= e) {
+                    allBlocked.push(d.toISOString().split('T')[0]);
+                    d.setDate(d.getDate() + 1);
                 }
-            }
+            });
+            setBlockedDates(allBlocked);
         } catch (err) {
             console.error('Error:', err);
             setError(err.message);
@@ -655,7 +665,9 @@ export default function BoatView() {
                             {[0, 1, 2, 3, 4, 5, 6].map(offset => {
                                 const today = new Date();
                                 const monthDate = new Date(today.getFullYear(), today.getMonth() + offset, 1);
-                                if (monthDate.getFullYear() > 2026) return null; 
+                                if (monthDate.getFullYear() > 2026) return null;
+                                // Hide months with no priced day (no seasonal rate AND daily_price = 0).
+                                if (!monthHasPricing(boat, seasonalRates, monthDate.getFullYear(), monthDate.getMonth())) return null;
 
                                 const monthName = monthDate.toLocaleString('en-US', { month: 'long', year: 'numeric' });
                                 const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
@@ -689,7 +701,9 @@ export default function BoatView() {
                                                         `}
                                                     >
                                                         <span className={`text-sm font-bold ${isSelected ? 'text-[#0f1117]' : 'text-text-primary'}`}>{d}</span>
-                                                        <span className={`text-[10px] font-bold mt-0.5 ${isSelected ? 'text-[#0f1117]/80' : 'text-primary'}`}>€{price}</span>
+                                                        {price > 0 && (
+                                                            <span className={`text-[10px] font-bold mt-0.5 ${isSelected ? 'text-[#0f1117]/80' : 'text-primary'}`}>€{price}</span>
+                                                        )}
                                                         {isBlocked && (
                                                             <div className="absolute inset-0 flex items-center justify-center">
                                                                 <div className="w-[80%] h-[1px] bg-red-500/30 rotate-45"></div>

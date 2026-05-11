@@ -47,7 +47,7 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
 
             const quoteInserts = selectedBoats.map(boat => {
                 const boatRates = seasonalRates?.filter(r => r.v_uuid === boat.v_uuid) || [];
-                
+
                 let totalBasePrice = 0;
                 let days = 1;
                 let priceBreakdownDescription = "";
@@ -65,7 +65,7 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                         const dateStr = currentDate.toISOString().split('T')[0];
 
                         // Find matching seasonal rate
-                        const matchingRate = boatRates.find(r => 
+                        const matchingRate = boatRates.find(r =>
                             dateStr >= r.start_date && dateStr <= r.end_date
                         );
 
@@ -78,8 +78,10 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                 }
 
                 const basePrice = totalBasePrice;
+                // Locked-price floor: B2C agent margin >= 10% (auto-bump, silent).
+                const effectiveAgentMargin = boat.price_locked ? Math.max(10, agentMargin) : agentMargin;
                 const priceWithAdminMarkup = basePrice * (1 + platformMargin / 100);
-                const priceWithAgentMarkup = priceWithAdminMarkup * (1 + agentMargin / 100);
+                const priceWithAgentMarkup = priceWithAdminMarkup * (1 + effectiveAgentMargin / 100);
                 
                 const breakdown = [];
                 breakdown.push({ 
@@ -91,7 +93,7 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                 if (platformMargin > 0) {
                     breakdown.push({ label: 'Platform Margin', amount: Math.round(priceWithAdminMarkup - basePrice), desc: 'Platform service fee' });
                 }
-                if (agentMargin > 0) {
+                if (effectiveAgentMargin > 0) {
                     breakdown.push({ label: 'Agency Margin', amount: Math.round(priceWithAgentMarkup - priceWithAdminMarkup), desc: 'Agency commission' });
                 }
                 
@@ -107,7 +109,7 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                     check_out: checkOut || null,
                     supplier_base_price: basePrice,
                     admin_markup: platformMargin,
-                    agent_markup: agentMargin,
+                    agent_markup: effectiveAgentMargin,
                     final_price: finalPrice,
                     status: 'draft',
                     agent_id: user?.id,
@@ -215,6 +217,15 @@ export default function BoatQuoteModal({ selectedBoats, checkIn, checkOut, onClo
                                 ))}
                             </select>
                         </div>
+
+                    {selectedBoats.some(b => b.price_locked) && (
+                        <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                            <span className="material-symbols-outlined notranslate text-amber-500 text-base mt-0.5">lock</span>
+                            <p className="text-[10px] text-amber-500 font-bold leading-snug">
+                                One or more selected boats has price locked — B2C agent margin is enforced at minimum 10% (captator 5 + platform 5 + agent 10 = 20% total commission).
+                            </p>
+                        </div>
+                    )}
 
                     {/* Margin Controls - Super Admin Only */}
                     {user?.role === 'super_admin' && (

@@ -25,3 +25,20 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code working dir
+.claude/
+
+# Supabase CLI cache
+supabase/.temp/
+
+# Dev scratch / one-off scripts
+scratch/
+apply_db_fix*.js
+diff.txt
+headers.txt
+schema_body.json
+test_*.cjs
+test_*.mjs
+test_*.json
+verify_*.cjs

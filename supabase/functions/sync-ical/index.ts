@@ -91,44 +91,70 @@ serve(async (req) => {
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, supabaseKey)
 
-  // Optional: sync a single villa via ?v_uuid=...
+  // Optional filters: ?v_uuid=... and ?kind=villa|boat|all (default all)
   const url = new URL(req.url)
   const singleUuid = url.searchParams.get('v_uuid')
+  const kind = (url.searchParams.get('kind') || 'all').toLowerCase()
 
-  let query = supabase
-    .from('properties')
-    .select('v_uuid, ical_url')
-    .not('ical_url', 'is', null)
-    .neq('ical_url', '')
+  async function loadAssets(
+    table: 'properties' | 'boats',
+  ): Promise<Array<{ v_uuid: string; ical_url: string }>> {
+    let q = supabase
+      .from(table)
+      .select('v_uuid, ical_url')
+      .not('ical_url', 'is', null)
+      .neq('ical_url', '')
+    if (singleUuid) q = q.eq('v_uuid', singleUuid)
+    const { data, error } = await q
+    if (error) throw error
+    return (data || []) as Array<{ v_uuid: string; ical_url: string }>
+  }
 
-  if (singleUuid) query = query.eq('v_uuid', singleUuid)
-
-  const { data: villas, error: vErr } = await query
-  if (vErr) {
-    return new Response(JSON.stringify({ error: vErr.message }), {
+  let villas: Array<{ v_uuid: string; ical_url: string }> = []
+  let boats: Array<{ v_uuid: string; ical_url: string }> = []
+  try {
+    if (kind === 'villa' || kind === 'all') villas = await loadAssets('properties')
+    if (kind === 'boat' || kind === 'all') boats = await loadAssets('boats')
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     })
   }
 
-  const results: Array<{ v_uuid: string; ok: boolean; events: number; error?: string }> = []
+  type AssetKind = 'villa' | 'boat'
+  type Job = { kind: AssetKind; v_uuid: string; ical_url: string }
+  const jobs: Job[] = [
+    ...villas.map((v) => ({ kind: 'villa' as const, v_uuid: v.v_uuid, ical_url: v.ical_url })),
+    ...boats.map((b) => ({ kind: 'boat' as const, v_uuid: b.v_uuid, ical_url: b.ical_url })),
+  ]
+
+  function tablesFor(k: AssetKind): { blocked: string; status: string } {
+    return k === 'villa'
+      ? { blocked: 'villa_blocked_dates', status: 'villa_ical_sync_status' }
+      : { blocked: 'boat_blocked_dates', status: 'boat_ical_sync_status' }
+  }
+
+  const results: Array<{ kind: AssetKind; v_uuid: string; ok: boolean; events: number; error?: string }> = []
   const concurrency = 8
   let idx = 0
 
   async function worker() {
-    while (idx < (villas?.length || 0)) {
+    while (idx < jobs.length) {
       const i = idx++
-      const villa = villas![i]
+      const job = jobs[i]
+      const { blocked, status } = tablesFor(job.kind)
       try {
-        const text = await fetchIcalDirect(villa.ical_url)
+        const text = await fetchIcalDirect(job.ical_url)
         if (!text) {
-          await supabase.from('villa_ical_sync_status').upsert({
-            v_uuid: villa.v_uuid,
+          await supabase.from(status).upsert({
+            v_uuid: job.v_uuid,
             last_synced: new Date().toISOString(),
             last_error: 'fetch_failed',
             events_count: 0,
           })
-          results.push({ v_uuid: villa.v_uuid, ok: false, events: 0, error: 'fetch_failed' })
+          results.push({ kind: job.kind, v_uuid: job.v_uuid, ok: false, events: 0, error: 'fetch_failed' })
           continue
         }
 
@@ -139,42 +165,41 @@ serve(async (req) => {
             const end = new Date(e.dtend)
             end.setDate(end.getDate() - 1) // iCal DTEND is exclusive; store inclusive
             return {
-              v_uuid: villa.v_uuid,
+              v_uuid: job.v_uuid,
               start_date: toDateStr(e.dtstart),
               end_date: toDateStr(end < e.dtstart ? e.dtstart : end),
               summary: (e.summary || '').slice(0, 200),
             }
           })
 
-        // Replace: delete existing rows for this villa, then insert fresh ones
         const { error: delErr } = await supabase
-          .from('villa_blocked_dates')
+          .from(blocked)
           .delete()
-          .eq('v_uuid', villa.v_uuid)
+          .eq('v_uuid', job.v_uuid)
         if (delErr) throw delErr
 
         if (rows.length > 0) {
-          const { error: insErr } = await supabase.from('villa_blocked_dates').insert(rows)
+          const { error: insErr } = await supabase.from(blocked).insert(rows)
           if (insErr) throw insErr
         }
 
-        await supabase.from('villa_ical_sync_status').upsert({
-          v_uuid: villa.v_uuid,
+        await supabase.from(status).upsert({
+          v_uuid: job.v_uuid,
           last_synced: new Date().toISOString(),
           last_error: null,
           events_count: rows.length,
         })
 
-        results.push({ v_uuid: villa.v_uuid, ok: true, events: rows.length })
+        results.push({ kind: job.kind, v_uuid: job.v_uuid, ok: true, events: rows.length })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        await supabase.from('villa_ical_sync_status').upsert({
-          v_uuid: villa.v_uuid,
+        await supabase.from(status).upsert({
+          v_uuid: job.v_uuid,
           last_synced: new Date().toISOString(),
           last_error: msg.slice(0, 500),
           events_count: 0,
         })
-        results.push({ v_uuid: villa.v_uuid, ok: false, events: 0, error: msg })
+        results.push({ kind: job.kind, v_uuid: job.v_uuid, ok: false, events: 0, error: msg })
       }
     }
   }
@@ -183,6 +208,8 @@ serve(async (req) => {
 
   const summary = {
     total: results.length,
+    villas: results.filter((r) => r.kind === 'villa').length,
+    boats: results.filter((r) => r.kind === 'boat').length,
     ok: results.filter((r) => r.ok).length,
     failed: results.filter((r) => !r.ok).length,
     total_events: results.reduce((sum, r) => sum + r.events, 0),

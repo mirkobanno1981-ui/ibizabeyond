@@ -32,6 +32,10 @@ import { effectiveCapturerCommission } from './capturerCommission.js';
 
 const STRIPE_FEE_PCT = 3;
 const LAST_MINUTE_DAYS = 42;
+// When a boat is price-locked, the B2C agent margin is silently bumped to at least
+// 10%. Together with the fixed 5% captator + 5% platform this guarantees the >=20%
+// total commission required by locked-price boats (captator 5 / platform 5 / agent 10).
+export const LOCKED_PRICE_MIN_AGENT_PCT = 10;
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const num = (n) => Number(n) || 0;
@@ -84,9 +88,11 @@ export function computeBreakdown({
     checkIn,
     isManual = false,
     manualPrice = null,
+    lockedPrice = false,
 }) {
     const base = round2(supplierBase);
-    const agentP = num(agentPct);
+    // Locked-price boats: silently bump B2C agent margin to the 10% floor.
+    const agentP = lockedPrice ? Math.max(num(agentPct), LOCKED_PRICE_MIN_AGENT_PCT) : num(agentPct);
     const platformP = num(platformPct);
     const editor = round2(editorShare);
     const extrasTotal = round2(extras.reduce((s, e) => s + num(e?.price), 0));

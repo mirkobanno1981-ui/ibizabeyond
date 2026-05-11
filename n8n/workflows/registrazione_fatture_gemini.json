@@ -1,0 +1,166 @@
+{
+  "name": "Registrazione Fatture e Spese AI (Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "event": "fileCreated",
+        "folderId": "INSERISCI_ID_CARTELLA_DRIVE_QUI",
+        "options": {}
+      },
+      "id": "e7b1a1a1-1a1a-4a1a-a1a1-a1a1a1a1a1a1",
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [0, 240]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": "={{ $node[\"Google Drive Trigger\"].json[\"id\"] }}"
+      },
+      "id": "e7b1a1a1-2a2a-4a2a-a2a2-a2a2a2a2a2a2",
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [220, 240]
+    },
+    {
+      "parameters": {
+        "model": "gemini-1.5-flash",
+        "prompt": "Estrai i dati da questa fattura. Rispondi SOLO in JSON con questi campi: vendor_name, date (YYYY-MM-DD), total_amount (numero), invoice_number.",
+        "options": {
+          "responseMimeType": "application/json"
+        }
+      },
+      "id": "e7b1a1a1-3a3a-4a3a-a3a3-a3a3a3a3a3a3",
+      "name": "Gemini AI Analysis",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [440, 240]
+    },
+    {
+      "parameters": {
+        "resource": "expense",
+        "operation": "getAll",
+        "filters": {
+          "reference": "={{ JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).invoice_number }}"
+        }
+      },
+      "id": "e7b1a1a1-4a4a-4a4a-a4a4-a4a4a4a4a4a4",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.invoiceNinja",
+      "typeVersion": 1,
+      "position": [660, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $node[\"Check Duplicate\"].json.length }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals",
+                "singleValue": true
+              },
+              "rightValue": 0
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e7b1a1a1-5a5a-4a5a-a5a5-a5a5a5a5a5a5",
+      "name": "Is New?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 240]
+    },
+    {
+      "parameters": {
+        "resource": "expense",
+        "operation": "create",
+        "amount": "={{ JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).total_amount }}",
+        "additionalFields": {
+          "date": "={{ JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).date }}",
+          "reference": "={{ JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).invoice_number }}",
+          "private_notes": "Registrata da AI Gemini. Fornitore: {{ JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).vendor_name }}"
+        }
+      },
+      "id": "e7b1a1a1-6a6a-4a6a-a6a6-a6a6a6a6a6a6",
+      "name": "Create Expense",
+      "type": "n8n-nodes-base.invoiceNinja",
+      "typeVersion": 1,
+      "position": [1100, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "const date = new Date(JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).date);\nconst month = date.getMonth() + 1;\nconst year = date.getFullYear();\nconst vendor = JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).vendor_name || 'Sconosciuto';\nconst invoice = JSON.parse($node[\"Gemini AI Analysis\"].json[\"text\"]).invoice_number || 'SenzaNumero';\n\nlet quarter = '';\nif (month <= 3) quarter = 'Q1';\nelse if (month <= 6) quarter = 'Q2';\nelse if (month <= 9) quarter = 'Q3';\nelse quarter = 'Q4';\n\nreturn {\n  quarter_folder: `${year}_${quarter}`,\n  new_filename: `${vendor.replace(/[^a-z0-9]/gi, '_')}_Fattura_${invoice.replace(/[^a-z0-9]/gi, '_')}`\n};"
+      },
+      "id": "e7b1a1a1-7a7a-4a7a-a7a7-a7a7a7a7a7a7",
+      "name": "Calculate Quarter & Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 140]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "update",
+        "fileId": "={{ $node[\"Google Drive Trigger\"].json[\"id\"] }}",
+        "updateFields": {
+          "name": "={{ $node[\"Calculate Quarter & Name\"].json[\"new_filename\"] }}",
+          "addParents": "INSERISCI_ID_CARTELLA_ARCHIVIO_QUI",
+          "removeParents": "={{ $node[\"Google Drive Trigger\"].json[\"parents\"][0] }}"
+        }
+      },
+      "id": "e7b1a1a1-8a8a-4a8a-a8a8-a8a8a8a8a8a8",
+      "name": "Move and Rename",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1540, 140]
+    }
+  ],
+  "connections": {
+    "Google Drive Trigger": {
+      "main": [[{ "node": "Download File", "type": "main", "index": 0 }]]
+    },
+    "Download File": {
+      "main": [[{ "node": "Gemini AI Analysis", "type": "main", "index": 0 }]]
+    },
+    "Gemini AI Analysis": {
+      "main": [[{ "node": "Check Duplicate", "type": "main", "index": 0 }]]
+    },
+    "Check Duplicate": {
+      "main": [[{ "node": "Is New?", "type": "main", "index": 0 }]]
+    },
+    "Is New?": {
+      "main": [
+        [{ "node": "Create Expense", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Expense": {
+      "main": [[{ "node": "Calculate Quarter & Name", "type": "main", "index": 0 }]]
+    },
+    "Calculate Quarter & Name": {
+      "main": [[{ "node": "Move and Rename", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

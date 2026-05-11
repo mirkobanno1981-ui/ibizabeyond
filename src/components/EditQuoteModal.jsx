@@ -140,6 +140,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         [supplierBase, editorMargin]
     );
 
+    const lockedPrice = !!quote.boats?.price_locked;
+
     const breakdown = useMemo(() => computeBreakdown({
         supplierBase,
         agentPct: resolvedPcts.agentPct,
@@ -151,7 +153,8 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
         checkIn: quote.check_in,
         isManual,
         manualPrice: isManual ? parseFloat(manualPrice) || 0 : null,
-    }), [supplierBase, resolvedPcts, editorShareEur, editorIncluded, extraServices, ivaPercent, quote.check_in, isManual, manualPrice]);
+        lockedPrice,
+    }), [supplierBase, resolvedPcts, editorShareEur, editorIncluded, extraServices, ivaPercent, quote.check_in, isManual, manualPrice, lockedPrice]);
 
     const computedFinalPrice = breakdown.final_price;
 
@@ -182,6 +185,7 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                 checkIn: quote.check_in,
                 isManual,
                 manualPrice: isManual ? finalPrice : null,
+                lockedPrice,
             });
 
             const baseLabel = quote.properties ? 'Base Accommodation' : 'Base Charter';
@@ -444,6 +448,15 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
                             </div>
                         </label>
                     </div>
+
+                    {lockedPrice && (
+                        <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                            <span className="material-symbols-outlined notranslate text-amber-500 text-base mt-0.5">lock</span>
+                            <p className="text-[10px] text-amber-500 font-bold leading-snug">
+                                Boat price locked — B2C agent margin is enforced at minimum 10% (captator 5 + platform 5 + agent 10 = 20% total commission).
+                            </p>
+                        </div>
+                    )}
 
                     {/* Commissions */}
                     {role === 'super_admin' ? (
