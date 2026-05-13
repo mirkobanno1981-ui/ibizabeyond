@@ -7,6 +7,7 @@ import {
     commitProperty,
     ALLOWED_INGEST_MIME,
 } from '../lib/propertyIngestApi';
+import { extractPhotosFromPdf, extractTextFromPdf } from '../lib/pdfPhotoExtract';
 import FeatureCategoryGrid from './FeatureCategoryGrid';
 import SeasonalPricingCalendar from './SeasonalPricingCalendar';
 
@@ -133,13 +134,54 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
         }
         setStep('extracting');
         try {
+            // Pre-process PDFs client-side: extract embedded images into the gallery queue
+            // and pull text into the prompt, then drop the PDF itself from the upload set.
+            // This keeps the 18 MB Gemini inline budget free for richer image analysis and
+            // ensures source photos land in property_photos at commit.
+            let augmentedText = text;
+            const pdfDerivedFiles = [];
+            const nonPdfSourceFiles = [];
+            for (const entry of files) {
+                if (entry.kind === 'pdf') {
+                    try {
+                        const [photos, pdfText] = await Promise.all([
+                            extractPhotosFromPdf(entry.file),
+                            extractTextFromPdf(entry.file),
+                        ]);
+                        for (const photo of photos) {
+                            pdfDerivedFiles.push({
+                                id: `pdf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                                file: photo,
+                                kind: 'image',
+                                previewUrl: URL.createObjectURL(photo),
+                            });
+                        }
+                        if (pdfText && pdfText.trim()) {
+                            augmentedText = `${augmentedText ? augmentedText + '\n\n' : ''}--- PDF TEXT (${entry.file.name}) ---\n${pdfText}`;
+                        }
+                    } catch (e) {
+                        console.error('PDF preprocess failed', entry.file.name, e);
+                        nonPdfSourceFiles.push(entry); // fall back to raw PDF upload
+                    }
+                } else {
+                    nonPdfSourceFiles.push(entry);
+                }
+            }
+
+            const uploadSet = [...nonPdfSourceFiles, ...pdfDerivedFiles];
+
+            // Expose PDF-derived images in the local file panel so previews work after extract.
+            if (pdfDerivedFiles.length) {
+                setFiles(prev => [...prev, ...pdfDerivedFiles]);
+            }
+
             // Upload files first.
-            const uploadResult = files.length
-                ? await uploadIngestFiles(files.map(f => f.file), { userId: user.id })
+            const uploadResult = uploadSet.length
+                ? await uploadIngestFiles(uploadSet.map(f => f.file), { userId: user.id })
                 : { jobId: null, files: [] };
 
             const { jobId: extractJobId, extracted: ex, confidence: conf } = await extractProperty({
-                text,
+                text: augmentedText,
                 files: uploadResult.files.map(f => ({ path: f.path, mime: f.mime, kind: f.kind })),
                 jobId: uploadResult.jobId,
             });
@@ -170,9 +212,11 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
             setAiFields(ai);
 
             // Build photo previews — match photo_descriptions by file_index against image files.
+            // `uploadSet` is the in-handler authoritative list (state `files` does not yet
+            // include PDF-derived images at this point because setFiles is async).
             const photoFiles = uploadResult.files.filter(f => f.kind === 'image');
             const descriptions = Array.isArray(ex.photo_descriptions) ? ex.photo_descriptions : [];
-            const localImages = files.filter(f => f.kind === 'image');
+            const localImages = uploadSet.filter(f => f.kind === 'image');
             const photoState = photoFiles.map((f, idx) => {
                 const desc = descriptions.find(d => d.file_index === idx);
                 return {
@@ -189,7 +233,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
 
             // Build video refs (uploaded videos go to property_videos at commit).
             const remoteVideos = uploadResult.files.filter(f => f.kind === 'video');
-            const localVideos = files.filter(f => f.kind === 'video');
+            const localVideos = uploadSet.filter(f => f.kind === 'video');
             setVideoRefs(remoteVideos.map((f, idx) => ({
                 path: f.path,
                 name: f.name,

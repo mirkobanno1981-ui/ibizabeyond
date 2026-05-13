@@ -189,6 +189,21 @@ async function handleExtract(opts: {
     .order('category')
   const amenityList = (amenities || []).map((a: any) => `${a.category}: ${a.label}`).join('\n')
 
+  // Pull a handful of high-quality existing villa descriptions to anchor the
+  // model's writing style (tone, paragraph cadence, target length). Service-role
+  // read so we are not blocked by RLS on inactive rows.
+  const { data: styleSamples } = await supaService
+    .from('properties')
+    .select('villa_name, tagline, description')
+    .eq('is_active', true)
+    .not('description', 'is', null)
+    .limit(80)
+  const longSamples = (styleSamples || []).filter((s: any) => (s.description || '').length >= 400)
+  const pickedSamples = pickRandom(longSamples, 6)
+  const styleBlock = pickedSamples
+    .map((s: any, i: number) => `### Example ${i + 1}: ${s.villa_name}\nTagline: ${s.tagline || '(none)'}\nDescription:\n${s.description}`)
+    .join('\n\n')
+
   // Download all files via service-role (bypasses storage RLS for bucket reads).
   const fileParts: any[] = []
   let totalBytes = 0
@@ -215,11 +230,11 @@ async function handleExtract(opts: {
     })
   }
 
-  const systemPrompt = buildSystemPrompt(amenityList)
+  const systemPrompt = buildSystemPrompt(amenityList, styleBlock)
 
   const parts: any[] = [{ text: systemPrompt }]
-  if (rawText.trim()) parts.push({ text: `\n--- DESCRIZIONE UTENTE ---\n${rawText}` })
-  if (fileParts.length) parts.push({ text: `\n--- ALLEGATI (${fileParts.length} file) ---` })
+  if (rawText.trim()) parts.push({ text: `\n--- USER / SOURCE TEXT ---\n${rawText}` })
+  if (fileParts.length) parts.push({ text: `\n--- ATTACHMENTS (${fileParts.length} files) ---` })
   parts.push(...fileParts)
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${geminiKey}`
@@ -582,26 +597,59 @@ async function handleCommit(opts: {
   })
 }
 
-function buildSystemPrompt(amenityList: string): string {
-  return `Sei un assistente che estrae informazioni strutturate su proprietà immobiliari da affittare a Ibiza.
-Riceverai una descrizione testuale e/o file allegati (foto, PDF brochure, registrazioni audio in italiano/inglese/spagnolo, video tour).
-Il tuo compito: produrre un JSON che corrisponda allo schema fornito.
+function buildSystemPrompt(amenityList: string, styleBlock: string): string {
+  const styleSection = styleBlock
+    ? `\n--- HOUSE STYLE EXAMPLES (match this voice, paragraph rhythm and target length) ---\n${styleBlock}\n--- END EXAMPLES ---\n`
+    : ''
+  return `You extract structured information about Ibiza rental properties from text, photos, PDF brochures, audio (Italian/English/Spanish) and video tours.
+Produce a JSON object matching the provided schema. ALL output text MUST be written in English regardless of the source language.
 
-Linee guida:
-- Se un campo non è desumibile, omettilo (NON inventare).
-- "property_type": villa = casa indipendente con giardino/piscina; apartment = unità in edificio; finca = casale rustico.
-- "features": preferisci ETICHETTE ESATTE da questa lista del catalogo (case sensitive):
+Translate any non-English source content into natural English before placing it in tagline/description/feature fields.
+
+GENERAL RULES:
+- If a field is not derivable from the sources, omit it. Never invent.
+- "property_type": villa = standalone house with garden/pool; apartment = unit inside a building; finca = rustic country house.
+- "confidence": 0..1, your overall extraction confidence.
+
+DESCRIPTION & TAGLINE (most important):
+- Write in English, in the same voice, register and structural cadence as the HOUSE STYLE EXAMPLES below.
+- Match the typical length of those examples (usually 250-500 words split into 2-4 paragraphs). If sources are very sparse, still write at least one rich paragraph rather than a single sentence.
+- Open with a hook describing the setting/location and atmosphere; then describe the property's spaces (living, kitchen, bedrooms, bathrooms, outdoor area, pool, views); close with a line on the lifestyle / type of guest it suits.
+- Weave in concrete, visible details from photos: materials (stone, wood, white-washed walls, travertine), furniture style, lighting, layout flow, terraces, sun loungers, BBQ, sea/sunset/countryside views, nearby beaches/towns.
+- Do NOT use bullet lists in the description — flowing prose only. No marketing clichés like "a dream come true"; mirror the examples' restraint.
+- "tagline": one short evocative line (max ~12 words), English, same register as examples.
+
+FEATURES (be exhaustive):
+- Inspect EVERY photo, page and sentence. List every amenity you can confirm: pool type, jacuzzi, sea/sunset view, A/C, heating, fireplace, BBQ, outdoor kitchen, dining areas, sun loungers, terraces, garden, parking, EV charger, gym, sauna, hammam, cinema room, smart TV, sound system, Wi-Fi, baby cot, high chair, washing machine, dishwasher, safe, alarm, gated access, staff/concierge, etc.
+- Prefer EXACT labels (case-sensitive) from this catalog:
 ${amenityList}
-  Aggiungi etichette libere SOLO se nessuna del catalogo corrisponde.
-- "photo_descriptions": indicizza con file_index = posizione 0-based dei file IMMAGINE allegati (ignora video/audio/PDF nel conteggio). Marca is_cover=true al massimo per UNA foto (la più rappresentativa, di solito esterna con piscina/vista).
-- "minimum_price"/"maximum_price": prezzo per notte in EURO, range stagionale se presente.
-- "rental_types": elenca le modalità di affitto offerte ESPLICITAMENTE nella sorgente. Valori validi: daily (giornaliero/settimanale, tipico turistico breve), monthly (mensile, mid-term), seasonal (stagionale, es. giugno-settembre), annual (annuale, long-term). Per ognuna includi enabled=true se citata e typical_price se è dato un canone. NON dedurre modalità non menzionate.
-- "seasonal_prices": se la sorgente contiene una tabella di prezzi per periodo (es. "Bassa stagione 01/04-15/06: €800/notte", "Alta stagione 01/07-31/08: €1500/notte"), emetti UN entry per periodo con date ISO YYYY-MM-DD. Se solo un'etichetta stagionale è data senza date, deduci date tipiche di Ibiza: Bassa ≈ 01/04-31/05 + 01/10-31/10, Media ≈ 01/06-30/06 + 01/09-30/09, Alta ≈ 01/07-31/08. Se i prezzi sono settimanali, dividi per 7 per ottenere prezzo a notte. Se nella sorgente c'è un solo prezzo notte senza periodi, lascia seasonal_prices vuoto.
-- "confidence": 0..1, quanto sei sicuro dell'estrazione complessiva.
-- Audio: trascrivi mentalmente e usa solo i contenuti pertinenti alla proprietà.
-- Video: estrai dettagli visivi (vista, qualità arredamento, ambienti) come faresti dalle foto.
+  Add free-text labels ONLY when nothing in the catalog matches. Do not duplicate.
 
-Rispondi SOLO con JSON valido conforme allo schema.`
+CAPACITY / PRICING:
+- "bedrooms"/"bathrooms"/"sleeps": prefer explicit figures; otherwise count bedrooms visible in floor plans / photos.
+- "minimum_price"/"maximum_price": EUR per night, seasonal range if present.
+- "rental_types": list only modes EXPLICITLY offered in the source. Valid: daily, monthly, seasonal, annual. Set enabled=true if cited; include typical_price when given. Do NOT infer unmentioned modes.
+- "seasonal_prices": if a per-period rate table is present (e.g. "Low season 01/04-15/06: €800/night"), emit one entry per period with ISO YYYY-MM-DD dates. If only a seasonal label without dates is given, infer typical Ibiza ranges: Low ≈ 01/04-31/05 + 01/10-31/10, Mid ≈ 01/06-30/06 + 01/09-30/09, High ≈ 01/07-31/08. If prices are weekly, divide by 7. If only a single nightly price exists with no period, leave seasonal_prices empty.
+
+PHOTOS:
+- "photo_descriptions": index by file_index = 0-based position among IMAGE files attached (skip video/audio/PDF when counting). Mark is_cover=true on AT MOST ONE photo — usually an exterior shot showing pool, view or the building's most representative angle.
+- "caption": short English caption describing the specific space/view in the photo.
+
+AUDIO / VIDEO:
+- Audio: mentally transcribe, then extract only property-relevant facts.
+- Video: extract visible details (views, finishes, spaces) as you would from photos.
+${styleSection}
+Respond with VALID JSON only, conforming to the schema.`
+}
+
+function pickRandom<T>(arr: T[], n: number): T[] {
+  if (!arr.length) return []
+  const copy = arr.slice()
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy.slice(0, Math.min(n, copy.length))
 }
 
 async function markFailed(supabase: any, jobId: string, error: string) {
