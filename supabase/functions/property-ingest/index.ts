@@ -14,6 +14,31 @@ const MAX_INLINE_BYTES = 18 * 1024 * 1024 // ~18 MB safety margin under 20 MB Ge
 
 const RENTAL_TYPES = ['daily', 'monthly', 'seasonal', 'annual'] as const
 
+// Ordered by gallery priority — exterior shots first, intimate spaces last.
+const ROOM_TYPES = [
+  'exterior_pool',
+  'exterior_view',
+  'exterior_facade',
+  'terrace',
+  'garden',
+  'living',
+  'dining',
+  'kitchen',
+  'master_bedroom',
+  'bedroom',
+  'bathroom',
+  'office',
+  'gym',
+  'cinema',
+  'spa',
+  'detail',
+  'floor_plan',
+  'other',
+] as const
+const ROOM_TYPE_PRIORITY: Record<string, number> = Object.fromEntries(
+  ROOM_TYPES.map((r, i) => [r, i]),
+)
+
 // JSON-Schema (subset) for Gemini structured output. Keep aligned with properties table.
 const PROPERTY_SCHEMA = {
   type: 'OBJECT',
@@ -44,6 +69,11 @@ const PROPERTY_SCHEMA = {
           file_index: { type: 'INTEGER' },
           caption: { type: 'STRING' },
           is_cover: { type: 'BOOLEAN' },
+          room_type: {
+            type: 'STRING',
+            description: 'Space depicted in the photo. Use exterior_pool for pool/exterior with pool, exterior_view for landscape/sea views, exterior_facade for the building exterior, terrace/garden, living, dining, kitchen, master_bedroom (largest/main), bedroom, bathroom, office, gym, cinema, spa, detail (close-ups, materials), floor_plan, other.',
+            enum: ['exterior_pool', 'exterior_view', 'exterior_facade', 'terrace', 'garden', 'living', 'dining', 'kitchen', 'master_bedroom', 'bedroom', 'bathroom', 'office', 'gym', 'cinema', 'spa', 'detail', 'floor_plan', 'other'],
+          },
         },
         required: ['file_index'],
       },
@@ -384,6 +414,7 @@ interface PhotoCommit {
   path: string                  // path in villa-ingest-tmp
   caption?: string
   is_cover?: boolean
+  room_type?: string
 }
 
 interface VideoCommit {
@@ -466,10 +497,25 @@ async function handleCommit(opts: {
   }
   const vUuid = inserted.v_uuid
 
+  // Sort photos: cover first (sort_order 0), then by room_type priority,
+  // ties broken by original input order. Index-stable so two bedrooms keep
+  // their incoming sequence.
+  const orderedPhotos = photos
+    .map((p, originalIndex) => ({ p, originalIndex }))
+    .sort((a, b) => {
+      const aCover = a.p.is_cover ? 0 : 1
+      const bCover = b.p.is_cover ? 0 : 1
+      if (aCover !== bCover) return aCover - bCover
+      const aRank = ROOM_TYPE_PRIORITY[a.p.room_type || 'other'] ?? ROOM_TYPE_PRIORITY.other
+      const bRank = ROOM_TYPE_PRIORITY[b.p.room_type || 'other'] ?? ROOM_TYPE_PRIORITY.other
+      if (aRank !== bRank) return aRank - bRank
+      return a.originalIndex - b.originalIndex
+    })
+
   // Move photos from villa-ingest-tmp to villa-photos and insert property_photos rows.
   let coverUrl: string | null = null
-  for (let i = 0; i < photos.length; i++) {
-    const p = photos[i]
+  for (let i = 0; i < orderedPhotos.length; i++) {
+    const { p } = orderedPhotos[i]
     try {
       const { data: blob, error: dlErr } = await supaService.storage
         .from('villa-ingest-tmp')
@@ -497,7 +543,8 @@ async function handleCommit(opts: {
           thumbnail_url: url,
           storage_path: destPath,
           caption: p.caption || null,
-          sort_order: p.is_cover ? 0 : i + 1,
+          room_type: p.room_type || null,
+          sort_order: i,
         })
       if (photoInsErr) {
         console.error('photo row insert failed', photoInsErr)
@@ -651,12 +698,18 @@ GENERAL RULES:
 - "property_type": villa = standalone house with garden/pool; apartment = unit inside a building; finca = rustic country house.
 - "confidence": 0..1, your overall extraction confidence.
 
-DESCRIPTION & TAGLINE (most important):
-- Write in English, in the same voice, register and structural cadence as the HOUSE STYLE EXAMPLES below.
-- Match the typical length of those examples (usually 250-500 words split into 2-4 paragraphs). If sources are very sparse, still write at least one rich paragraph rather than a single sentence.
-- Open with a hook describing the setting/location and atmosphere; then describe the property's spaces (living, kitchen, bedrooms, bathrooms, outdoor area, pool, views); close with a line on the lifestyle / type of guest it suits.
-- Weave in concrete, visible details from photos: materials (stone, wood, white-washed walls, travertine), furniture style, lighting, layout flow, terraces, sun loungers, BBQ, sea/sunset/countryside views, nearby beaches/towns.
-- Do NOT use bullet lists in the description — flowing prose only. No marketing clichés like "a dream come true"; mirror the examples' restraint.
+DESCRIPTION & TAGLINE (most important — be as complete as possible):
+- Write in English, in the same voice, register, vocabulary and structural cadence as the HOUSE STYLE EXAMPLES below. Reuse the examples' phrasing patterns (sentence openers, paragraph transitions, signature adjectives) without copying any sentence verbatim.
+- Target 400-700 words split into 4-6 paragraphs. Always go long; if sources are sparse, infer plausible detail from photos rather than truncating. Never produce a single-paragraph stub.
+- STRUCTURE:
+  1. Hook paragraph — setting, micro-location, atmosphere, sense of arrival.
+  2. Exterior paragraph — facade/architecture, pool (size/shape/orientation), terraces, sun-loungers, dining al fresco, BBQ, garden, view (sea, sunset, countryside, town).
+  3. Living spaces paragraph — open-plan/closed layout, living room (sofas, fireplace, finishes), dining area, kitchen (appliances, island, breakfast bar), media room/library if present.
+  4. Bedrooms & bathrooms paragraph — count, distribution across floors, master suite features, en-suites, walk-in wardrobes, finishes (travertine, marble, terrazzo, white walls, wood).
+  5. Amenities & services paragraph — A/C, heating, Wi-Fi, smart TV, sound system, gym, sauna, spa, cinema, office, laundry room, staff (chef/cleaner/concierge), parking, gated access, EV charger, baby kit.
+  6. Lifestyle / closing paragraph — proximity to beaches, towns, restaurants, ports; ideal guest profile (couples, families, friend groups, events); seasonal vibe.
+- Weave in concrete, visible details from EVERY photo: materials (stone, wood, white-washed walls, travertine, terrazzo), furniture style (minimalist, Mediterranean, mid-century, ibicenco), lighting, ceiling heights, layout flow, terrace orientations, hammocks, sun loungers, BBQ, sea/sunset/countryside views, nearby beaches/towns.
+- Do NOT use bullet lists in the description — flowing prose only. No marketing clichés like "a dream come true", "paradise on earth", "magical"; mirror the examples' restraint and concrete specificity.
 - "tagline": one short evocative line (max ~12 words), English, same register as examples.
 
 FEATURES (be exhaustive):
@@ -673,7 +726,8 @@ CAPACITY / PRICING:
 
 PHOTOS:
 - "photo_descriptions": index by file_index = 0-based position among IMAGE files attached (skip video/audio/PDF when counting). Mark is_cover=true on AT MOST ONE photo — usually an exterior shot showing pool, view or the building's most representative angle.
-- "caption": short English caption describing the specific space/view in the photo.
+- "caption": short English caption (5-12 words) describing the specific space/view in the photo (e.g. "Infinity pool overlooking Cala Salada at sunset", "Master suite with sea-view balcony").
+- "room_type": classify EVERY photo with one of: exterior_pool (pool/sun terrace), exterior_view (landscape/sea/coastline shot), exterior_facade (the building exterior, entrance), terrace (balcony or covered terrace), garden (lawn, plants, paths), living (lounge/sitting room), dining (dining table/area), kitchen, master_bedroom (the largest/main bedroom), bedroom (any other bedroom), bathroom, office, gym, cinema, spa (sauna/hammam/jacuzzi indoor), detail (close-up, materials, decor), floor_plan, other.
 
 AUDIO / VIDEO:
 - Audio: mentally transcribe, then extract only property-relevant facts.

@@ -27,6 +27,28 @@ const RENTAL_TYPE_LABELS = {
 };
 const RENTAL_TYPE_KEYS = ['daily', 'monthly', 'seasonal', 'annual'];
 
+const ROOM_TYPE_LABELS = {
+    exterior_pool: 'Pool',
+    exterior_view: 'View',
+    exterior_facade: 'Facade',
+    terrace: 'Terrace',
+    garden: 'Garden',
+    living: 'Living',
+    dining: 'Dining',
+    kitchen: 'Kitchen',
+    master_bedroom: 'Master',
+    bedroom: 'Bedroom',
+    bathroom: 'Bathroom',
+    office: 'Office',
+    gym: 'Gym',
+    cinema: 'Cinema',
+    spa: 'Spa',
+    detail: 'Detail',
+    floor_plan: 'Floor plan',
+    other: 'Other',
+};
+const ROOM_TYPE_KEYS = Object.keys(ROOM_TYPE_LABELS);
+
 function inferKind(mime) {
     if (!mime) return 'text';
     if (mime.startsWith('image/')) return 'image';
@@ -225,6 +247,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                     previewUrl: localImages[idx]?.previewUrl || null,
                     caption: desc?.caption || '',
                     is_cover: !!desc?.is_cover,
+                    room_type: ROOM_TYPE_KEYS.includes(desc?.room_type) ? desc.room_type : '',
                 };
             });
             // Ensure exactly one cover (first one if AI didn't pick).
@@ -275,6 +298,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
     const handleField = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
     const setCover = idx => setPhotos(prev => prev.map((p, i) => ({ ...p, is_cover: i === idx })));
     const setCaption = (idx, caption) => setPhotos(prev => prev.map((p, i) => (i === idx ? { ...p, caption } : p)));
+    const setRoomType = (idx, room_type) => setPhotos(prev => prev.map((p, i) => (i === idx ? { ...p, room_type } : p)));
     const setVideoCaption = (idx, caption) => setVideoRefs(prev => prev.map((v, i) => (i === idx ? { ...v, caption } : v)));
 
     const toggleRentalType = (key) => {
@@ -322,7 +346,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                 edited: {
                     ...form,
                     rental_type_configs: rentalTypeConfigs,
-                    photos: photos.map(p => ({ path: p.path, caption: p.caption, is_cover: p.is_cover })),
+                    photos: photos.map(p => ({ path: p.path, caption: p.caption, is_cover: p.is_cover, room_type: p.room_type || null })),
                     videos: videoRefs.map(v => ({ path: v.path, caption: v.caption })),
                     seasonal_rates: seasonalRates.map(({ id, _ai, ...rest }) => rest),
                 },
@@ -670,6 +694,16 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                                 >
                                                     {p.is_cover ? '★ Cover' : '☆ Cover'}
                                                 </button>
+                                                <select
+                                                    value={p.room_type || ''}
+                                                    onChange={e => setRoomType(idx, e.target.value)}
+                                                    className="absolute top-2 right-2 bg-black/60 text-white text-[9px] font-bold uppercase rounded-full px-1.5 py-0.5 shadow outline-none border-0"
+                                                >
+                                                    <option value="">— type —</option>
+                                                    {ROOM_TYPE_KEYS.map(k => (
+                                                        <option key={k} value={k}>{ROOM_TYPE_LABELS[k]}</option>
+                                                    ))}
+                                                </select>
                                                 <input
                                                     type="text"
                                                     value={p.caption}
