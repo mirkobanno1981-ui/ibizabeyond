@@ -37,7 +37,7 @@ export async function uploadIngestFiles(files, { userId, jobId } = {}) {
     let totalBytes = 0;
     for (const f of processed) totalBytes += f.size;
     if (totalBytes > MAX_CUMULATIVE_BYTES) {
-        throw new Error(`File totali ${(totalBytes / 1024 / 1024).toFixed(1)} MB superano il limite di 18 MB. Riduci/comprimi (i video lunghi vanno tagliati o ricompressi).`);
+        throw new Error(`Total files ${(totalBytes / 1024 / 1024).toFixed(1)} MB exceed the 18 MB limit. Reduce/compress them (trim or re-encode long videos).`);
     }
 
     // Upload with bounded concurrency (4 at a time) — sequential was the main wall-clock cost.
@@ -55,7 +55,7 @@ export async function uploadIngestFiles(files, { userId, jobId } = {}) {
                 contentType: f.type,
                 upsert: false,
             });
-            if (error) throw new Error(`Upload fallito (${f.name}): ${error.message}`);
+            if (error) throw new Error(`Upload failed (${f.name}): ${error.message}`);
             refs[i] = { path, mime: f.type, kind: inferKind(f.type), size: f.size, name: f.name };
         }
     }

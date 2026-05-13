@@ -20,10 +20,10 @@ const KIND_ICON = {
 };
 
 const RENTAL_TYPE_LABELS = {
-    daily: 'Giornaliero / Settimanale',
-    monthly: 'Mensile (mid-term)',
-    seasonal: 'Stagionale',
-    annual: 'Annuale (long-term)',
+    daily: 'Daily / Weekly',
+    monthly: 'Monthly (mid-term)',
+    seasonal: 'Seasonal',
+    annual: 'Annual (long-term)',
 };
 const RENTAL_TYPE_KEYS = ['daily', 'monthly', 'seasonal', 'annual'];
 
@@ -38,7 +38,7 @@ function inferKind(mime) {
 
 const AiBadge = () => (
     <span
-        title="Estratto da AI — verifica e correggi se necessario"
+        title="Extracted by AI — verify and correct if needed"
         className="inline-flex items-center px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[9px] font-bold uppercase tracking-widest ml-1.5"
     >
         AI
@@ -129,7 +129,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
     const handleExtract = async () => {
         setError(null);
         if (!text.trim() && files.length === 0) {
-            setError('Inserisci una descrizione o carica almeno un file.');
+            setError('Enter a description or upload at least one file.');
             return;
         }
         setStep('extracting');
@@ -312,7 +312,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
     const handleCommit = async () => {
         setError(null);
         if (!form.villa_name?.trim()) {
-            setError('Nome proprietà obbligatorio.');
+            setError('Property name is required.');
             return;
         }
         setStep('committing');
@@ -345,12 +345,12 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                         <span className="material-symbols-outlined notranslate text-2xl">auto_awesome</span>
                     </div>
                     <div className="flex-1 min-w-0">
-                        <h2 className="text-lg font-bold text-text-primary truncate">Aggiungi proprietà con AI</h2>
+                        <h2 className="text-lg font-bold text-text-primary truncate">Add property with AI</h2>
                         <p className="text-xs text-text-muted mt-0.5 truncate">
-                            {step === 'intake' && 'Descrivi la proprietà o allega file (foto, PDF, audio).'}
-                            {step === 'extracting' && 'Estrazione in corso con Gemini multimodale...'}
-                            {step === 'preview' && 'Verifica e modifica i dati estratti, poi salva.'}
-                            {step === 'committing' && 'Salvataggio in corso...'}
+                            {step === 'intake' && 'Describe the property or attach files (photos, PDF, audio).'}
+                            {step === 'extracting' && 'Extraction running with multimodal Gemini...'}
+                            {step === 'preview' && 'Review and edit the extracted data, then save.'}
+                            {step === 'committing' && 'Saving...'}
                         </p>
                     </div>
                     <button
@@ -373,11 +373,11 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                     {step === 'intake' && (
                         <>
                             <div>
-                                <label className="block text-xs text-text-muted mb-1.5 font-medium">Descrizione (opzionale)</label>
+                                <label className="block text-xs text-text-muted mb-1.5 font-medium">Description (optional)</label>
                                 <textarea
                                     className="input-theme w-full resize-none"
                                     rows={5}
-                                    placeholder="Es: Villa Can Pep, Santa Eulalia, 5 camere, 4 bagni, vista mare, piscina infinity, 800-1200€/notte..."
+                                    placeholder="e.g. Villa Can Pep, Santa Eulalia, 5 bedrooms, 4 bathrooms, sea view, infinity pool, €800-1200/night..."
                                     value={text}
                                     onChange={e => setText(e.target.value)}
                                 />
@@ -395,10 +395,10 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                     <input {...getInputProps()} />
                                     <span className="material-symbols-outlined notranslate text-4xl text-text-muted">cloud_upload</span>
                                     <p className="text-sm font-medium text-text-primary mt-2">
-                                        {isDragActive ? 'Rilascia qui i file' : 'Trascina file o clicca per selezionare'}
+                                        {isDragActive ? 'Drop the files here' : 'Drag files or click to select'}
                                     </p>
                                     <p className="text-[10px] text-text-muted mt-1">
-                                        Foto (JPG/PNG/WEBP/HEIC), PDF, audio (MP3/WAV/M4A/AAC/FLAC), video (MP4/MOV/WEBM), testo · max 18 MB totali
+                                        Photos (JPG/PNG/WEBP/HEIC), PDF, audio (MP3/WAV/M4A/AAC/FLAC), video (MP4/MOV/WEBM), text · max 18 MB total
                                     </p>
                                 </div>
 
@@ -437,9 +437,9 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                     {step === 'extracting' && (
                         <div className="flex flex-col items-center justify-center py-12 gap-3">
                             <span className="material-symbols-outlined notranslate text-5xl text-primary animate-pulse">auto_awesome</span>
-                            <p className="text-sm text-text-primary font-medium">Analisi in corso...</p>
+                            <p className="text-sm text-text-primary font-medium">Analysing...</p>
                             <p className="text-[11px] text-text-muted text-center max-w-xs">
-                                Gemini sta estraendo nome, camere, prezzi, tipologie di affitto, dotazioni e altri dettagli da testo, foto, PDF, audio e video.
+                                Gemini is extracting name, bedrooms, prices, rental types, amenities and other details from text, photos, PDF, audio and video.
                             </p>
                         </div>
                     )}
@@ -457,18 +457,18 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                     <span className="material-symbols-outlined notranslate text-[16px]">
                                         {confidence >= 0.7 ? 'check_circle' : 'warning'}
                                     </span>
-                                    Confidenza estrazione: {Math.round(confidence * 100)}%. Verifica attentamente i campi prima di salvare.
+                                    Extraction confidence: {Math.round(confidence * 100)}%. Review every field carefully before saving.
                                 </div>
                             )}
 
                             <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Identità</p>
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Identity</p>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <Field label="Nome proprietà *" value={form.villa_name} onChange={v => handleField('villa_name', v)} aiHighlight={aiFields.has('villa_name')} fullWidth />
+                                    <Field label="Property name *" value={form.villa_name} onChange={v => handleField('villa_name', v)} aiHighlight={aiFields.has('villa_name')} fullWidth />
                                     <Field label="Tagline" value={form.tagline} onChange={v => handleField('tagline', v)} aiHighlight={aiFields.has('tagline')} fullWidth />
                                     <div className="col-span-2">
                                         <label className="block text-xs text-text-muted mb-1.5 font-medium">
-                                            Tipo {aiFields.has('property_type') && <AiBadge />}
+                                            Type {aiFields.has('property_type') && <AiBadge />}
                                         </label>
                                         <select
                                             className="input-theme w-full"
@@ -476,42 +476,42 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                             onChange={e => handleField('property_type', e.target.value)}
                                         >
                                             <option value="villa">Villa</option>
-                                            <option value="apartment">Appartamento</option>
+                                            <option value="apartment">Apartment</option>
                                         </select>
                                     </div>
-                                    <Field label="Area / Quartiere" value={form.areaname} onChange={v => handleField('areaname', v)} aiHighlight={aiFields.has('areaname')} />
-                                    <Field label="Comune" value={form.district} onChange={v => handleField('district', v)} aiHighlight={aiFields.has('district')} />
-                                    <Field label="Licenza turistica" value={form.license} onChange={v => handleField('license', v)} aiHighlight={aiFields.has('license')} />
+                                    <Field label="Area / Neighbourhood" value={form.areaname} onChange={v => handleField('areaname', v)} aiHighlight={aiFields.has('areaname')} />
+                                    <Field label="Municipality" value={form.district} onChange={v => handleField('district', v)} aiHighlight={aiFields.has('district')} />
+                                    <Field label="Tourist licence" value={form.license} onChange={v => handleField('license', v)} aiHighlight={aiFields.has('license')} />
                                     <Field label="GPS (lat,lng)" value={form.gps} onChange={v => handleField('gps', v)} aiHighlight={aiFields.has('gps')} />
                                 </div>
                             </div>
 
                             <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Capacità</p>
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Capacity</p>
                                 <div className="grid grid-cols-3 gap-4">
-                                    <Field label="Camere" value={form.bedrooms} onChange={v => handleField('bedrooms', v)} aiHighlight={aiFields.has('bedrooms')} type="number" />
-                                    <Field label="Bagni" value={form.bathrooms} onChange={v => handleField('bathrooms', v)} aiHighlight={aiFields.has('bathrooms')} type="number" />
-                                    <Field label="Posti letto" value={form.sleeps} onChange={v => handleField('sleeps', v)} aiHighlight={aiFields.has('sleeps')} type="number" />
+                                    <Field label="Bedrooms" value={form.bedrooms} onChange={v => handleField('bedrooms', v)} aiHighlight={aiFields.has('bedrooms')} type="number" />
+                                    <Field label="Bathrooms" value={form.bathrooms} onChange={v => handleField('bathrooms', v)} aiHighlight={aiFields.has('bathrooms')} type="number" />
+                                    <Field label="Sleeps" value={form.sleeps} onChange={v => handleField('sleeps', v)} aiHighlight={aiFields.has('sleeps')} type="number" />
                                 </div>
                             </div>
 
                             <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Prezzi (€)</p>
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Pricing (€)</p>
                                 <div className="grid grid-cols-4 gap-4">
                                     <Field label="Min" value={form.minimum_price} onChange={v => handleField('minimum_price', v)} aiHighlight={aiFields.has('minimum_price')} type="number" />
                                     <Field label="Max" value={form.maximum_price} onChange={v => handleField('maximum_price', v)} aiHighlight={aiFields.has('maximum_price')} type="number" />
-                                    <Field label="Pulizia" value={form.cleaning_charge} onChange={v => handleField('cleaning_charge', v)} aiHighlight={aiFields.has('cleaning_charge')} type="number" />
-                                    <Field label="Cauzione" value={form.deposit} onChange={v => handleField('deposit', v)} aiHighlight={aiFields.has('deposit')} type="number" />
+                                    <Field label="Cleaning" value={form.cleaning_charge} onChange={v => handleField('cleaning_charge', v)} aiHighlight={aiFields.has('cleaning_charge')} type="number" />
+                                    <Field label="Deposit" value={form.deposit} onChange={v => handleField('deposit', v)} aiHighlight={aiFields.has('deposit')} type="number" />
                                 </div>
                             </div>
 
                             <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Politiche</p>
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Policies</p>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <Field label="Notti minime" value={form.minimum_nights} onChange={v => handleField('minimum_nights', v)} aiHighlight={aiFields.has('minimum_nights')} type="number" />
+                                    <Field label="Minimum nights" value={form.minimum_nights} onChange={v => handleField('minimum_nights', v)} aiHighlight={aiFields.has('minimum_nights')} type="number" />
                                     <div>
                                         <label className="block text-xs text-text-muted mb-1.5 font-medium">
-                                            Soggiorni brevi {aiFields.has('allow_shortstays') && <AiBadge />}
+                                            Short stays {aiFields.has('allow_shortstays') && <AiBadge />}
                                         </label>
                                         <select
                                             className="input-theme w-full"
@@ -519,7 +519,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                             onChange={e => handleField('allow_shortstays', e.target.value)}
                                         >
                                             <option value="no">No</option>
-                                            <option value="yes">Sì</option>
+                                            <option value="yes">Yes</option>
                                         </select>
                                     </div>
                                 </div>
@@ -527,7 +527,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
 
                             <div>
                                 <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3 flex items-center gap-2">
-                                    Tipologie di affitto
+                                    Rental types
                                     {aiFields.has('rental_type_configs') && <AiBadge />}
                                 </p>
                                 <div className="grid grid-cols-2 gap-3">
@@ -556,11 +556,11 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                                 {cfg.enabled && (
                                                     <div className="mt-2">
                                                         <label className="block text-[10px] text-text-muted mb-1">
-                                                            Prezzo indicativo (€)
-                                                            {key === 'daily' && ' / notte'}
-                                                            {key === 'monthly' && ' / mese'}
-                                                            {key === 'seasonal' && ' / stagione'}
-                                                            {key === 'annual' && ' / anno'}
+                                                            Indicative price (€)
+                                                            {key === 'daily' && ' / night'}
+                                                            {key === 'monthly' && ' / month'}
+                                                            {key === 'seasonal' && ' / season'}
+                                                            {key === 'annual' && ' / year'}
                                                         </label>
                                                         <input
                                                             type="number"
@@ -580,12 +580,12 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                 <div className="flex items-center justify-between mb-3">
                                     <p className="text-[11px] font-semibold uppercase tracking-widest text-primary flex items-center gap-2">
                                         <span className="material-symbols-outlined notranslate text-sm">calendar_month</span>
-                                        Prezzi stagionali (per notte)
+                                        Seasonal pricing (per night)
                                         {seasonalRates.some(r => r._ai) && <AiBadge />}
                                     </p>
                                     {seasonalRates.length > 0 && (
                                         <span className="text-[10px] text-amber-400 font-black uppercase tracking-widest">
-                                            {seasonalRates.length} {seasonalRates.length > 1 ? 'tariffe' : 'tariffa'} pendenti
+                                            {seasonalRates.length} {seasonalRates.length > 1 ? 'rates' : 'rate'} pending
                                         </span>
                                     )}
                                 </div>
@@ -599,7 +599,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
 
                             <div>
                                 <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">
-                                    Dotazioni {aiFields.has('features') && <AiBadge />}
+                                    Amenities {aiFields.has('features') && <AiBadge />}
                                 </p>
                                 <FeatureCategoryGrid
                                     selected={form.features || []}
@@ -608,8 +608,8 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                             </div>
 
                             <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Descrizione</p>
-                                <Field label="Descrizione dettagliata" value={form.description} onChange={v => handleField('description', v)} aiHighlight={aiFields.has('description')} textarea fullWidth />
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">Description</p>
+                                <Field label="Detailed description" value={form.description} onChange={v => handleField('description', v)} aiHighlight={aiFields.has('description')} textarea fullWidth />
                             </div>
 
                             {videoRefs.length > 0 && (
@@ -636,7 +636,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                                     type="text"
                                                     value={v.caption}
                                                     onChange={e => setVideoCaption(idx, e.target.value)}
-                                                    placeholder="Didascalia"
+                                                    placeholder="Caption"
                                                     className="w-full bg-surface text-[11px] px-2 py-1.5 border-t border-border outline-none"
                                                 />
                                             </div>
@@ -648,7 +648,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                             {photos.length > 0 && (
                                 <div>
                                     <p className="text-[11px] font-semibold uppercase tracking-widest text-primary mb-3">
-                                        Foto ({photos.length}) — clicca ★ per impostare cover
+                                        Photos ({photos.length}) — click ★ to set cover
                                     </p>
                                     <div className="grid grid-cols-3 gap-3">
                                         {photos.map((p, idx) => (
@@ -674,7 +674,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                                     type="text"
                                                     value={p.caption}
                                                     onChange={e => setCaption(idx, e.target.value)}
-                                                    placeholder="Didascalia"
+                                                    placeholder="Caption"
                                                     className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] px-2 py-1 border-0 outline-none"
                                                 />
                                             </div>
@@ -688,7 +688,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                     {step === 'committing' && (
                         <div className="flex flex-col items-center justify-center py-12 gap-3">
                             <span className="material-symbols-outlined notranslate text-5xl text-primary animate-spin">progress_activity</span>
-                            <p className="text-sm text-text-primary font-medium">Salvataggio + generazione embedding...</p>
+                            <p className="text-sm text-text-primary font-medium">Saving + generating embedding...</p>
                         </div>
                     )}
                 </div>
@@ -698,7 +698,7 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                     {step === 'intake' && (
                         <>
                             <button onClick={onClose} className="px-5 py-2.5 rounded-lg border border-border text-sm text-text-muted hover:text-text-primary transition-all">
-                                Annulla
+                                Cancel
                             </button>
                             <button
                                 onClick={handleExtract}
@@ -706,18 +706,18 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                                 className="btn-primary text-sm disabled:opacity-50 flex items-center gap-2"
                             >
                                 <span className="material-symbols-outlined notranslate text-[16px]">auto_awesome</span>
-                                Estrai dati
+                                Extract data
                             </button>
                         </>
                     )}
                     {step === 'preview' && (
                         <>
                             <button onClick={() => setStep('intake')} className="px-5 py-2.5 rounded-lg border border-border text-sm text-text-muted hover:text-text-primary transition-all">
-                                Indietro
+                                Back
                             </button>
                             <button onClick={handleCommit} className="btn-primary text-sm flex items-center gap-2">
                                 <span className="material-symbols-outlined notranslate text-[16px]">save</span>
-                                Salva proprietà
+                                Save property
                             </button>
                         </>
                     )}
