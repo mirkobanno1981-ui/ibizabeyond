@@ -212,9 +212,13 @@ async function handleExtract(opts: {
     filtered.push(f)
   }
 
-  // Parallel download (concurrency 6) — sequential storage.download was a hot wall-clock cost.
-  const DOWNLOAD_CONCURRENCY = 6
-  const buffers: Uint8Array[] = new Array(filtered.length)
+  // Parallel download with bounded concurrency. Encode each buffer to base64
+  // immediately and discard the binary to keep memory peak low (Supabase edge
+  // workers cap at ~256 MB; raw + base64 + JSON copies of 12 images blew the
+  // budget at concurrency 6).
+  const DOWNLOAD_CONCURRENCY = 3
+  const encoded: string[] = new Array(filtered.length)
+  const sizes: number[] = new Array(filtered.length)
   let cursor = 0
   let downloadErr: string | null = null
   async function dlWorker() {
@@ -228,7 +232,10 @@ async function handleExtract(opts: {
         downloadErr = `Failed to download ${f.path}: ${error?.message}`
         return
       }
-      buffers[i] = new Uint8Array(await blob.arrayBuffer())
+      const buf = new Uint8Array(await blob.arrayBuffer())
+      sizes[i] = buf.byteLength
+      encoded[i] = encodeBase64(buf)
+      // buf goes out of scope at next loop iteration; GC reclaims promptly.
     }
   }
   await Promise.all(Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, filtered.length) }, dlWorker))
@@ -240,7 +247,7 @@ async function handleExtract(opts: {
   const fileParts: any[] = []
   let totalBytes = 0
   for (let i = 0; i < filtered.length; i++) {
-    totalBytes += buffers[i].byteLength
+    totalBytes += sizes[i]
     if (totalBytes > MAX_INLINE_BYTES) {
       await markFailed(supaUser, jobId!, 'Files exceed 18 MB cumulative limit')
       return jsonError('Files exceed 18 MB cumulative limit; reduce or compress images', 413)
@@ -248,7 +255,7 @@ async function handleExtract(opts: {
     fileParts.push({
       inline_data: {
         mime_type: filtered[i].mime,
-        data: encodeBase64(buffers[i]),
+        data: encoded[i],
       },
     })
   }
