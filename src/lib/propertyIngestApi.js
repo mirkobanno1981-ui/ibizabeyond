@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { fitFilesUnderCap } from './imageResize';
+import { fitFilesUnderCap, expandVideosToFrames } from './imageResize';
 
 const TMP_BUCKET = 'villa-ingest-tmp';
 const MAX_CUMULATIVE_BYTES = 18 * 1024 * 1024;
@@ -32,7 +32,8 @@ export async function uploadIngestFiles(files, { userId, jobId } = {}) {
     const id = jobId || crypto.randomUUID();
     if (!userId) throw new Error('userId required for ingest upload');
 
-    const processed = await fitFilesUnderCap(files, MAX_CUMULATIVE_BYTES);
+    const expanded = await expandVideosToFrames(files, { count: 6, maxEdge: 1280, quality: 0.82 });
+    const processed = await fitFilesUnderCap(expanded, MAX_CUMULATIVE_BYTES);
 
     let totalBytes = 0;
     for (const f of processed) totalBytes += f.size;

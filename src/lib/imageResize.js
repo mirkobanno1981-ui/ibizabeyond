@@ -57,3 +57,132 @@ export async function fitFilesUnderCap(files, capBytes, baseOpts = { maxEdge: 12
     }
     return current;
 }
+
+// Sample frames across a video, score by luminance variance (detail proxy),
+// keep top `count`. Returned files are JPEG with kind=image downstream so the
+// model treats them as photos. Drops original video bytes (often the bulk of
+// the payload).
+export async function extractVideoFrames(file, { count = 6, maxEdge = 1280, quality = 0.82, sampleMultiplier = 2 } = {}) {
+    if (!file.type.startsWith('video/')) return [];
+    if (typeof document === 'undefined') return [];
+
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.src = url;
+
+    try {
+        await new Promise((resolve, reject) => {
+            const onMeta = () => { cleanup(); resolve(); };
+            const onErr = () => { cleanup(); reject(new Error('video metadata load failed')); };
+            const cleanup = () => {
+                video.removeEventListener('loadedmetadata', onMeta);
+                video.removeEventListener('error', onErr);
+            };
+            video.addEventListener('loadedmetadata', onMeta);
+            video.addEventListener('error', onErr);
+            setTimeout(() => { cleanup(); reject(new Error('video metadata timeout')); }, 15000);
+        });
+
+        const duration = video.duration;
+        if (!duration || !isFinite(duration) || duration < 0.1) return [];
+
+        const vw = video.videoWidth || 1280;
+        const vh = video.videoHeight || 720;
+        const longest = Math.max(vw, vh);
+        const scale = longest > maxEdge ? maxEdge / longest : 1;
+        const w = Math.max(1, Math.round(vw * scale));
+        const h = Math.max(1, Math.round(vh * scale));
+
+        const canvas = typeof OffscreenCanvas !== 'undefined'
+            ? new OffscreenCanvas(w, h)
+            : Object.assign(document.createElement('canvas'), { width: w, height: h });
+        const ctx = canvas.getContext('2d');
+
+        const sampleCount = Math.min(count * sampleMultiplier, 24);
+        const timestamps = [];
+        for (let i = 1; i <= sampleCount; i++) {
+            timestamps.push((duration * i) / (sampleCount + 1));
+        }
+
+        const candidates = [];
+        for (const t of timestamps) {
+            const seekOk = await new Promise(resolve => {
+                const onSeeked = () => { cleanup(); resolve(true); };
+                const onErr = () => { cleanup(); resolve(false); };
+                const cleanup = () => {
+                    video.removeEventListener('seeked', onSeeked);
+                    video.removeEventListener('error', onErr);
+                };
+                video.addEventListener('seeked', onSeeked);
+                video.addEventListener('error', onErr);
+                setTimeout(() => { cleanup(); resolve(false); }, 5000);
+                try { video.currentTime = Math.min(t, Math.max(0, duration - 0.05)); }
+                catch { cleanup(); resolve(false); }
+            });
+            if (!seekOk) continue;
+
+            try { ctx.drawImage(video, 0, 0, w, h); } catch { continue; }
+            const score = scoreFrameVariance(ctx, w, h);
+            const blob = canvas.convertToBlob
+                ? await canvas.convertToBlob({ type: 'image/jpeg', quality })
+                : await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+            if (blob) candidates.push({ score, blob, t });
+        }
+
+        if (!candidates.length) return [];
+        candidates.sort((a, b) => b.score - a.score);
+        const picked = candidates.slice(0, count).sort((a, b) => a.t - b.t);
+
+        const base = file.name.replace(/\.[^.]+$/, '');
+        return picked.map((c, i) => new File(
+            [c.blob],
+            `${base}_frame_${String(i + 1).padStart(2, '0')}.jpg`,
+            { type: 'image/jpeg' }
+        ));
+    } finally {
+        URL.revokeObjectURL(url);
+        video.removeAttribute('src');
+        try { video.load(); } catch { /* ignore */ }
+    }
+}
+
+function scoreFrameVariance(ctx, w, h) {
+    try {
+        const img = ctx.getImageData(0, 0, w, h);
+        const data = img.data;
+        let sum = 0, sumSq = 0, n = 0;
+        for (let i = 0; i < data.length; i += 32) {
+            const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            sum += lum;
+            sumSq += lum * lum;
+            n++;
+        }
+        if (!n) return 0;
+        const mean = sum / n;
+        return sumSq / n - mean * mean;
+    } catch {
+        return Math.random();
+    }
+}
+
+// Replace each video in `files` with extracted JPEG frames. If extraction
+// fails or yields nothing, the original video is kept so the upstream model
+// still receives some signal.
+export async function expandVideosToFrames(files, opts) {
+    const out = [];
+    for (const f of files) {
+        if (!f.type.startsWith('video/')) { out.push(f); continue; }
+        try {
+            const frames = await extractVideoFrames(f, opts);
+            if (frames.length) out.push(...frames);
+            else out.push(f);
+        } catch {
+            out.push(f);
+        }
+    }
+    return out;
+}
