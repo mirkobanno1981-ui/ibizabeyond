@@ -189,46 +189,79 @@ async function handleExtract(opts: {
     .order('category')
   const amenityList = (amenities || []).map((a: any) => `${a.category}: ${a.label}`).join('\n')
 
-  // Pull a handful of high-quality existing villa descriptions to anchor the
-  // model's writing style (tone, paragraph cadence, target length). Service-role
-  // read so we are not blocked by RLS on inactive rows.
-  const { data: styleSamples } = await supaService
+  // Pull a few high-quality existing villa descriptions to anchor the model's
+  // writing style. Kept small (4 samples, trimmed) to minimise prompt latency.
+  const styleSamplesPromise = supaService
     .from('properties')
     .select('villa_name, tagline, description')
     .eq('is_active', true)
     .not('description', 'is', null)
-    .limit(80)
-  const longSamples = (styleSamples || []).filter((s: any) => (s.description || '').length >= 400)
-  const pickedSamples = pickRandom(longSamples, 6)
-  const styleBlock = pickedSamples
-    .map((s: any, i: number) => `### Example ${i + 1}: ${s.villa_name}\nTagline: ${s.tagline || '(none)'}\nDescription:\n${s.description}`)
-    .join('\n\n')
+    .limit(40)
 
-  // Download all files via service-role (bypasses storage RLS for bucket reads).
+  // Cap images sent to Gemini — beyond ~12 photos latency dominates without
+  // improving extraction quality. Keep all non-image kinds (PDF/audio/video/text)
+  // and the first 12 images in the order the client uploaded them.
+  const MAX_IMAGES = 12
+  const filtered: FileRef[] = []
+  let imgCount = 0
+  for (const f of files) {
+    if (f.kind === 'image') {
+      if (imgCount >= MAX_IMAGES) continue
+      imgCount++
+    }
+    filtered.push(f)
+  }
+
+  // Parallel download (concurrency 6) — sequential storage.download was a hot wall-clock cost.
+  const DOWNLOAD_CONCURRENCY = 6
+  const buffers: Uint8Array[] = new Array(filtered.length)
+  let cursor = 0
+  let downloadErr: string | null = null
+  async function dlWorker() {
+    while (cursor < filtered.length && !downloadErr) {
+      const i = cursor++
+      const f = filtered[i]
+      const { data: blob, error } = await supaService.storage
+        .from('villa-ingest-tmp')
+        .download(f.path)
+      if (error || !blob) {
+        downloadErr = `Failed to download ${f.path}: ${error?.message}`
+        return
+      }
+      buffers[i] = new Uint8Array(await blob.arrayBuffer())
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, filtered.length) }, dlWorker))
+  if (downloadErr) {
+    await markFailed(supaUser, jobId!, downloadErr)
+    return jsonError(downloadErr, 500)
+  }
+
   const fileParts: any[] = []
   let totalBytes = 0
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i]
-    const { data: blob, error } = await supaService.storage
-      .from('villa-ingest-tmp')
-      .download(f.path)
-    if (error || !blob) {
-      await markFailed(supaUser, jobId!, `Failed to download ${f.path}: ${error?.message}`)
-      return jsonError(`Failed to download ${f.path}: ${error?.message}`, 500)
-    }
-    const buf = new Uint8Array(await blob.arrayBuffer())
-    totalBytes += buf.byteLength
+  for (let i = 0; i < filtered.length; i++) {
+    totalBytes += buffers[i].byteLength
     if (totalBytes > MAX_INLINE_BYTES) {
       await markFailed(supaUser, jobId!, 'Files exceed 18 MB cumulative limit')
       return jsonError('Files exceed 18 MB cumulative limit; reduce or compress images', 413)
     }
     fileParts.push({
       inline_data: {
-        mime_type: f.mime,
-        data: encodeBase64(buf),
+        mime_type: filtered[i].mime,
+        data: encodeBase64(buffers[i]),
       },
     })
   }
+
+  const { data: styleSamples } = await styleSamplesPromise
+  const longSamples = (styleSamples || []).filter((s: any) => (s.description || '').length >= 400)
+  const pickedSamples = pickRandom(longSamples, 4)
+  const styleBlock = pickedSamples
+    .map((s: any, i: number) => {
+      const desc = String(s.description).slice(0, 700)
+      return `### Example ${i + 1}: ${s.villa_name}\nTagline: ${s.tagline || '(none)'}\nDescription:\n${desc}`
+    })
+    .join('\n\n')
 
   const systemPrompt = buildSystemPrompt(amenityList, styleBlock)
 

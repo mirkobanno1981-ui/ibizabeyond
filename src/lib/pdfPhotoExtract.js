@@ -8,8 +8,8 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const MIN_EDGE = 600;          // ignore icons/logos
-const JPEG_QUALITY = 0.85;
-const FALLBACK_SCALE = 2.0;
+const JPEG_QUALITY = 0.82;
+const FALLBACK_SCALE = 1.5;    // raster fallback only for vector-only brochures; 1.5 ≈ 1080p equivalent
 
 async function bitmapFromImageObj(img) {
     if (!img) return null;
@@ -68,18 +68,20 @@ export async function extractTextFromPdf(file) {
     return chunks.join('\n\n');
 }
 
+const MAX_PHOTOS = 20;
+
 export async function extractPhotosFromPdf(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjs.getDocument({ data: buf }).promise;
     const baseName = (file.name || 'pdf').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
     const out = [];
 
-    for (let pn = 1; pn <= pdf.numPages; pn++) {
+    for (let pn = 1; pn <= pdf.numPages && out.length < MAX_PHOTOS; pn++) {
         const page = await pdf.getPage(pn);
         const ops = await page.getOperatorList();
         let pageHadImage = false;
 
-        for (let i = 0; i < ops.fnArray.length; i++) {
+        for (let i = 0; i < ops.fnArray.length && out.length < MAX_PHOTOS; i++) {
             const isImage = ops.fnArray[i] === pdfjs.OPS.paintImageXObject
                 || ops.fnArray[i] === pdfjs.OPS.paintJpegXObject;
             if (!isImage) continue;

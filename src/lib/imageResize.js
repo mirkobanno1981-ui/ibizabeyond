@@ -29,9 +29,5 @@ export async function resizeImageFile(file, { maxEdge = 1280, quality = 0.85 } =
 }
 
 export async function resizeImagesIfNeeded(files, opts) {
-    const out = [];
-    for (const f of files) {
-        out.push(f.type.startsWith('image/') ? await resizeImageFile(f, opts) : f);
-    }
-    return out;
+    return Promise.all(files.map(f => (f.type.startsWith('image/') ? resizeImageFile(f, opts) : Promise.resolve(f))));
 }

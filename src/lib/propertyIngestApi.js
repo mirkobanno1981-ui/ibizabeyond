@@ -40,18 +40,26 @@ export async function uploadIngestFiles(files, { userId, jobId } = {}) {
         throw new Error(`File totali ${(totalBytes / 1024 / 1024).toFixed(1)} MB superano il limite di 18 MB. Riduci/comprimi (i video lunghi vanno tagliati o ricompressi).`);
     }
 
-    const refs = [];
-    for (let i = 0; i < processed.length; i++) {
-        const f = processed[i];
-        const ext = (f.name.split('.').pop() || 'bin').toLowerCase();
-        const path = `${userId}/${id}/${Date.now()}_${i}.${ext}`;
-        const { error } = await supabase.storage.from(TMP_BUCKET).upload(path, f, {
-            contentType: f.type,
-            upsert: false,
-        });
-        if (error) throw new Error(`Upload fallito (${f.name}): ${error.message}`);
-        refs.push({ path, mime: f.type, kind: inferKind(f.type), size: f.size, name: f.name });
+    // Upload with bounded concurrency (4 at a time) — sequential was the main wall-clock cost.
+    const CONCURRENCY = 4;
+    const refs = new Array(processed.length);
+    const ts = Date.now();
+    let cursor = 0;
+    async function worker() {
+        while (cursor < processed.length) {
+            const i = cursor++;
+            const f = processed[i];
+            const ext = (f.name.split('.').pop() || 'bin').toLowerCase();
+            const path = `${userId}/${id}/${ts}_${i}.${ext}`;
+            const { error } = await supabase.storage.from(TMP_BUCKET).upload(path, f, {
+                contentType: f.type,
+                upsert: false,
+            });
+            if (error) throw new Error(`Upload fallito (${f.name}): ${error.message}`);
+            refs[i] = { path, mime: f.type, kind: inferKind(f.type), size: f.size, name: f.name };
+        }
     }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, processed.length) }, worker));
     return { jobId: id, files: refs };
 }
 
