@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { resizeImagesIfNeeded } from './imageResize';
+import { fitFilesUnderCap } from './imageResize';
 
 const TMP_BUCKET = 'villa-ingest-tmp';
 const MAX_CUMULATIVE_BYTES = 18 * 1024 * 1024;
@@ -32,12 +32,12 @@ export async function uploadIngestFiles(files, { userId, jobId } = {}) {
     const id = jobId || crypto.randomUUID();
     if (!userId) throw new Error('userId required for ingest upload');
 
-    const processed = await resizeImagesIfNeeded(files, { maxEdge: 1280, quality: 0.85 });
+    const processed = await fitFilesUnderCap(files, MAX_CUMULATIVE_BYTES);
 
     let totalBytes = 0;
     for (const f of processed) totalBytes += f.size;
     if (totalBytes > MAX_CUMULATIVE_BYTES) {
-        throw new Error(`Total files ${(totalBytes / 1024 / 1024).toFixed(1)} MB exceed the 18 MB limit. Reduce/compress them (trim or re-encode long videos).`);
+        throw new Error(`Total files ${(totalBytes / 1024 / 1024).toFixed(1)} MB still exceed the 18 MB limit after compression. Reduce image count or trim/re-encode long videos.`);
     }
 
     // Upload with bounded concurrency (4 at a time) — sequential was the main wall-clock cost.

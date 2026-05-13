@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { resizeImagesIfNeeded } from './imageResize';
+import { fitFilesUnderCap } from './imageResize';
 
 const TMP_BUCKET = 'villa-ingest-tmp';
 const MAX_CUMULATIVE_BYTES = 18 * 1024 * 1024;
@@ -22,12 +22,12 @@ export async function uploadIngestFiles(files, { userId, jobId } = {}) {
     const id = jobId || crypto.randomUUID();
     if (!userId) throw new Error('userId required for ingest upload');
 
-    const processed = await resizeImagesIfNeeded(files, { maxEdge: 1280, quality: 0.85 });
+    const processed = await fitFilesUnderCap(files, MAX_CUMULATIVE_BYTES);
 
     let totalBytes = 0;
     for (const f of processed) totalBytes += f.size;
     if (totalBytes > MAX_CUMULATIVE_BYTES) {
-        throw new Error(`File totali ${(totalBytes / 1024 / 1024).toFixed(1)} MB superano il limite di 18 MB. Riduci o comprimi.`);
+        throw new Error(`File totali ${(totalBytes / 1024 / 1024).toFixed(1)} MB superano il limite di 18 MB anche dopo la compressione. Riduci il numero di immagini o accorcia i video.`);
     }
 
     const refs = [];
