@@ -23,7 +23,12 @@ const NavItem = ({ to, icon, label, end = false }) => (
 );
 
 export default function Layout() {
-    const { user, role, agentData, signOut } = useAuth();
+    const { user, role, agentData, signOut, canViewAny, canAddAny } = useAuth();
+    const isAdmin = role === 'admin' || role === 'super_admin';
+    const showVillas = isAdmin || canViewAny(['villa_licensed','villa_unlicensed','apartment']);
+    const showBoats  = isAdmin || canViewAny(['boat']);
+    const showServices = isAdmin || canViewAny(['service']);
+    const showOwners = isAdmin || canAddAny(['villa_licensed','villa_unlicensed','apartment','boat']);
     const { theme, toggleTheme } = useTheme();
     const { villas_enabled, boats_enabled, services_enabled } = useGlobalSettings();
     const navigate = useNavigate();
@@ -36,6 +41,7 @@ export default function Layout() {
     const [isRejected, setIsRejected] = useState(false);
     const [checkingStatus, setCheckingStatus] = useState(true);
     const [agentProfile, setAgentProfile] = useState(null);
+    const [pendingCount, setPendingCount] = useState(0);
     const searchRef = useRef(null);
 
     useEffect(() => {
@@ -89,6 +95,31 @@ export default function Layout() {
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [user?.id, role, agentData]);
+
+    useEffect(() => {
+        if (role !== 'admin' && role !== 'super_admin') {
+            setPendingCount(0);
+            return;
+        }
+        let cancelled = false;
+        const load = async () => {
+            try {
+                const [vRes, bRes, sRes] = await Promise.all([
+                    supabase.from('properties').select('v_uuid', { count: 'exact', head: true }).eq('is_active', false),
+                    supabase.from('boats').select('v_uuid', { count: 'exact', head: true }).eq('is_active', false),
+                    supabase.from('services').select('id', { count: 'exact', head: true }).eq('is_active', false),
+                ]);
+                if (cancelled) return;
+                const total = (vRes.count || 0) + (bRes.count || 0) + (sRes.count || 0);
+                setPendingCount(total);
+            } catch (err) {
+                console.error('pending count error:', err);
+            }
+        };
+        load();
+        const t = setInterval(load, 60000);
+        return () => { cancelled = true; clearInterval(t); };
+    }, [role]);
 
     const performSearch = async (query) => {
         if (!query || query.length < 2) {
@@ -177,9 +208,9 @@ export default function Layout() {
             <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto py-2">
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-semibold px-3 pt-2 pb-1">Main</p>
                 <NavItem to="/" icon="dashboard" label="Dashboard" end />
-                {villas_enabled && <NavItem to="/villas" icon="villa" label="Villa Inventory" />}
-                {boats_enabled && <NavItem to="/boats" icon="directions_boat" label="Boat Charter" />}
-                {services_enabled && <NavItem to="/services" icon="concierge" label="Services" />}
+                {villas_enabled && showVillas && <NavItem to="/villas" icon="villa" label="Villa Inventory" />}
+                {boats_enabled && showBoats && <NavItem to="/boats" icon="directions_boat" label="Boat Charter" />}
+                {services_enabled && showServices && <NavItem to="/services" icon="concierge" label="Services" />}
 
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-semibold px-3 pt-4 pb-1">Business</p>
                 <NavItem to="/clients" icon="group" label="Clients" />
@@ -196,13 +227,14 @@ export default function Layout() {
                         <p className="text-[10px] text-text-muted uppercase tracking-widest font-semibold px-3 pt-4 pb-1">Admin</p>
                         <NavItem to="/agents" icon="manage_accounts" label="Agents" />
                         <NavItem to="/owners" icon="groups" label="Owners" />
+                        <NavItem to="/pending-listings" icon="rule" label={`Approvals${pendingCount > 0 ? ` (${pendingCount})` : ''}`} />
                         {role === 'super_admin' && (
                             <NavItem to="/payouts" icon="payments" label="Payouts & Profits" />
                         )}
                     </>
                 )}
 
-                {role === 'editor' && (
+                {!isAdmin && showOwners && (
                     <NavItem to="/owners" icon="groups" label="Owners" />
                 )}
             </nav>

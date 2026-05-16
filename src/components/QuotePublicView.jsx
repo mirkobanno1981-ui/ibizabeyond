@@ -166,6 +166,22 @@ export default function QuotePublicView() {
         }
     }, [id, activeQuoteIndex]);
 
+    useEffect(() => {
+        const root = document.documentElement;
+        const hex = /^#[0-9a-fA-F]{6}$/;
+        const primary = hex.test(agent?.brand_primary_color || '') ? agent.brand_primary_color : null;
+        const accent = hex.test(agent?.brand_accent_color || '') ? agent.brand_accent_color : null;
+
+        if (primary) root.style.setProperty('--primary', primary);
+        if (accent) root.style.setProperty('--accent', accent);
+        else if (primary) root.style.setProperty('--accent', primary);
+
+        return () => {
+            root.style.removeProperty('--primary');
+            root.style.removeProperty('--accent');
+        };
+    }, [agent?.brand_primary_color, agent?.brand_accent_color]);
+
     async function fetchVotes(quoteIds) {
         try {
             const { data, error } = await supabase
@@ -283,7 +299,7 @@ export default function QuotePublicView() {
                     *,
                     properties(*),
                     boats(*),
-                    agents!quotes_agent_id_fkey(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details),
+                    agents!quotes_agent_id_fkey(company_name, logo_url, phone_number, contract_template, boat_contract_template, agent_type, agency_details, brand_primary_color, brand_accent_color),
                     clients(full_name, email, phone_number, address_street, id_number, dob)
                 `);
             

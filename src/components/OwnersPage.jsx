@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function OwnersPage() {
-    const { user, role, agentData, loading: authLoading } = useAuth();
+    const { user, role, agentData, loading: authLoading, canAddAny } = useAuth();
     const [owners, setOwners] = useState([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(null);
@@ -18,7 +18,9 @@ export default function OwnersPage() {
     const [villasModalList, setVillasModalList] = useState([]);
     const [stripeConnecting, setStripeConnecting] = useState(null);
 
-    const canManage = role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'agent';
+    const isAdmin = role === 'admin' || role === 'super_admin';
+    const canManage = isAdmin || role === 'agent' || canAddAny(['villa_licensed','villa_unlicensed','apartment','boat']);
+    const isContactMode = !isAdmin;
 
     useEffect(() => {
         if (!authLoading && canManage) {
@@ -56,7 +58,7 @@ export default function OwnersPage() {
         try {
             let query = supabase.from('owners').select('*');
 
-            if (role === 'agent' || role === 'editor') {
+            if (isContactMode) {
                 const agentId = agentData?.id || user.id;
                 query = query.eq('agent_id', agentId);
             }
@@ -119,7 +121,7 @@ export default function OwnersPage() {
 
             // 3. Create Owner Profile
             let agentIdToLink = null;
-            if (role === 'agent' || role === 'editor') {
+            if (isContactMode) {
                 agentIdToLink = agentData?.id || user.id;
             }
 
@@ -263,7 +265,7 @@ export default function OwnersPage() {
                         className="btn-primary text-sm flex items-center gap-2"
                     >
                         <span className="material-symbols-outlined notranslate text-[18px]">person_add</span>
-                        {(role === 'agent' || role === 'editor') ? 'Add New Contact' : 'Create New Owner'}
+                        {isContactMode ? 'Add New Contact' : 'Create New Owner'}
                     </button>
                 )}
             </div>

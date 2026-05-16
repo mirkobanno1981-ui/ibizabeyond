@@ -9,6 +9,7 @@ export default {
         extend: {
             colors: {
                 primary: 'var(--primary)',
+                accent: 'var(--accent)',
                 background: 'var(--background)',
                 surface: 'var(--surface)',
                 'surface-2': 'var(--surface-2)',

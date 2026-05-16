@@ -43,8 +43,18 @@ const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = fa
     </div>
 );
 
+const villaCat = (license, property_type) => {
+    if (property_type === 'apartment') return 'apartment';
+    return license ? 'villa_licensed' : 'villa_unlicensed';
+};
+
 export default function VillaEditModal({ villa, onClose, onSaved }) {
-    const { role, user, agentData } = useAuth();
+    const { role, user, agentData, canAdd, canAddAny } = useAuth();
+    const isAdmin = role === 'admin' || role === 'super_admin';
+    const currentCat = villaCat(villa.license, villa.property_type);
+    const canEditThisVilla = isAdmin
+        || (canAdd(currentCat) && (!villa.v_uuid || villa.created_by === user?.id));
+    const canAddAnyVilla = isAdmin || canAddAny(['villa_licensed','villa_unlicensed','apartment']);
     const [owners, setOwners] = useState([]);
     const [editors, setEditors] = useState([]);
     const [form, setForm] = useState({
@@ -121,7 +131,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     const isManual = (villa.source || form.__source) === 'manual' || !villa.v_uuid;
 
     useEffect(() => {
-        if (role === 'admin' || role === 'super_admin' || role === 'editor') {
+        if (canAddAnyVilla) {
             fetchOwners();
         }
         if (villa.v_uuid) {
@@ -129,7 +139,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             fetchVideos();
             fetchSeasonalRates();
         }
-    }, [role, villa.v_uuid]);
+    }, [role, villa.v_uuid, canAddAnyVilla]);
 
     useEffect(() => {
         return () => {
@@ -142,10 +152,10 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
         try {
             let query = supabase
                 .from('owners')
-                .select('id, name')
+                .select('id, name, agent_id')
                 .eq('is_active', true);
 
-            if (role === 'agent' || role === 'editor') {
+            if (!isAdmin) {
                 const agentId = agentData?.id || user.id;
                 query = query.eq('agent_id', agentId);
             }
@@ -153,13 +163,14 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             const { data, error } = await query.order('name');
             if (!error && data) setOwners(data);
 
-            // For super_admin/admin: also fetch editors as assignable owners
-            if (role === 'super_admin' || role === 'admin') {
-                const { data: editorRoles } = await supabase
-                    .from('user_roles')
+            // For super_admin/admin: also fetch users with villa-add permission as assignable owners
+            if (isAdmin) {
+                const { data: permRows } = await supabase
+                    .from('user_category_permissions')
                     .select('user_id')
-                    .eq('role', 'editor');
-                const editorIds = (editorRoles || []).map(r => r.user_id);
+                    .in('category', ['villa_licensed', 'villa_unlicensed', 'apartment'])
+                    .eq('can_add', true);
+                const editorIds = [...new Set((permRows || []).map(r => r.user_id))];
                 if (editorIds.length > 0) {
                     const { data: editorAgents } = await supabase
                         .from('agents')
@@ -369,15 +380,15 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             // License optional: villa or apartment may not have a tourist license.
 
             const isNew = !villa.v_uuid;
-            const canAdd = role === 'admin' || role === 'super_admin' || role === 'editor';
-            const isAdmin = role === 'admin' || role === 'super_admin';
+            const newCat = villaCat(form.license, form.property_type);
+            const canAddNew = isAdmin || canAdd(newCat);
             const isOwnerOfVilla = role === 'owner' && villa.owner_id === user?.id;
-            const isEditorOfVilla = role === 'editor' && villa.created_by === user?.id;
+            const isCreatorWithPerm = canAdd(currentCat) && villa.created_by === user?.id;
 
-            if (isNew && !canAdd) {
-                throw new Error('Permission denied: editor role required to add villas.');
+            if (isNew && !canAddNew) {
+                throw new Error('Permission denied: missing add permission for this property category.');
             }
-            if (!isNew && !isAdmin && !isOwnerOfVilla && !isEditorOfVilla) {
+            if (!isNew && !isAdmin && !isOwnerOfVilla && !isCreatorWithPerm) {
                 throw new Error('Permission denied: you can only edit villas you created.');
             }
 
@@ -385,6 +396,23 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
             let derivedThumbnail = form.thumbnail_url;
             if (photos.length > 0) {
                 derivedThumbnail = photos[0].url;
+            }
+
+            // Owner-as-Captatore: if admin picked a Captatore (agent) as Villa Owner,
+            // store the villa as that agent's insertion (created_by=agent) and clear owner_id
+            // (it would otherwise reference a non-existent owners row). When a real Owner is
+            // selected, cascade owner.agent_id → created_by so the managing agent sees it.
+            let resolvedOwnerId = role === 'owner' ? user.id : (form.owner_id || null);
+            let attributedAgentId = null;
+            if (form.owner_id) {
+                const selectedEditor = editors.find(ed => ed.id === form.owner_id);
+                if (selectedEditor) {
+                    resolvedOwnerId = null;
+                    attributedAgentId = selectedEditor.id;
+                } else {
+                    const selectedOwner = owners.find(o => o.id === form.owner_id);
+                    if (selectedOwner?.agent_id) attributedAgentId = selectedOwner.agent_id;
+                }
             }
 
             const villaData = {
@@ -409,11 +437,13 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 gps: form.gps,
                 deposit: parseFloat(form.deposit) || 0,
                 features: form.features,
-                owner_id: role === 'owner' ? user.id : (form.owner_id || null),
+                owner_id: resolvedOwnerId,
                 ses_establishment_code: form.ses_establishment_code,
                 // New villas need super_admin approval before going live (admin/super_admin auto-approve)
                 is_active: isNew ? (isAdmin ? form.is_active : false) : form.is_active,
-                created_by: isNew ? user.id : villa.created_by,
+                created_by: isNew
+                    ? (attributedAgentId || user.id)
+                    : (attributedAgentId || villa.created_by),
                 capturer_commission_mode: form.capturer_commission_mode || 'percent',
                 capturer_commission_pct: parseFloat(form.capturer_commission_pct) || 0,
                 capturer_commission_amount: parseFloat(form.capturer_commission_amount) || 0,
@@ -699,16 +729,16 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">GPS Coordinates</label>
                                 <GpsMapPicker value={form.gps} onChange={v => handleChange('gps', v)} />
                             </div>
-                            {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                            {canAddAnyVilla && (
                                 <div className="col-span-2">
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">
-                                        {(role === 'agent' || role === 'editor') ? 'Associated Owner (Contact)' : 'Villa Owner'}
+                                        {isAdmin ? 'Villa Owner' : 'Associated Owner (Contact)'}
                                     </label>
                                     <select
                                         className="input-theme w-full"
                                         value={form.owner_id}
                                         onChange={e => handleChange('owner_id', e.target.value)}
-                                        required={role === 'agent' || role === 'editor'}
+                                        required={!isAdmin}
                                     >
                                         <option value="">Select Owner...</option>
                                         {owners.length > 0 && (
@@ -718,18 +748,18 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                                                 ))}
                                             </optgroup>
                                         )}
-                                        {(role === 'super_admin' || role === 'admin') && editors.length > 0 && (
-                                            <optgroup label="Captatori (Editor)">
+                                        {isAdmin && editors.length > 0 && (
+                                            <optgroup label="Captatori">
                                                 {editors.map(ed => (
                                                     <option key={`e-${ed.id}`} value={ed.id}>
-                                                        {ed.company_name || ed.email || ed.id.slice(0, 8)} — Editor
+                                                        {ed.company_name || ed.email || ed.id.slice(0, 8)} — Captatore
                                                     </option>
                                                 ))}
                                             </optgroup>
                                         )}
                                     </select>
                                     <p className="text-[10px] text-text-muted mt-2 italic">
-                                        {(role === 'agent' || role === 'editor')
+                                        {!isAdmin
                                             ? 'You can only select owners that you manage as direct contacts.'
                                             : 'Note: Owners must be registered as users in the management section first.'}
                                     </p>
@@ -1114,7 +1144,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             <Field label="Cleaning" field="cleaning_charge" type="number" form={form} handleChange={handleChange} />
                             <Field label="Deposit" field="deposit" type="number" form={form} handleChange={handleChange} />
                         </div>
-                        {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                        {canAddAnyVilla && (
                             <div className="mt-4 p-3 bg-surface-2/50 border border-primary/20 rounded-xl space-y-3">
                                 <label className="block text-xs text-primary font-bold">Capturer Commission</label>
                                 <div className="grid grid-cols-3 gap-3 items-end">
@@ -1176,7 +1206,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         )}
 
                         {/* Rental Types & Commission */}
-                        {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                        {canAddAnyVilla && (
                             <div className="mt-4 p-3 bg-surface-2/50 border border-primary/20 rounded-xl space-y-2">
                                 <p className="text-xs text-primary font-bold uppercase tracking-widest mb-2">Rental Types & Commission</p>
                                 <div className="overflow-x-auto">

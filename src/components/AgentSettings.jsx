@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { extractPalette, suggestPrimaryAccent, readableTextColor } from '../lib/colorExtract';
+
+const DEFAULT_PRIMARY = '#e8ab30';
+const DEFAULT_ACCENT = '#e8ab30';
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+const normalizeHex = (v) => (HEX_RE.test(v || '') ? v.toLowerCase() : null);
 
 export default function AgentSettings() {
     const { user } = useAuth();
@@ -15,8 +21,13 @@ export default function AgentSettings() {
         stripe_account_id: '',
         is_active: true,
         boat_contract_template: '',
+        brand_primary_color: '',
+        brand_accent_color: '',
         email: ''
     });
+    const [palette, setPalette] = useState([]);
+    const [extractingPalette, setExtractingPalette] = useState(false);
+    const [paletteError, setPaletteError] = useState('');
     const [newEmail, setNewEmail] = useState('');
     const [updatingEmail, setUpdatingEmail] = useState(false);
     const [passwords, setPasswords] = useState({ new: '', confirm: '' });
@@ -97,6 +108,8 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
                     stripe_account_id: data.stripe_account_id || '',
                     is_active: data.is_active !== false,
                     boat_contract_template: data.boat_contract_template || '',
+                    brand_primary_color: data.brand_primary_color || '',
+                    brand_accent_color: data.brand_accent_color || '',
                     email: user.email
                 });
                 setNewEmail(user.email);
@@ -151,7 +164,9 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
                     logo_url: agentData.logo_url,
                     stripe_account_id: agentData.stripe_account_id,
                     contract_template: agentData.contract_template,
-                    boat_contract_template: agentData.boat_contract_template
+                    boat_contract_template: agentData.boat_contract_template,
+                    brand_primary_color: normalizeHex(agentData.brand_primary_color),
+                    brand_accent_color: normalizeHex(agentData.brand_accent_color)
                 });
 
             if (error) throw error;
@@ -187,14 +202,46 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
                 .from('agent-logos')
                 .getPublicUrl(filePath);
 
-            setAgentData({ ...agentData, logo_url: publicUrl });
+            setAgentData((prev) => ({ ...prev, logo_url: publicUrl }));
             setMessage({ text: 'Logo uploaded successfully! Remember to save.', type: 'success' });
+            runPaletteExtraction(publicUrl, { applySuggestion: true });
         } catch (error) {
             console.error('Error uploading logo:', error);
             setMessage({ text: 'Error uploading logo. Ensure the storage bucket exists.', type: 'error' });
         } finally {
             setUploading(false);
         }
+    };
+
+    const runPaletteExtraction = async (logoUrl, { applySuggestion = false } = {}) => {
+        if (!logoUrl) return;
+        setExtractingPalette(true);
+        setPaletteError('');
+        try {
+            const colors = await extractPalette(logoUrl, 5);
+            setPalette(colors);
+            if (applySuggestion && colors.length) {
+                const { primary, accent } = suggestPrimaryAccent(colors);
+                setAgentData((prev) => ({
+                    ...prev,
+                    brand_primary_color: primary || prev.brand_primary_color,
+                    brand_accent_color: accent || prev.brand_accent_color
+                }));
+            }
+        } catch (err) {
+            console.error('Palette extraction failed:', err);
+            setPaletteError(err.message || 'Could not read logo colors.');
+        } finally {
+            setExtractingPalette(false);
+        }
+    };
+
+    const handleBrandColorChange = (key, value) => {
+        setAgentData((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const resetBrandColors = () => {
+        setAgentData((prev) => ({ ...prev, brand_primary_color: '', brand_accent_color: '' }));
     };
 
     const handleUpdateEmail = async () => {
@@ -330,6 +377,18 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
                             {uploading && <p className="text-xs text-primary animate-pulse font-bold">Uploading...</p>}
                         </div>
                     </div>
+
+                    <BrandColorsPanel
+                        logoUrl={agentData.logo_url}
+                        primary={agentData.brand_primary_color}
+                        accent={agentData.brand_accent_color}
+                        palette={palette}
+                        extracting={extractingPalette}
+                        error={paletteError}
+                        onExtract={() => runPaletteExtraction(agentData.logo_url, { applySuggestion: false })}
+                        onChange={handleBrandColorChange}
+                        onReset={resetBrandColors}
+                    />
                 </section>
 
                 {/* Agency Details Section */}
@@ -547,6 +606,139 @@ La piattaforma Ibiza Beyond agisce come solo fornitore tecnologico e non ha resp
                         </button>
                     </div>
                 </section>
+            </div>
+        </div>
+    );
+}
+
+function BrandColorsPanel({ logoUrl, primary, accent, palette, extracting, error, onExtract, onChange, onReset }) {
+    const effectivePrimary = primary || DEFAULT_PRIMARY;
+    const effectiveAccent = accent || DEFAULT_ACCENT;
+    const primaryText = readableTextColor(effectivePrimary);
+    const accentText = readableTextColor(effectiveAccent);
+
+    return (
+        <div className="glass-card p-6 space-y-5">
+            <div className="flex items-start justify-between gap-3">
+                <div>
+                    <p className="text-sm font-bold text-text-primary">Brand Colors</p>
+                    <p className="text-[10px] text-text-muted leading-relaxed font-medium">
+                        Applied to your dashboard and to client quote pages.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={onExtract}
+                    disabled={!logoUrl || extracting}
+                    className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border border-border hover:bg-surface-2 disabled:opacity-40"
+                    title={logoUrl ? 'Read colors from the uploaded logo' : 'Upload a logo first'}
+                >
+                    {extracting ? 'Reading…' : 'Generate from logo'}
+                </button>
+            </div>
+
+            {error && <p className="text-[11px] text-red-400 font-medium">{error}</p>}
+
+            <div className="grid grid-cols-2 gap-3">
+                <ColorField
+                    label="Primary"
+                    value={effectivePrimary}
+                    hasValue={!!primary}
+                    onChange={(v) => onChange('brand_primary_color', v)}
+                />
+                <ColorField
+                    label="Accent"
+                    value={effectiveAccent}
+                    hasValue={!!accent}
+                    onChange={(v) => onChange('brand_accent_color', v)}
+                />
+            </div>
+
+            {palette.length > 0 && (
+                <div className="space-y-2">
+                    <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Suggested from logo</p>
+                    <div className="flex flex-wrap gap-2">
+                        {palette.map((hex) => (
+                            <div key={hex} className="flex items-center gap-1 bg-background/40 border border-border rounded-xl p-1">
+                                <span className="size-6 rounded-md border border-border" style={{ backgroundColor: hex }} />
+                                <button
+                                    type="button"
+                                    onClick={() => onChange('brand_primary_color', hex)}
+                                    className="text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-md hover:bg-surface-2"
+                                >
+                                    P
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onChange('brand_accent_color', hex)}
+                                    className="text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-md hover:bg-surface-2"
+                                >
+                                    A
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            <div className="pt-3 border-t border-border space-y-2">
+                <p className="text-[10px] font-black text-text-muted uppercase tracking-widest">Preview</p>
+                <div className="flex items-center gap-2">
+                    <span
+                        className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+                        style={{ backgroundColor: effectivePrimary, color: primaryText }}
+                    >
+                        Primary button
+                    </span>
+                    <span
+                        className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+                        style={{ backgroundColor: effectiveAccent, color: accentText }}
+                    >
+                        Accent
+                    </span>
+                </div>
+            </div>
+
+            {(primary || accent) && (
+                <button
+                    type="button"
+                    onClick={onReset}
+                    className="text-[10px] font-bold text-text-muted hover:text-text-primary underline"
+                >
+                    Reset to platform defaults
+                </button>
+            )}
+        </div>
+    );
+}
+
+function ColorField({ label, value, hasValue, onChange }) {
+    const handle = (v) => {
+        if (!v) {
+            onChange('');
+            return;
+        }
+        if (HEX_RE.test(v)) onChange(v.toLowerCase());
+        else onChange(v);
+    };
+    return (
+        <div className="space-y-2">
+            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">{label}</label>
+            <div className="flex items-center gap-2">
+                <input
+                    type="color"
+                    value={value}
+                    onChange={(e) => handle(e.target.value)}
+                    className="size-12 rounded-xl border border-border bg-transparent cursor-pointer"
+                />
+                <input
+                    type="text"
+                    value={hasValue ? value : ''}
+                    onChange={(e) => handle(e.target.value)}
+                    placeholder={value}
+                    className="flex-1 bg-background/50 border border-border rounded-2xl px-3 py-3 text-[12px] text-text-primary focus:border-primary/50 outline-none font-mono"
+                    maxLength={7}
+                />
             </div>
         </div>
     );

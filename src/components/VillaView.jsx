@@ -158,11 +158,12 @@ export default function VillaView() {
     };
 
     const validateBooking = () => {
-        if (!selectionStart) return { valid: true, errors: [], prompt: "Select a check-in date on the calendar." };
-        
+        if (!selectionStart) return { valid: true, errors: [], warnings: [], prompt: "Select a check-in date on the calendar." };
+
         const rule = getRuleForDate(selectionStart);
         const start = new Date(selectionStart);
         const errors = [];
+        const warnings = [];
         let prompt = "";
 
         // Check-in Day Validation (Immediate feedback after first click)
@@ -176,7 +177,7 @@ export default function VillaView() {
             const earliestCheckOut = new Date(start);
             earliestCheckOut.setDate(start.getDate() + minNights);
             prompt = `Now select a check-out date (minimum stay: ${minNights} nights, from ${earliestCheckOut.toLocaleDateString()}).`;
-            return { valid: errors.length === 0, errors, prompt, isPartial: true };
+            return { valid: errors.length === 0, errors, warnings, prompt, isPartial: true };
         }
 
         const end = new Date(selectionEnd);
@@ -187,19 +188,19 @@ export default function VillaView() {
         const isLongStay = diffDays >= 28;
         const isShortStay = diffDays <= 6;
         const gapBooking = isGapBooking();
-        
+
         if (rule.allowed_checkin_days === 'Strictly Saturday-Saturday') {
             if (!getIsSat(selectionEnd)) {
                 errors.push("This villa strictly requires check-out on a Saturday.");
             }
             if (!gapBooking && diffDays < rule.minimum_nights) {
-                errors.push(`This villa requires a minimum of ${rule.minimum_nights} nights for this period.`);
+                warnings.push(`Minimum stay for this period is ${rule.minimum_nights} nights — your selection (${diffDays}) is shorter. Owner approval required.`);
             }
         } else {
             if (!gapBooking) {
                 const bypassMinNights = isLongStay || (isLastMinute && diffDays >= 3);
                 if (!bypassMinNights && diffDays < rule.minimum_nights) {
-                    errors.push(`The minimum stay required for this period is ${rule.minimum_nights} nights.`);
+                    warnings.push(`Minimum stay for this period is ${rule.minimum_nights} nights — your selection (${diffDays}) is shorter. Owner approval required.`);
                 }
             } else if (diffDays < 3) {
                 errors.push("Gap bookings (between two existing bookings) must be at least 3 nights.");
@@ -210,7 +211,12 @@ export default function VillaView() {
             errors.push("Short stays (less than 7 nights) are not allowed for this property.");
         }
 
-        return { valid: errors.length === 0, errors, isShortStay, diffDays, prompt: errors.length > 0 ? "Selection invalid. Please check the rules." : "Selection valid! You can now create the quote." };
+        let promptMsg;
+        if (errors.length > 0) promptMsg = "Selection invalid. Please check the rules.";
+        else if (warnings.length > 0) promptMsg = "Selection allowed but flagged — see warnings.";
+        else promptMsg = "Selection valid! You can now create the quote.";
+
+        return { valid: errors.length === 0, errors, warnings, isShortStay, diffDays, prompt: promptMsg };
     };
 
     const getBasePriceForSelection = () => {
@@ -1110,9 +1116,9 @@ export default function VillaView() {
                             </div>
 
                              {selectionStart && (
-                                <div className={`border rounded-xl p-4 mb-6 transition-all duration-300 ${bookingStatus.valid ? (selectionEnd ? 'bg-primary/10 border-primary/20' : 'bg-surface border-primary/40') : 'bg-red-500/10 border-red-500/20'}`}>
-                                    <p className={`text-[10px] font-black uppercase tracking-widest mb-2 ${bookingStatus.valid ? (selectionEnd ? 'text-primary' : 'text-primary/70') : 'text-red-400'}`}>
-                                        {bookingStatus.valid ? (selectionEnd ? 'Selected Period' : 'Selection in Progress') : 'Booking Rule Violation'}
+                                <div className={`border rounded-xl p-4 mb-6 transition-all duration-300 ${!bookingStatus.valid ? 'bg-red-500/10 border-red-500/20' : (bookingStatus.warnings && bookingStatus.warnings.length > 0 ? 'bg-amber-500/10 border-amber-500/30' : (selectionEnd ? 'bg-primary/10 border-primary/20' : 'bg-surface border-primary/40'))}`}>
+                                    <p className={`text-[10px] font-black uppercase tracking-widest mb-2 ${!bookingStatus.valid ? 'text-red-400' : (bookingStatus.warnings && bookingStatus.warnings.length > 0 ? 'text-amber-500' : (selectionEnd ? 'text-primary' : 'text-primary/70'))}`}>
+                                        {!bookingStatus.valid ? 'Booking Rule Violation' : (bookingStatus.warnings && bookingStatus.warnings.length > 0 ? 'Selected Period (with warnings)' : (selectionEnd ? 'Selected Period' : 'Selection in Progress'))}
                                     </p>
                                     <div className="flex items-center justify-between font-bold text-text-primary text-sm">
                                         <span className={!selectionStart ? 'opacity-30' : ''}>{selectionStart ? new Date(selectionStart).toLocaleDateString() : 'Pick Check-in'}</span>
@@ -1140,6 +1146,21 @@ export default function VillaView() {
                                             {!selectionEnd && <p className="text-[10px] text-red-100/60 mt-2 italic">Deselect and try again or select a valid date.</p>}
                                         </div>
                                     )}
+
+                                    {bookingStatus.valid && bookingStatus.warnings && bookingStatus.warnings.length > 0 && (
+                                        <div className="mt-4 p-4 rounded-xl bg-amber-500/20 border border-amber-500/40 space-y-2 animate-in fade-in slide-in-from-top-1">
+                                            <p className="text-xs font-black text-amber-100 uppercase tracking-widest flex items-center gap-2">
+                                                <span className="material-symbols-outlined notranslate text-sm">warning</span>
+                                                Warning — proceed with caution:
+                                            </p>
+                                            {bookingStatus.warnings.map((w, idx) => (
+                                                <p key={idx} className="text-[11px] text-amber-50/90 font-medium leading-tight">
+                                                    • {w}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
+
                                     {selectionEnd && bookingStatus.valid && (
                                         <div className="mt-4 pt-4 border-t border-primary/20 flex justify-between items-baseline animate-in fade-in slide-in-from-bottom-2">
                                             <span className="text-xs text-text-muted font-bold uppercase tracking-widest">Estimated Total</span>
@@ -1150,8 +1171,14 @@ export default function VillaView() {
                             )}
 
                             {selectionStart && selectionEnd && bookingStatus.valid ? (
-                                <button 
-                                    onClick={() => setShowQuoteModal(true)}
+                                <button
+                                    onClick={() => {
+                                        if (bookingStatus.warnings && bookingStatus.warnings.length > 0) {
+                                            const msg = "Attenzione:\n\n" + bookingStatus.warnings.join('\n') + "\n\nProcedere comunque con la creazione del preventivo?";
+                                            if (!window.confirm(msg)) return;
+                                        }
+                                        setShowQuoteModal(true);
+                                    }}
                                     className="btn-primary w-full py-4 text-sm font-bold shadow-lg shadow-primary/20"
                                 >
                                     Generate Quote

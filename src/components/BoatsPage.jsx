@@ -12,7 +12,10 @@ const FALLBACK_BOAT_IMG = 'https://images.unsplash.com/photo-1567899534071-723d0
 const boatTypes = ['Motor', 'Sail', 'Catamaran', 'Superyacht'];
 
 export default function BoatsPage() {
-    const { role, user } = useAuth();
+    const { role, user, canView, canAdd } = useAuth();
+    const isAdmin = role === 'admin' || role === 'super_admin';
+    const canAddBoats = isAdmin || canAdd('boat');
+    const canViewBoats = isAdmin || canView('boat');
     const queryClient = useQueryClient();
     
     // UI State
@@ -38,10 +41,11 @@ export default function BoatsPage() {
 
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
-            } else if (role === 'editor-boat' && user?.id) {
+            } else if (canAddBoats && !isAdmin && user?.id) {
+                // Users with boat-add permission see all platform boats, with "mine"/"all" toggle
                 if (boatScope === 'mine') {
                     query = query.eq('created_by', user.id);
-                } // else 'all' — no filter, sees full platform
+                }
             } else if (role === 'agent' && user?.id) {
                 // agents.id IS the auth user uuid (no separate user_id column).
                 const { data: managedOwners } = await supabase
@@ -149,8 +153,8 @@ export default function BoatsPage() {
     };
 
     const canManageBoat = (boat) =>
-        role === 'super_admin' || role === 'admin'
-        || (role === 'editor-boat' && boat.created_by === user?.id)
+        isAdmin
+        || (canAddBoats && boat.created_by === user?.id)
         || (role === 'owner' && boat.owner_id === user?.id);
 
     const handleToggleActive = async (boat) => {
@@ -181,7 +185,7 @@ export default function BoatsPage() {
                     <p className="text-text-muted text-sm mt-0.5">
                         {loading ? 'Loading...' : `${filteredBoats.length} premium vessels available`}
                     </p>
-                    {role === 'editor-boat' && (
+                    {canAddBoats && !isAdmin && (
                         <div className="mt-3 inline-flex bg-surface-2 border border-border rounded-xl p-1 gap-1">
                             <button
                                 onClick={() => setBoatScope('mine')}
@@ -206,7 +210,7 @@ export default function BoatsPage() {
                         </div>
                     )}
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || role === 'editor-boat') && (
+                {canAddBoats && (
                     <div className="flex gap-2 self-start">
                         <button
                             onClick={() => setShowIngest(true)}
@@ -360,6 +364,7 @@ export default function BoatsPage() {
                             boat={boat}
                             onEdit={() => setEditBoat(boat)}
                             role={role}
+                            canAddBoats={canAddBoats}
                             canManage={canManageBoat(boat)}
                             onToggleActive={() => handleToggleActive(boat)}
                             onHardDelete={() => handleHardDelete(boat)}
@@ -411,7 +416,7 @@ export default function BoatsPage() {
     );
 }
 
-function BoatCard({ boat, onEdit, role, isSelected, onSelect, canManage, onToggleActive, onHardDelete }) {
+function BoatCard({ boat, onEdit, role, canAddBoats, isSelected, onSelect, canManage, onToggleActive, onHardDelete }) {
     const isActive = boat.is_active !== false;
     return (
         <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'} ${!isActive ? 'opacity-60' : ''}`}>
@@ -473,7 +478,7 @@ function BoatCard({ boat, onEdit, role, isSelected, onSelect, canManage, onToggl
                 </div>
 
                 <div className="mt-4 flex flex-col gap-2">
-                    {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || role === 'editor-boat') ? (
+                    {(role === 'admin' || role === 'super_admin' || role === 'owner' || role === 'agent' || canAddBoats) ? (
                         <>
                             <div className="flex gap-2">
                                 <button

@@ -18,7 +18,7 @@ export default function AgentsPage() {
     const [agentQuotes, setAgentQuotes] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [viewInsertions, setViewInsertions] = useState(null);
-    const [insertionsData, setInsertionsData] = useState({ villas: [], owners: [] });
+    const [insertionsData, setInsertionsData] = useState({ villas: [], owners: [], boats: [], services: [] });
     const [loadingInsertions, setLoadingInsertions] = useState(false);
     const [editQuote, setEditQuote] = useState(null);
     const [activeTab, setActiveTab] = useState('individual'); // individual, agency
@@ -178,6 +178,45 @@ export default function AgentsPage() {
         }
     }
 
+    const CATEGORIES = [
+        { id: 'villa_licensed',   label: 'Ville con licenza' },
+        { id: 'villa_unlicensed', label: 'Ville senza licenza' },
+        { id: 'apartment',        label: 'Appartamenti' },
+        { id: 'boat',             label: 'Barche' },
+        { id: 'service',          label: 'Servizi' },
+    ];
+
+    async function openEditAgent(agent) {
+        const baseEdit = { ...agent.profile, id: agent.user_id, role: agent.role };
+        const emptyPerms = Object.fromEntries(CATEGORIES.map(c => [c.id, { view: false, add: false }]));
+        setEditAgent({ ...baseEdit, permissions: emptyPerms });
+        try {
+            const { data } = await supabase
+                .from('user_category_permissions')
+                .select('category, can_view, can_add')
+                .eq('user_id', agent.user_id);
+            const perms = { ...emptyPerms };
+            (data || []).forEach(p => { perms[p.category] = { view: !!p.can_view, add: !!p.can_add }; });
+            setEditAgent(prev => prev && prev.id === agent.user_id ? { ...prev, permissions: perms } : prev);
+        } catch (err) {
+            console.error('Permissions load error:', err);
+        }
+    }
+
+    function togglePerm(category, field) {
+        setEditAgent(prev => {
+            const perms = { ...(prev.permissions || {}) };
+            const current = perms[category] || { view: false, add: false };
+            const next = { ...current, [field]: !current[field] };
+            // can_add implies can_view
+            if (field === 'add' && next.add) next.view = true;
+            // remove view also removes add
+            if (field === 'view' && !next.view) next.add = false;
+            perms[category] = next;
+            return { ...prev, permissions: perms };
+        });
+    }
+
     async function handleUpdateAgent(e) {
         e.preventDefault();
         setSaving('edit');
@@ -208,6 +247,21 @@ export default function AgentsPage() {
                 .from('user_roles')
                 .upsert({ user_id: editAgent.id, role: editAgent.role || 'agent' }, { onConflict: 'user_id' });
             if (roleError) throw roleError;
+
+            // 3. Upsert per-category permissions (only meaningful for non-admin roles, but harmless to always write)
+            if (editAgent.permissions) {
+                const rows = CATEGORIES.map(c => ({
+                    user_id: editAgent.id,
+                    category: c.id,
+                    can_view: !!editAgent.permissions[c.id]?.view,
+                    can_add:  !!editAgent.permissions[c.id]?.add,
+                    updated_at: new Date().toISOString(),
+                }));
+                const { error: permErr } = await supabase
+                    .from('user_category_permissions')
+                    .upsert(rows, { onConflict: 'user_id,category' });
+                if (permErr) throw permErr;
+            }
 
             setMessage({ type: 'success', text: 'Agent updated successfully!' });
             setEditAgent(null);
@@ -274,24 +328,59 @@ export default function AgentsPage() {
         setViewInsertions(editorId);
         setLoadingInsertions(true);
         try {
-            const [villasRes, ownersRes] = await Promise.all([
+            const ownersRes = await supabase
+                .from('owners')
+                .select('id, name, company_name, email, phone_number, is_active, created_at')
+                .eq('agent_id', editorId)
+                .order('created_at', { ascending: false });
+            if (ownersRes.error) throw ownersRes.error;
+
+            const ownerIds = (ownersRes.data || []).map(o => o.id);
+
+            // Villas: created_by match OR owner_id in agent's managed owners (legacy fallback)
+            let villasQuery = supabase
+                .from('properties')
+                .select('v_uuid, villa_name, areaname, destination, owner_id, created_by, created_at, is_active')
+                .order('created_at', { ascending: false });
+            if (ownerIds.length > 0) {
+                villasQuery = villasQuery.or(`created_by.eq.${editorId},owner_id.in.(${ownerIds.join(',')})`);
+            } else {
+                villasQuery = villasQuery.eq('created_by', editorId);
+            }
+
+            // Boats: same logic
+            let boatsQuery = supabase
+                .from('boats')
+                .select('v_uuid, boat_name, type, owner_id, created_by, created_at, is_active')
+                .order('created_at', { ascending: false });
+            if (ownerIds.length > 0) {
+                boatsQuery = boatsQuery.or(`created_by.eq.${editorId},owner_id.in.(${ownerIds.join(',')})`);
+            } else {
+                boatsQuery = boatsQuery.eq('created_by', editorId);
+            }
+
+            const [villasRes, boatsRes, servicesRes] = await Promise.all([
+                villasQuery,
+                boatsQuery,
                 supabase
-                    .from('properties')
-                    .select('id, villa_name, location, owner_id, created_at, is_active')
+                    .from('services')
+                    .select('id, name, provider, price, currency, is_active, created_at')
                     .eq('created_by', editorId)
-                    .order('created_at', { ascending: false }),
-                supabase
-                    .from('owners')
-                    .select('id, name, company_name, email, phone_number, is_active, created_at')
-                    .eq('agent_id', editorId)
                     .order('created_at', { ascending: false }),
             ]);
             if (villasRes.error) throw villasRes.error;
-            if (ownersRes.error) throw ownersRes.error;
-            setInsertionsData({ villas: villasRes.data || [], owners: ownersRes.data || [] });
+            if (boatsRes.error) throw boatsRes.error;
+            if (servicesRes.error) throw servicesRes.error;
+
+            setInsertionsData({
+                villas: villasRes.data || [],
+                owners: ownersRes.data || [],
+                boats: boatsRes.data || [],
+                services: servicesRes.data || [],
+            });
         } catch (err) {
             console.error('fetchEditorInsertions error:', err);
-            setInsertionsData({ villas: [], owners: [] });
+            setInsertionsData({ villas: [], owners: [], boats: [], services: [] });
         } finally {
             setLoadingInsertions(false);
         }
@@ -480,12 +569,10 @@ export default function AgentsPage() {
                                         <button onClick={() => fetchAgentHistory(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-primary transition-all" title="Quote history">
                                             <span className="material-symbols-outlined notranslate text-[20px]">history</span>
                                         </button>
-                                        {agent.role === 'editor' && (
-                                            <button onClick={() => fetchEditorInsertions(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-purple-400 transition-all" title="Inserted villas & owners">
-                                                <span className="material-symbols-outlined notranslate text-[20px]">domain</span>
-                                            </button>
-                                        )}
-                                        <button onClick={() => setEditAgent({ ...agent.profile, id: agent.user_id, role: agent.role })} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-all">
+                                        <button onClick={() => fetchEditorInsertions(agent.user_id)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-purple-400 transition-all" title="Inserted villas, owners, boats & services">
+                                            <span className="material-symbols-outlined notranslate text-[20px]">domain</span>
+                                        </button>
+                                        <button onClick={() => openEditAgent(agent)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-all">
                                             <span className="material-symbols-outlined notranslate text-[20px]">edit</span>
                                         </button>
                                         {(role === 'super_admin') && (
@@ -530,7 +617,7 @@ export default function AgentsPage() {
                                                 <button onClick={() => fetchAgentHistory(sub.user_id)} className="p-1.5 rounded-md hover:bg-surface-2 text-text-muted transition-all">
                                                     <span className="material-symbols-outlined notranslate text-[16px]">history</span>
                                                 </button>
-                                                <button onClick={() => setEditAgent({ ...sub.profile, id: sub.user_id, role: sub.role })} className="p-1.5 rounded-md hover:bg-surface-2 text-text-muted transition-all">
+                                                <button onClick={() => openEditAgent(sub)} className="p-1.5 rounded-md hover:bg-surface-2 text-text-muted transition-all">
                                                     <span className="material-symbols-outlined notranslate text-[16px]">edit</span>
                                                  </button>
                                                  {(role === 'super_admin') && (
@@ -661,16 +748,49 @@ export default function AgentsPage() {
                             </div>
 
                             <div>
-                                <label className="block text-xs text-text-muted mb-1.5 font-medium">Permission Level</label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {['agent', 'editor', 'editor-boat', 'admin', 'super_admin'].map(r => (
-                                        <button key={r} type="button" onClick={() => setEditAgent({...editAgent, role: r})} 
+                                <label className="block text-xs text-text-muted mb-1.5 font-medium">Role</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {['agent', 'admin', 'super_admin'].map(r => (
+                                        <button key={r} type="button" onClick={() => setEditAgent({...editAgent, role: r})}
                                             className={`py-2 rounded-lg text-xs font-bold uppercase border transition-all ${editAgent.role === r ? 'bg-primary/20 border-primary text-primary' : 'bg-surface-2 border-transparent text-text-muted'}`}>
-                                            {r}
+                                            {r === 'agent' ? 'User' : r === 'admin' ? 'Admin' : 'Super Admin'}
                                         </button>
                                     ))}
                                 </div>
+                                <p className="text-[10px] text-text-muted/60 mt-1.5 italic">
+                                    Admin / Super Admin bypass category permissions.
+                                </p>
                             </div>
+
+                            {editAgent.role !== 'admin' && editAgent.role !== 'super_admin' && (
+                                <div>
+                                    <label className="block text-xs text-text-muted mb-2 font-medium">Category Permissions</label>
+                                    <div className="border border-border rounded-xl overflow-hidden">
+                                        <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-2 bg-surface-2 text-[10px] font-black uppercase tracking-widest text-text-muted">
+                                            <span>Categoria</span>
+                                            <span className="w-16 text-center">Visualizza</span>
+                                            <span className="w-16 text-center">Aggiungi</span>
+                                        </div>
+                                        {CATEGORIES.map(c => {
+                                            const p = editAgent.permissions?.[c.id] || { view: false, add: false };
+                                            return (
+                                                <div key={c.id} className="grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-2.5 border-t border-border items-center">
+                                                    <span className="text-sm text-text-primary font-medium">{c.label}</span>
+                                                    <div className="w-16 flex justify-center">
+                                                        <input type="checkbox" checked={p.view} onChange={() => togglePerm(c.id, 'view')} className="size-4 accent-primary" />
+                                                    </div>
+                                                    <div className="w-16 flex justify-center">
+                                                        <input type="checkbox" checked={p.add} onChange={() => togglePerm(c.id, 'add')} className="size-4 accent-primary" />
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    <p className="text-[10px] text-text-muted/60 mt-1.5 italic">
+                                        Aggiungi implica Visualizza. Togliere Visualizza disabilita Aggiungi.
+                                    </p>
+                                </div>
+                            )}
                             <div className="space-y-4 pt-4 border-t border-border">
                                 <div>
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">Villa Contract Template</label>
@@ -812,10 +932,10 @@ export default function AgentsPage() {
                     <div className="bg-surface border border-border rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
                         <div className="p-6 border-b border-border flex items-center justify-between">
                             <div>
-                                <h2 className="text-xl font-bold text-text-primary">Editor Insertions</h2>
-                                <p className="text-[10px] text-text-muted/60 font-mono mt-1">Editor ID: {viewInsertions}</p>
+                                <h2 className="text-xl font-bold text-text-primary">User Insertions</h2>
+                                <p className="text-[10px] text-text-muted/60 font-mono mt-1">User ID: {viewInsertions}</p>
                             </div>
-                            <button onClick={() => { setViewInsertions(null); setInsertionsData({ villas: [], owners: [] }); }} className="text-text-muted hover:text-text-primary">
+                            <button onClick={() => { setViewInsertions(null); setInsertionsData({ villas: [], owners: [], boats: [], services: [] }); }} className="text-text-muted hover:text-text-primary">
                                 <span className="material-symbols-outlined notranslate">close</span>
                             </button>
                         </div>
@@ -824,14 +944,22 @@ export default function AgentsPage() {
                                 <div className="text-center text-text-muted text-sm py-10">Loading...</div>
                             ) : (
                                 <>
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                         <div className="p-4 bg-white/2 rounded-xl border border-border">
-                                            <p className="text-[10px] text-text-muted uppercase font-black">Villas Inserted</p>
+                                            <p className="text-[10px] text-text-muted uppercase font-black">Villas</p>
                                             <p className="text-2xl font-black text-purple-400">{insertionsData.villas.length}</p>
                                         </div>
                                         <div className="p-4 bg-white/2 rounded-xl border border-border">
-                                            <p className="text-[10px] text-text-muted uppercase font-black">Owners Inserted</p>
+                                            <p className="text-[10px] text-text-muted uppercase font-black">Owners</p>
                                             <p className="text-2xl font-black text-primary">{insertionsData.owners.length}</p>
+                                        </div>
+                                        <div className="p-4 bg-white/2 rounded-xl border border-border">
+                                            <p className="text-[10px] text-text-muted uppercase font-black">Boats</p>
+                                            <p className="text-2xl font-black text-blue-400">{insertionsData.boats.length}</p>
+                                        </div>
+                                        <div className="p-4 bg-white/2 rounded-xl border border-border">
+                                            <p className="text-[10px] text-text-muted uppercase font-black">Services</p>
+                                            <p className="text-2xl font-black text-amber-400">{insertionsData.services.length}</p>
                                         </div>
                                     </div>
 
@@ -855,10 +983,10 @@ export default function AgentsPage() {
                                                     </thead>
                                                     <tbody className="divide-y divide-border/30">
                                                         {insertionsData.villas.map(v => (
-                                                            <tr key={v.id} className="hover:bg-purple-500/5 transition-all">
+                                                            <tr key={v.v_uuid} className="hover:bg-purple-500/5 transition-all">
                                                                 <td className="px-4 py-3 text-text-muted font-mono">{v.created_at ? new Date(v.created_at).toLocaleDateString() : '-'}</td>
                                                                 <td className="px-4 py-3 text-text-primary font-bold">{v.villa_name || '—'}</td>
-                                                                <td className="px-4 py-3 text-text-muted">{v.location || '-'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{v.areaname || v.destination || '-'}</td>
                                                                 <td className="px-4 py-3 text-center">
                                                                     <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${v.is_active === false ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
                                                                         {v.is_active === false ? 'inactive' : 'active'}
@@ -903,6 +1031,82 @@ export default function AgentsPage() {
                                                                 <td className="px-4 py-3 text-center">
                                                                     <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${o.is_active === false ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
                                                                         {o.is_active === false ? 'inactive' : 'active'}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <h3 className="text-sm font-bold text-text-primary uppercase tracking-widest mb-3 flex items-center gap-2">
+                                            <span className="material-symbols-outlined notranslate text-[18px] text-blue-400">directions_boat</span>
+                                            Boats
+                                        </h3>
+                                        {insertionsData.boats.length === 0 ? (
+                                            <div className="p-6 text-center text-text-muted text-xs italic border border-dashed border-border rounded-xl">No boats inserted by this user.</div>
+                                        ) : (
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left text-[11px]">
+                                                    <thead>
+                                                        <tr className="text-text-muted font-bold uppercase tracking-widest bg-surface-2/50">
+                                                            <th className="px-4 py-3">Date</th>
+                                                            <th className="px-4 py-3">Boat</th>
+                                                            <th className="px-4 py-3">Type</th>
+                                                            <th className="px-4 py-3 text-center">Status</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-border/30">
+                                                        {insertionsData.boats.map(b => (
+                                                            <tr key={b.v_uuid} className="hover:bg-blue-500/5 transition-all">
+                                                                <td className="px-4 py-3 text-text-muted font-mono">{b.created_at ? new Date(b.created_at).toLocaleDateString() : '-'}</td>
+                                                                <td className="px-4 py-3 text-text-primary font-bold">{b.boat_name || '—'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{b.type || '-'}</td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${b.is_active === false ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                                                                        {b.is_active === false ? 'inactive' : 'active'}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <h3 className="text-sm font-bold text-text-primary uppercase tracking-widest mb-3 flex items-center gap-2">
+                                            <span className="material-symbols-outlined notranslate text-[18px] text-amber-400">concierge</span>
+                                            Services
+                                        </h3>
+                                        {insertionsData.services.length === 0 ? (
+                                            <div className="p-6 text-center text-text-muted text-xs italic border border-dashed border-border rounded-xl">No services inserted by this user.</div>
+                                        ) : (
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left text-[11px]">
+                                                    <thead>
+                                                        <tr className="text-text-muted font-bold uppercase tracking-widest bg-surface-2/50">
+                                                            <th className="px-4 py-3">Date</th>
+                                                            <th className="px-4 py-3">Service</th>
+                                                            <th className="px-4 py-3">Provider</th>
+                                                            <th className="px-4 py-3 text-right">Price</th>
+                                                            <th className="px-4 py-3 text-center">Status</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-border/30">
+                                                        {insertionsData.services.map(s => (
+                                                            <tr key={s.id} className="hover:bg-amber-500/5 transition-all">
+                                                                <td className="px-4 py-3 text-text-muted font-mono">{s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
+                                                                <td className="px-4 py-3 text-text-primary font-bold">{s.name || '—'}</td>
+                                                                <td className="px-4 py-3 text-text-muted">{s.provider || '-'}</td>
+                                                                <td className="px-4 py-3 text-right font-black text-text-primary">{s.price != null ? `${s.currency || 'EUR'} ${Number(s.price).toLocaleString()}` : '-'}</td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${s.is_active === false ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                                                                        {s.is_active === false ? 'inactive' : 'active'}
                                                                     </span>
                                                                 </td>
                                                             </tr>

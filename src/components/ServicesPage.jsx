@@ -7,14 +7,18 @@ import ServiceEditModal from './ServiceEditModal';
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1521334884684-d80222895322?auto=format&fit=crop&w=800&q=80';
 
 export default function ServicesPage() {
-    const { role } = useAuth();
+    const { role, canView, canAdd } = useAuth();
     const queryClient = useQueryClient();
 
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('All');
     const [editService, setEditService] = useState(null);
 
+    const isAdmin = role === 'admin' || role === 'super_admin';
     const isSuperAdmin = role === 'super_admin';
+    const canManageServices = isAdmin;
+    const canAddServices = isAdmin || canAdd('service');
+    const canViewServices = isAdmin || canView('service');
 
     const { data: categories = [] } = useQuery({
         queryKey: ['service_categories'],
@@ -60,7 +64,7 @@ export default function ServicesPage() {
     };
 
     const handleToggleActive = async (svc) => {
-        if (!isSuperAdmin) return;
+        if (!isAdmin) return;
         const { error } = await supabase
             .from('services')
             .update({ is_active: !svc.is_active })
@@ -70,7 +74,7 @@ export default function ServicesPage() {
     };
 
     const handleDelete = async (svc) => {
-        if (!isSuperAdmin) return;
+        if (!isAdmin) return;
         if (!confirm(`Permanently delete "${svc.name}"?`)) return;
         const { error } = await supabase.from('services').delete().eq('id', svc.id);
         if (error) { alert(error.message); return; }
@@ -86,7 +90,7 @@ export default function ServicesPage() {
                         {loading ? 'Loading...' : `${services.length} services available`}
                     </p>
                 </div>
-                {isSuperAdmin && (
+                {canAddServices && (
                     <button
                         onClick={() => setEditService({})}
                         className="btn-primary flex items-center gap-2 text-sm self-start"
@@ -201,7 +205,7 @@ export default function ServicesPage() {
                                     )}
                                 </div>
 
-                                {isSuperAdmin && (
+                                {canAddServices && (
                                     <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
                                         <button
                                             onClick={() => setEditService(svc)}
@@ -209,20 +213,24 @@ export default function ServicesPage() {
                                         >
                                             Edit
                                         </button>
-                                        <button
-                                            onClick={() => handleToggleActive(svc)}
-                                            className="text-[10px] font-bold uppercase tracking-wider py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
-                                            title={svc.is_active ? 'Deactivate' : 'Activate'}
-                                        >
-                                            <span className="material-symbols-outlined notranslate text-[14px]">{svc.is_active ? 'visibility_off' : 'visibility'}</span>
-                                        </button>
-                                        <button
-                                            onClick={() => handleDelete(svc)}
-                                            className="text-[10px] font-bold uppercase tracking-wider py-2 px-3 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
-                                            title="Delete"
-                                        >
-                                            <span className="material-symbols-outlined notranslate text-[14px]">delete</span>
-                                        </button>
+                                        {isAdmin && (
+                                            <>
+                                                <button
+                                                    onClick={() => handleToggleActive(svc)}
+                                                    className="text-[10px] font-bold uppercase tracking-wider py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                                                    title={svc.is_active ? 'Deactivate' : 'Activate'}
+                                                >
+                                                    <span className="material-symbols-outlined notranslate text-[14px]">{svc.is_active ? 'visibility_off' : 'visibility'}</span>
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDelete(svc)}
+                                                    className="text-[10px] font-bold uppercase tracking-wider py-2 px-3 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
+                                                    title="Delete"
+                                                >
+                                                    <span className="material-symbols-outlined notranslate text-[14px]">delete</span>
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                 )}
                             </div>

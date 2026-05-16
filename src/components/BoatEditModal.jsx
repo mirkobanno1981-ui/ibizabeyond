@@ -35,7 +35,9 @@ const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = fa
 );
 
 export default function BoatEditModal({ boat, onClose, onSaved }) {
-    const { role, user } = useAuth();
+    const { role, user, canAdd } = useAuth();
+    const isAdmin = role === 'admin' || role === 'super_admin';
+    const canAddBoats = isAdmin || canAdd('boat');
     const [owners, setOwners] = useState([]);
     const [captatorAgent, setCaptatorAgent] = useState(null);
     const [form, setForm] = useState({
@@ -83,7 +85,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     const [extractingPdf, setExtractingPdf] = useState(false);
 
     useEffect(() => {
-        if (role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'editor-boat' || role === 'agent') {
+        if (canAddBoats || role === 'agent') {
             fetchOwners();
         }
         if (boat.v_uuid) {
@@ -659,7 +661,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                             <Field label="Registration / License" field="registration_number" form={form} handleChange={handleChange} />
                             <Field label="Base Port" field="location_base_port" form={form} handleChange={handleChange} />
                             <Field label="SES Establishment Code" field="ses_establishment_code" form={form} handleChange={handleChange} />
-                            {(role === 'admin' || role === 'super_admin' || role === 'editor' || role === 'editor-boat' || role === 'agent') && (
+                            {(canAddBoats || role === 'agent') && (
                                 <div className="col-span-2 space-y-2">
                                     <label className="block text-xs text-text-muted mb-1.5 font-medium">
                                         {role === 'agent' ? 'Associated Owner (Contact)' : 'Yacht Owner'}

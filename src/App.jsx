@@ -27,6 +27,7 @@ import TermsAndConditions from './components/TermsAndConditions';
 import BoatsPage from './components/BoatsPage';
 import BoatView from './components/BoatView';
 import ServicesPage from './components/ServicesPage';
+import PendingListingsPage from './components/PendingListingsPage';
 
 import GuestPublicFormView from './components/GuestFormPublicView';
 import OwnerConfirmationView from './components/OwnerConfirmationView';
@@ -66,12 +67,15 @@ const AdminRoute = ({ children }) => {
   return children;
 };
 
-// Guard: admin, super_admin, or editor (owners management)
+// Guard: admin/super_admin OR any user with add-permission on a villa category (they need owners)
 const OwnersRoute = ({ children }) => {
-  const { user, role, loading } = useAuth();
+  const { user, role, loading, canAddAny } = useAuth();
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
-  if (role !== 'admin' && role !== 'super_admin' && role !== 'editor') return <Navigate to="/" replace />;
+  const isAdmin = role === 'admin' || role === 'super_admin';
+  if (!isAdmin && !canAddAny(['villa_licensed','villa_unlicensed','apartment','boat'])) {
+    return <Navigate to="/" replace />;
+  }
   return children;
 };
 
@@ -127,6 +131,7 @@ function App() {
                     <Route path="team" element={<AgencyAgentsPage />} />
                     <Route path="settings" element={<AdminRoute><AdminSettings /></AdminRoute>} />
                     <Route path="agents" element={<AdminRoute><AgentsPage /></AdminRoute>} />
+                    <Route path="pending-listings" element={<AdminRoute><PendingListingsPage /></AdminRoute>} />
                     <Route path="owners" element={<OwnersRoute><OwnersPage /></OwnersRoute>} />
                     <Route path="payouts" element={<SuperAdminRoute><PayoutManager /></SuperAdminRoute>} />
                     <Route path="*" element={<Navigate to="/" replace />} />

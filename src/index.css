@@ -5,6 +5,7 @@
 @layer base {
   :root {
     --primary: #e8ab30;
+    --accent: #e8ab30;
     --background: #f8f9fa;
     --surface: #ffffff;
     --surface-2: #f1f3f5;

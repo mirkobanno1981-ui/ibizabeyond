@@ -16,8 +16,16 @@ const filterOptions = {
 
 const PAGE_SIZE = 20;
 
+const villaCategory = (v) => {
+    if (v.property_type === 'apartment') return 'apartment';
+    return v.license ? 'villa_licensed' : 'villa_unlicensed';
+};
+
 export default function VillasTable() {
-    const { role, user, agentData } = useAuth();
+    const { role, user, agentData, canView, canAdd, canViewAny, canAddAny } = useAuth();
+    const VILLA_CATS = ['villa_licensed', 'villa_unlicensed', 'apartment'];
+    const canAddAnyVilla = canAddAny(VILLA_CATS);
+    const canViewAnyVilla = canViewAny(VILLA_CATS);
     const queryClient = useQueryClient();
     const isMounted = useRef(true);
     
@@ -131,11 +139,16 @@ export default function VillasTable() {
             if (vErr) throw vErr;
             if (!villasRaw) return { list: [], total: 0 };
 
-            // Filter out inactive villas for non-admin/editor — editors see their own inactive too (to reactivate)
+            // Filter out inactive villas for non-admin — creators see their own inactive too (to reactivate)
             const isAdmin = role === 'admin' || role === 'super_admin';
             let activeVillas = isAdmin
                 ? villasRaw
-                : villasRaw.filter(v => v.is_active !== false || (role === 'editor' && v.created_by === user?.id));
+                : villasRaw.filter(v => v.is_active !== false || (v.created_by && v.created_by === user?.id));
+
+            // Per-category visibility: drop villas in categories user can't view
+            if (!isAdmin) {
+                activeVillas = activeVillas.filter(v => canView(villaCategory(v)));
+            }
 
             // Per-user visibility overrides (skip super_admin)
             if (role !== 'super_admin' && user?.id) {
@@ -215,6 +228,7 @@ export default function VillasTable() {
                 let totalBase = 0;
                 let isValid = true;
                 let ruleViolation = '';
+                let minStayWarning = null;
 
                 if (checkIn && checkOut) {
                     const villaRates = seasonalRatesMap[villa.v_uuid] || [];
@@ -249,7 +263,7 @@ export default function VillasTable() {
                     if (stayRule.allowed_checkin_days === 'Strictly Saturday-Saturday' && (checkInDate.getUTCDay() !== 6 || checkOutDate.getUTCDay() !== 6)) isValid = false;
                     if (isValid && !isGapBooking) {
                         const allowBypass = isLongStay || (isLastMinute && diffDays >= 3);
-                        if (!allowBypass && diffDays < stayRule.minimum_nights) isValid = false;
+                        if (!allowBypass && diffDays < stayRule.minimum_nights) minStayWarning = stayRule.minimum_nights;
                     } else if (isValid && diffDays < 3) isValid = false;
 
                     if (isValid && isShortStay && (villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes')) {
@@ -269,7 +283,9 @@ export default function VillasTable() {
                     thumbnail: photoMap[villa.v_uuid] || villa.thumbnail_url || null,
                     displayPrice: Math.round(displayPrice),
                     supplierPrice: totalBase,
-                    priceType: (checkIn && checkOut) ? 'total' : 'weekly'
+                    priceType: (checkIn && checkOut) ? 'total' : 'weekly',
+                    minStayWarning,
+                    requestedNights: (checkIn && checkOut) ? diffDays : null
                 });
             }
 
@@ -340,7 +356,7 @@ export default function VillasTable() {
                         {loading ? 'Loading...' : `${totalCount} exclusive properties${destinationFilter !== 'Any' ? ` in ${destinationFilter}` : ''}`}
                     </p>
                 </div>
-                {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                {canAddAnyVilla && (
                     <button
                         onClick={() => setShowIngestModal(true)}
                         className="btn-primary flex items-center gap-2 text-sm self-start bg-gradient-to-r from-primary to-primary/70"
@@ -350,7 +366,7 @@ export default function VillasTable() {
                         + AI
                     </button>
                 )}
-                {(role === 'admin' || role === 'super_admin' || role === 'editor') && (
+                {canAddAnyVilla && (
                     <button
                         onClick={() => setEditVilla({
                             v_uuid: null,
@@ -383,7 +399,7 @@ export default function VillasTable() {
                     </button>
                 )}
                 
-                {(role === 'editor' || role === 'agent' || role === 'admin' || role === 'super_admin') && (
+                {canViewAnyVilla && (
                     <div className="flex items-center gap-1 bg-surface-2 p-1 rounded-xl border border-border">
                         <button
                             onClick={() => setMyVillasOnly(false)}
@@ -706,11 +722,12 @@ export default function VillasTable() {
                                     villa={villa}
                                     role={role}
                                     user={user}
+                                    canAddCategory={canAdd(villaCategory(villa))}
                                     onEdit={() => setEditVilla(villa)}
                                     isSelected={selectedVillaIds.includes(villa.v_uuid)}
                                     onToggleActive={async () => {
                                         const canToggle = role === 'super_admin' || role === 'admin'
-                                            || (role === 'editor' && villa.created_by === user?.id);
+                                            || (canAdd(villaCategory(villa)) && villa.created_by === user?.id);
                                         if (!canToggle) {
                                             alert('Access denied.');
                                             return;
@@ -724,7 +741,7 @@ export default function VillasTable() {
                                     onHardDelete={async () => {
                                         if (!confirm(`Permanently delete "${villa.villa_name}"? This action is irreversible.`)) return;
                                         const canDelete = role === 'super_admin' || role === 'admin'
-                                            || (role === 'editor' && villa.created_by === user?.id);
+                                            || (canAdd(villaCategory(villa)) && villa.created_by === user?.id);
                                         if (!canDelete) { alert('Access denied.'); return; }
                                         await supabase.from('seasonal_prices').delete().eq('v_uuid', villa.v_uuid);
                                         await supabase.from('property_photos').delete().eq('v_uuid', villa.v_uuid);
@@ -822,14 +839,14 @@ export default function VillasTable() {
     );
 }
 
-function VillaCard({ villa, role, user, onEdit, onToggleActive, onHardDelete, isSelected, onSelect }) {
+function VillaCard({ villa, role, user, canAddCategory, onEdit, onToggleActive, onHardDelete, isSelected, onSelect }) {
     const isActive = villa.is_active !== false;
     const isSuperAdmin = role === 'super_admin';
     const isAdminStrict = role === 'admin' || role === 'super_admin';
-    const canEditEditor = role === 'editor' && villa.created_by && user?.id && villa.created_by === user.id;
-    const isAdmin = isAdminStrict || canEditEditor;
-    const canArchive = isAdminStrict || canEditEditor;
-    const canHardDelete = isAdminStrict || canEditEditor;
+    const isOwnInsertion = canAddCategory && villa.created_by && user?.id && villa.created_by === user.id;
+    const isAdmin = isAdminStrict || isOwnInsertion;
+    const canArchive = isAdminStrict || isOwnInsertion;
+    const canHardDelete = isAdminStrict || isOwnInsertion;
 
     return (
         <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${
@@ -879,6 +896,15 @@ function VillaCard({ villa, role, user, onEdit, onToggleActive, onHardDelete, is
                 {villa.allow_shortstays === 'yes' && isActive && (
                     <div className="absolute top-3 right-3 bg-primary/90 text-background-dark text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
                         Short Stay
+                    </div>
+                )}
+                {villa.minStayWarning && isActive && (
+                    <div
+                        title={`Minimum stay for this period: ${villa.minStayWarning} nights (you selected ${villa.requestedNights}).`}
+                        className="absolute top-3 right-3 flex items-center gap-1 bg-amber-500/95 text-black text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide shadow-lg"
+                    >
+                        <span className="material-symbols-outlined notranslate text-[11px]">warning</span>
+                        Min {villa.minStayWarning}n
                     </div>
                 )}
             </div>
@@ -1017,22 +1043,32 @@ function BulkQuoteModal({ selectedVillas, checkIn, checkOut, margins, onClose, o
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        const invalidVillas = selectedVillas.filter(villa => {
+        const invalidVillas = [];
+        const minStayWarnVillas = [];
+        selectedVillas.forEach(villa => {
             const isStrictlySat = villa.allowed_checkin_days === 'Strictly Saturday-Saturday';
-            if (isStrictlySat && (start.getUTCDay() !== 6 || end.getUTCDay() !== 6)) return true;
-            
+            if (isStrictlySat && (start.getUTCDay() !== 6 || end.getUTCDay() !== 6)) {
+                invalidVillas.push(villa);
+                return;
+            }
             const isLastMinute = (start - today) / (1000 * 60 * 60 * 24) <= 7;
             const isLongStay = diffDays >= 28;
             const bypassMinNights = isLongStay || (isLastMinute && diffDays >= 3);
             const minNights = villa.minimum_nights || 7;
-            
-            if (!bypassMinNights && diffDays < minNights) return true;
-            return false;
+            if (!bypassMinNights && diffDays < minNights) {
+                minStayWarnVillas.push({ name: villa.villa_name, minNights });
+            }
         });
 
         if (invalidVillas.length > 0) {
-            alert(`Impossibile procedere: ${invalidVillas.length} villa/e non rispettano le regole di prenotazione per queste date (es. Sabato-Sabato o minimo notti).`);
+            alert(`Impossibile procedere: ${invalidVillas.length} villa/e non rispettano la regola Sabato-Sabato per queste date.`);
             return;
+        }
+
+        if (minStayWarnVillas.length > 0) {
+            const list = minStayWarnVillas.map(v => `• ${v.name} (min ${v.minNights} notti)`).join('\n');
+            const msg = `Attenzione: ${minStayWarnVillas.length} villa/e hanno un soggiorno minimo superiore alle ${diffDays} notti selezionate:\n\n${list}\n\nProcedere comunque con la creazione dei preventivi (richiede approvazione del proprietario)?`;
+            if (!window.confirm(msg)) return;
         }
         
         setSaving(true);

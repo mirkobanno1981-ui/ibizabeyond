@@ -8,6 +8,7 @@ export const AuthProvider = ({ children }) => {
     const [role, setRole] = useState(null);
     const [agentData, setAgentData] = useState(null);
     const [ownerData, setOwnerData] = useState(null);
+    const [permissions, setPermissions] = useState({});
     const [loading, setLoading] = useState(true);
 
     // Persistent refs to avoid stale closures and track current identity
@@ -15,7 +16,7 @@ export const AuthProvider = ({ children }) => {
     const currentRoleRef = useRef(null);
 
     const fetchAuthData = async (userData) => {
-        if (!userData) return { role: 'agent', agent: null, owner: null };
+        if (!userData) return { role: 'agent', agent: null, owner: null, permissions: {} };
         const userId = userData.id;
 
         try {
@@ -23,12 +24,14 @@ export const AuthProvider = ({ children }) => {
             const results = await Promise.allSettled([
                 supabase.from('user_roles').select('role').eq('user_id', userId).maybeSingle(),
                 supabase.from('owners').select('*').eq('id', userId).maybeSingle(),
-                supabase.from('agents').select('*').eq('id', userId).maybeSingle()
+                supabase.from('agents').select('*').eq('id', userId).maybeSingle(),
+                supabase.from('user_category_permissions').select('category, can_view, can_add').eq('user_id', userId)
             ]);
 
             const roleRes = results[0].status === 'fulfilled' ? results[0].value : { data: null };
             const ownerRes = results[1].status === 'fulfilled' ? results[1].value : { data: null };
             const agentRes = results[2].status === 'fulfilled' ? results[2].value : { data: null };
+            const permsRes = results[3].status === 'fulfilled' ? results[3].value : { data: [] };
 
             const roleData = roleRes.data;
             const ownerInfo = ownerRes.data;
@@ -43,10 +46,15 @@ export const AuthProvider = ({ children }) => {
 
             const finalRole = agentInfo?.agent_type === 'agency_admin' ? 'agency_admin' : currentRole;
 
-            return { role: finalRole, agent: agentInfo, owner: ownerInfo };
+            const permissions = {};
+            (permsRes.data || []).forEach(p => {
+                permissions[p.category] = { view: !!p.can_view, add: !!p.can_add };
+            });
+
+            return { role: finalRole, agent: agentInfo, owner: ownerInfo, permissions };
         } catch (err) {
             console.error("[Auth] Metadata fetch critical failure:", err);
-            return { role: 'agent', agent: null, owner: null };
+            return { role: 'agent', agent: null, owner: null, permissions: {} };
         }
     };
 
@@ -75,6 +83,7 @@ export const AuthProvider = ({ children }) => {
                     setRole(metadata.role);
                     setAgentData(metadata.agent);
                     setOwnerData(metadata.owner);
+                    setPermissions(metadata.permissions || {});
                 } else {
                     setUser(null);
                 }
@@ -98,6 +107,7 @@ export const AuthProvider = ({ children }) => {
                     setRole(null);
                     setAgentData(null);
                     setOwnerData(null);
+                    setPermissions({});
                     setLoading(false);
                     return;
                 }
@@ -117,6 +127,7 @@ export const AuthProvider = ({ children }) => {
                             setRole(metadata.role);
                             setAgentData(metadata.agent);
                             setOwnerData(metadata.owner);
+                            setPermissions(metadata.permissions || {});
                         } catch (err) {
                             console.error("[Auth] AuthStateChange metadata error:", err);
                         } finally {
@@ -157,21 +168,52 @@ export const AuthProvider = ({ children }) => {
             setRole(metadata.role);
             setAgentData(metadata.agent);
             setOwnerData(metadata.owner);
+            setPermissions(metadata.permissions || {});
         }
     };
+
+    useEffect(() => {
+        const root = document.documentElement;
+        const hex = /^#[0-9a-fA-F]{6}$/;
+        const primary = hex.test(agentData?.brand_primary_color || '') ? agentData.brand_primary_color : null;
+        const accent = hex.test(agentData?.brand_accent_color || '') ? agentData.brand_accent_color : null;
+
+        if (primary) root.style.setProperty('--primary', primary);
+        else root.style.removeProperty('--primary');
+
+        if (accent) root.style.setProperty('--accent', accent);
+        else if (primary) root.style.setProperty('--accent', primary);
+        else root.style.removeProperty('--accent');
+
+        return () => {
+            root.style.removeProperty('--primary');
+            root.style.removeProperty('--accent');
+        };
+    }, [agentData?.brand_primary_color, agentData?.brand_accent_color]);
 
     // Global loading state: true if still checking initial session
     const appIsStarting = loading || user === undefined;
 
+    const isAdmin = role === 'admin' || role === 'super_admin';
+    const canView = (category) => isAdmin || !!permissions[category]?.view;
+    const canAdd  = (category) => isAdmin || !!permissions[category]?.add;
+    const canViewAny = (cats) => isAdmin || cats.some(c => permissions[c]?.view);
+    const canAddAny  = (cats) => isAdmin || cats.some(c => permissions[c]?.add);
+
     return (
-        <AuthContext.Provider value={{ 
-            user: user ?? null, 
-            role, 
-            agentData, 
-            ownerData, 
-            loading: appIsStarting, 
-            signOut, 
-            refreshSession 
+        <AuthContext.Provider value={{
+            user: user ?? null,
+            role,
+            agentData,
+            ownerData,
+            permissions,
+            canView,
+            canAdd,
+            canViewAny,
+            canAddAny,
+            loading: appIsStarting,
+            signOut,
+            refreshSession
         }}>
             {children}
         </AuthContext.Provider>
