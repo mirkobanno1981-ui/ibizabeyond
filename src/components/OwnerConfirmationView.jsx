@@ -162,13 +162,20 @@ export default function OwnerConfirmationView() {
             if (checkIn && checkOut && (quote.v_uuid || quote.boat_uuid)) {
                 const nights = Math.max(1, Math.round((new Date(checkOut) - new Date(checkIn)) / 86400000));
                 const perDay = Math.round((value / nights) * 100) / 100;
-                const seasonalRow = {
-                    v_uuid: quote.v_uuid || quote.boat_uuid,
+                const targetUuid = quote.v_uuid || quote.boat_uuid;
+                // Delete any seasonal_prices rows that overlap the booking range so we don't stack duplicates.
+                await supabase
+                    .from('seasonal_prices')
+                    .delete()
+                    .eq('v_uuid', targetUuid)
+                    .lte('start_date', checkOut)
+                    .gte('end_date', checkIn);
+                await supabase.from('seasonal_prices').insert({
+                    v_uuid: targetUuid,
                     start_date: checkIn,
                     end_date: checkOut,
                     amount: perDay,
-                };
-                await supabase.from('seasonal_prices').insert(seasonalRow);
+                });
             }
 
             // Notify quote creator (agent) in-app.
