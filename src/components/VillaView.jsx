@@ -470,30 +470,44 @@ export default function VillaView() {
         if (!newClient.full_name) return alert('Name is required');
         setCreatingClient(true);
         try {
-            const phone = (newClient.phone_number || '').trim();
-            if (phone && user?.id) {
+            const rawPhone = (newClient.phone_number || '').trim();
+            const normPhone = rawPhone.replace(/\s+/g, '');
+            const payload = { ...newClient, phone_number: normPhone, agent_id: user?.id };
+
+            const adoptExisting = (row) => {
+                setClients(prev => (prev.some(c => c.id === row.id) ? prev : [row, ...prev]));
+                setSelectedClientId(row.id);
+                setShowNewClientForm(false);
+                setNewClient({ full_name: '', email: '', phone_number: '' });
+                alert(`Client with this phone already exists (${row.full_name}). Selected existing record.`);
+            };
+
+            if (normPhone && user?.id) {
                 const { data: existing } = await supabase
                     .from('clients')
                     .select('id, full_name, phone_number')
                     .eq('agent_id', user.id)
-                    .eq('phone_number', phone)
+                    .or(`phone_number.eq.${normPhone},phone_number.eq.${rawPhone}`)
                     .maybeSingle();
                 if (existing) {
-                    setClients(prev => (prev.some(c => c.id === existing.id) ? prev : [existing, ...prev]));
-                    setSelectedClientId(existing.id);
-                    setShowNewClientForm(false);
-                    setNewClient({ full_name: '', email: '', phone_number: '' });
-                    alert(`Client with this phone already exists (${existing.full_name}). Selected existing record.`);
+                    adoptExisting(existing);
                     return;
                 }
             }
 
-            const { data, error } = await supabase.from('clients').insert({
-                ...newClient,
-                agent_id: user?.id
-            }).select().single();
-
-            if (error) throw error;
+            const { data, error } = await supabase.from('clients').insert(payload).select().single();
+            if (error) {
+                if (error.code === '23505' && user?.id && normPhone) {
+                    const { data: dupe } = await supabase
+                        .from('clients')
+                        .select('id, full_name, phone_number')
+                        .eq('agent_id', user.id)
+                        .or(`phone_number.eq.${normPhone},phone_number.eq.${rawPhone}`)
+                        .maybeSingle();
+                    if (dupe) { adoptExisting(dupe); return; }
+                }
+                throw error;
+            }
 
             setClients(prev => [data, ...prev]);
             setSelectedClientId(data.id);
