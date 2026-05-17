@@ -86,6 +86,20 @@ export default function OwnerConfirmationView() {
                 .eq('id', id);
 
             if (error) throw error;
+
+            if (quote?.agent_id) {
+                const propName = villa?.villa_name || boat?.boat_name || 'property';
+                await supabase.from('notifications').insert({
+                    user_id: quote.agent_id,
+                    type: 'owner_confirmed',
+                    title: `Availability confirmed for ${propName}`,
+                    body: `Dates ${new Date(quote.check_in).toLocaleDateString()} → ${new Date(quote.check_out).toLocaleDateString()} approved by owner.`,
+                    quote_id: id,
+                    v_uuid: quote.v_uuid || null,
+                    boat_uuid: quote.boat_uuid || null,
+                });
+            }
+
             setStatus('confirmed');
         } catch (err) {
             alert('Error updating availability: ' + err.message);
@@ -111,6 +125,36 @@ export default function OwnerConfirmationView() {
                 })
                 .eq('id', id);
             if (error) throw error;
+
+            // Upsert seasonal_prices row covering booking dates so future quotes see the price.
+            const checkIn = quote.check_in;
+            const checkOut = quote.check_out;
+            if (checkIn && checkOut && (quote.v_uuid || quote.boat_uuid)) {
+                const nights = Math.max(1, Math.round((new Date(checkOut) - new Date(checkIn)) / 86400000));
+                const perDay = Math.round((value / nights) * 100) / 100;
+                const seasonalRow = {
+                    v_uuid: quote.v_uuid || quote.boat_uuid,
+                    start_date: checkIn,
+                    end_date: checkOut,
+                    amount: perDay,
+                };
+                await supabase.from('seasonal_prices').insert(seasonalRow);
+            }
+
+            // Notify quote creator (agent) in-app.
+            if (quote.agent_id) {
+                const propName = villa?.villa_name || boat?.boat_name || 'property';
+                await supabase.from('notifications').insert({
+                    user_id: quote.agent_id,
+                    type: 'owner_priced',
+                    title: `Owner quoted €${value.toLocaleString()} for ${propName}`,
+                    body: priceNotes ? `Notes: ${priceNotes}` : `Dates ${new Date(checkIn).toLocaleDateString()} → ${new Date(checkOut).toLocaleDateString()}.`,
+                    quote_id: id,
+                    v_uuid: quote.v_uuid || null,
+                    boat_uuid: quote.boat_uuid || null,
+                });
+            }
+
             setStatus('confirmed');
         } catch (err) {
             alert('Error submitting price: ' + err.message);
@@ -131,6 +175,20 @@ export default function OwnerConfirmationView() {
                 .eq('id', id);
 
             if (error) throw error;
+
+            if (quote?.agent_id) {
+                const propName = villa?.villa_name || boat?.boat_name || 'property';
+                await supabase.from('notifications').insert({
+                    user_id: quote.agent_id,
+                    type: 'owner_declined',
+                    title: `Owner declined ${propName}`,
+                    body: declineReason || 'No reason provided.',
+                    quote_id: id,
+                    v_uuid: quote.v_uuid || null,
+                    boat_uuid: quote.boat_uuid || null,
+                });
+            }
+
             setStatus('declined');
             setShowDeclineModal(false);
         } catch (err) {

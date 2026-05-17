@@ -42,7 +42,81 @@ export default function Layout() {
     const [checkingStatus, setCheckingStatus] = useState(true);
     const [agentProfile, setAgentProfile] = useState(null);
     const [pendingCount, setPendingCount] = useState(0);
+    const [notifications, setNotifications] = useState([]);
+    const [showNotifPanel, setShowNotifPanel] = useState(false);
     const searchRef = useRef(null);
+    const notifRef = useRef(null);
+
+    useEffect(() => {
+        if (!user?.id) return;
+
+        let isMounted = true;
+        const load = async () => {
+            const { data } = await supabase
+                .from('notifications')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('created_at', { ascending: false })
+                .limit(30);
+            if (isMounted) setNotifications(data || []);
+        };
+        load();
+
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+            if (Notification.permission === 'default') {
+                Notification.requestPermission().catch(() => {});
+            }
+        }
+
+        const channel = supabase
+            .channel(`notifications:${user.id}`)
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+                (payload) => {
+                    const row = payload.new;
+                    setNotifications(prev => [row, ...prev]);
+                    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+                        try {
+                            new Notification(row.title, { body: row.body || '', tag: row.id });
+                        } catch (_) { /* ignore */ }
+                    }
+                }
+            )
+            .subscribe();
+
+        const closeOnClickOutside = (e) => {
+            if (notifRef.current && !notifRef.current.contains(e.target)) {
+                setShowNotifPanel(false);
+            }
+        };
+        document.addEventListener('mousedown', closeOnClickOutside);
+
+        return () => {
+            isMounted = false;
+            supabase.removeChannel(channel);
+            document.removeEventListener('mousedown', closeOnClickOutside);
+        };
+    }, [user?.id]);
+
+    const unreadCount = notifications.filter(n => !n.is_read).length;
+
+    const markAllRead = async () => {
+        if (!user?.id) return;
+        const ids = notifications.filter(n => !n.is_read).map(n => n.id);
+        if (ids.length === 0) return;
+        await supabase.from('notifications').update({ is_read: true }).in('id', ids);
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    };
+
+    const handleNotifClick = async (n) => {
+        if (!n.is_read) {
+            await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+            setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, is_read: true } : x));
+        }
+        setShowNotifPanel(false);
+        if (n.quote_id) navigate('/quotes');
+    };
 
     useEffect(() => {
         const checkAgentStatus = () => {
@@ -406,10 +480,50 @@ export default function Layout() {
                         </div>
                     </div>
                     <div className="flex items-center gap-3 ml-3">
-                        <button className="relative p-2 text-text-muted hover:text-text-primary hover:bg-surface-2 rounded-lg transition-colors">
-                            <span className="material-symbols-outlined notranslate text-[20px] notranslate">notifications</span>
-                            <span className="absolute top-2 right-2 size-1.5 bg-primary rounded-full"></span>
-                        </button>
+                        <div className="relative" ref={notifRef}>
+                            <button
+                                onClick={() => setShowNotifPanel(s => !s)}
+                                className="relative p-2 text-text-muted hover:text-text-primary hover:bg-surface-2 rounded-lg transition-colors"
+                                title="Notifications"
+                            >
+                                <span className="material-symbols-outlined notranslate text-[20px] notranslate">notifications</span>
+                                {unreadCount > 0 && (
+                                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-primary text-background-dark text-[10px] font-black rounded-full flex items-center justify-center shadow-lg">
+                                        {unreadCount > 9 ? '9+' : unreadCount}
+                                    </span>
+                                )}
+                            </button>
+                            {showNotifPanel && (
+                                <div className="absolute right-0 top-full mt-2 w-[360px] max-h-[480px] bg-surface border border-border rounded-2xl shadow-2xl overflow-hidden z-50 flex flex-col">
+                                    <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                                        <h3 className="text-xs font-black uppercase tracking-widest text-text-primary">Notifications</h3>
+                                        {unreadCount > 0 && (
+                                            <button onClick={markAllRead} className="text-[10px] font-bold text-primary hover:underline uppercase tracking-widest">
+                                                Mark all read
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="overflow-y-auto flex-1">
+                                        {notifications.length === 0 ? (
+                                            <p className="p-6 text-center text-xs text-text-muted">No notifications yet.</p>
+                                        ) : notifications.map(n => (
+                                            <button
+                                                key={n.id}
+                                                onClick={() => handleNotifClick(n)}
+                                                className={`w-full text-left px-4 py-3 border-b border-border/50 hover:bg-surface-2 transition-colors flex gap-3 ${!n.is_read ? 'bg-primary/5' : ''}`}
+                                            >
+                                                <div className={`size-2 mt-1.5 rounded-full shrink-0 ${!n.is_read ? 'bg-primary' : 'bg-transparent'}`}></div>
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="text-xs font-bold text-text-primary truncate">{n.title}</p>
+                                                    {n.body && <p className="text-[11px] text-text-muted mt-0.5 line-clamp-2">{n.body}</p>}
+                                                    <p className="text-[10px] text-text-muted mt-1">{new Date(n.created_at).toLocaleString()}</p>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                         <button 
                             onClick={toggleTheme}
                             className="p-2 text-text-muted hover:text-text-primary hover:bg-surface-2 rounded-lg transition-colors"
