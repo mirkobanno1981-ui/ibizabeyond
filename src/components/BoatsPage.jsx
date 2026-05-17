@@ -64,26 +64,34 @@ export default function BoatsPage() {
                 }
             }
             if (search) {
-                if (role === 'super_admin') {
-                    const orParts = [`boat_name.ilike.%${search}%`];
-                    const [agentsRes, ownersRes] = await Promise.all([
-                        supabase
-                            .from('agents')
-                            .select('id')
-                            .or(`email.ilike.%${search}%,company_name.ilike.%${search}%`),
-                        supabase
-                            .from('owners')
-                            .select('id')
-                            .or(`name.ilike.%${search}%,company_name.ilike.%${search}%`),
-                    ]);
-                    const agentIds = (agentsRes.data || []).map(a => a.id);
-                    const ownerIds = (ownersRes.data || []).map(o => o.id);
-                    if (agentIds.length) orParts.push(`created_by.in.(${agentIds.join(',')})`);
-                    if (ownerIds.length) orParts.push(`owner_id.in.(${ownerIds.join(',')})`);
-                    query = query.or(orParts.join(','));
-                } else {
-                    query = query.ilike('boat_name', `%${search}%`);
+                const orParts = [`boat_name.ilike.%${search}%`];
+                const [agentsRes, ownersRes] = await Promise.all([
+                    supabase
+                        .from('agents')
+                        .select('id')
+                        .or(`email.ilike.%${search}%,company_name.ilike.%${search}%`),
+                    supabase
+                        .from('owners')
+                        .select('id, agent_id')
+                        .or(`name.ilike.%${search}%,company_name.ilike.%${search}%`),
+                ]);
+                const agentIds = (agentsRes.data || []).map(a => a.id);
+                const ownerIds = (ownersRes.data || []).map(o => o.id);
+                if (agentIds.length) {
+                    const { data: ownersByCapturer } = await supabase
+                        .from('owners')
+                        .select('id')
+                        .in('agent_id', agentIds);
+                    for (const o of (ownersByCapturer || [])) {
+                        if (!ownerIds.includes(o.id)) ownerIds.push(o.id);
+                    }
                 }
+                if (agentIds.length) {
+                    orParts.push(`created_by.in.(${agentIds.join(',')})`);
+                    orParts.push(`owner_id.in.(${agentIds.join(',')})`);
+                }
+                if (ownerIds.length) orParts.push(`owner_id.in.(${ownerIds.join(',')})`);
+                query = query.or(orParts.join(','));
             }
             if (typeFilter !== 'All') {
                 query = query.eq('type', typeFilter);

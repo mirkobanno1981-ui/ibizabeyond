@@ -115,22 +115,34 @@ export default function VillasTable() {
                     `villa_name.ilike.%${search}%`,
                     `areaname.ilike.%${search}%`,
                 ];
-                if (role === 'super_admin') {
-                    const [agentsRes, ownersRes] = await Promise.all([
-                        supabase
-                            .from('agents')
-                            .select('id')
-                            .or(`email.ilike.%${search}%,company_name.ilike.%${search}%`),
-                        supabase
-                            .from('owners')
-                            .select('id')
-                            .or(`name.ilike.%${search}%,company_name.ilike.%${search}%`),
-                    ]);
-                    const agentIds = (agentsRes.data || []).map(a => a.id);
-                    const ownerIds = (ownersRes.data || []).map(o => o.id);
-                    if (agentIds.length) orParts.push(`created_by.in.(${agentIds.join(',')})`);
-                    if (ownerIds.length) orParts.push(`owner_id.in.(${ownerIds.join(',')})`);
+                const [agentsRes, ownersRes] = await Promise.all([
+                    supabase
+                        .from('agents')
+                        .select('id')
+                        .or(`email.ilike.%${search}%,company_name.ilike.%${search}%`),
+                    supabase
+                        .from('owners')
+                        .select('id, agent_id')
+                        .or(`name.ilike.%${search}%,company_name.ilike.%${search}%`),
+                ]);
+                const agentIds = (agentsRes.data || []).map(a => a.id);
+                const ownerIds = (ownersRes.data || []).map(o => o.id);
+                // Owners whose captator (owners.agent_id) matches search agents.
+                if (agentIds.length) {
+                    const { data: ownersByCapturer } = await supabase
+                        .from('owners')
+                        .select('id')
+                        .in('agent_id', agentIds);
+                    for (const o of (ownersByCapturer || [])) {
+                        if (!ownerIds.includes(o.id)) ownerIds.push(o.id);
+                    }
                 }
+                if (agentIds.length) {
+                    orParts.push(`created_by.in.(${agentIds.join(',')})`);
+                    // Self-managed editors: villa.owner_id may point to agents.id directly.
+                    orParts.push(`owner_id.in.(${agentIds.join(',')})`);
+                }
+                if (ownerIds.length) orParts.push(`owner_id.in.(${ownerIds.join(',')})`);
                 query = query.or(orParts.join(','));
             }
             if (guestsFilter !== 'Any') {
