@@ -108,6 +108,17 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
     const [rentalTypeConfigs, setRentalTypeConfigs] = useState({});
     const [seasonalRates, setSeasonalRates] = useState([]);
     const [confidence, setConfidence] = useState(null);
+    const [estimatedSec, setEstimatedSec] = useState(0);
+    const [elapsedSec, setElapsedSec] = useState(0);
+    const [phaseLabel, setPhaseLabel] = useState('');
+    const [phaseDetail, setPhaseDetail] = useState('');
+
+    useEffect(() => {
+        if (step !== 'extracting') return;
+        setElapsedSec(0);
+        const t = setInterval(() => setElapsedSec(s => s + 1), 1000);
+        return () => clearInterval(t);
+    }, [step]);
 
     useEffect(() => () => {
         files.forEach(f => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
@@ -149,12 +160,29 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
         [files],
     );
 
+    const estimateExtractionSec = (entries, txt) => {
+        let s = 10; // base Gemini call
+        for (const e of entries) {
+            const mb = (e.file?.size || 0) / 1024 / 1024;
+            if (e.kind === 'image') s += 0.4 + mb * 0.5;
+            else if (e.kind === 'pdf') s += 8 + mb * 1.8; // pdf.js parse + image extract + shrink scale ~lineare con MB
+            else if (e.kind === 'video') s += 15 + mb * 1.2;
+            else if (e.kind === 'audio') s += 5 + mb * 0.8;
+            else s += mb * 0.3;
+        }
+        if (txt) s += Math.min(8, txt.length / 800);
+        return Math.max(10, Math.round(s));
+    };
+
     const handleExtract = async () => {
         setError(null);
         if (!text.trim() && files.length === 0) {
             setError('Enter a description or upload at least one file.');
             return;
         }
+        setEstimatedSec(estimateExtractionSec(files, text));
+        setPhaseLabel('Preparing files');
+        setPhaseDetail('');
         setStep('extracting');
         try {
             // Pre-process PDFs client-side: extract embedded images into the gallery queue
@@ -167,10 +195,19 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
             for (const entry of files) {
                 if (entry.kind === 'pdf') {
                     try {
-                        const [photos, pdfText] = await Promise.all([
-                            extractPhotosFromPdf(entry.file),
-                            extractTextFromPdf(entry.file),
-                        ]);
+                        setPhaseLabel(`Parsing PDF: ${entry.file.name}`);
+                        const onPdfProgress = (info) => {
+                            if (info.totalPages) {
+                                setPhaseDetail(
+                                    `${info.phase === 'photos' ? 'extracting images' : 'extracting text'} — page ${info.page}/${info.totalPages}${
+                                        info.photosFound != null ? ` · ${info.photosFound} images so far` : ''
+                                    }`,
+                                );
+                            }
+                        };
+                        // Serialize: 80MB+ PDF opened twice in parallel doubles memory + stalls worker.
+                        const photos = await extractPhotosFromPdf(entry.file, onPdfProgress);
+                        const pdfText = await extractTextFromPdf(entry.file, onPdfProgress);
                         for (const photo of photos) {
                             pdfDerivedFiles.push({
                                 id: `pdf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -199,10 +236,14 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
             }
 
             // Upload files first.
+            setPhaseLabel(`Uploading ${uploadSet.length} file${uploadSet.length === 1 ? '' : 's'}`);
+            setPhaseDetail(`${(uploadSet.reduce((s, e) => s + (e.file?.size || 0), 0) / 1024 / 1024).toFixed(1)} MB total`);
             const uploadResult = uploadSet.length
                 ? await uploadIngestFiles(uploadSet.map(f => f.file), { userId: user.id })
                 : { jobId: null, files: [] };
 
+            setPhaseLabel('Running Gemini multimodal');
+            setPhaseDetail('analysing photos, text, audio, video');
             const { jobId: extractJobId, extracted: ex, confidence: conf } = await extractProperty({
                 text: augmentedText,
                 files: uploadResult.files.map(f => ({ path: f.path, mime: f.mime, kind: f.kind })),
@@ -474,9 +515,37 @@ export default function PropertyIngestModal({ onClose, onSaved }) {
                     )}
 
                     {step === 'extracting' && (
-                        <div className="flex flex-col items-center justify-center py-12 gap-3">
+                        <div className="flex flex-col items-center justify-center py-12 gap-4">
                             <span className="material-symbols-outlined notranslate text-5xl text-primary animate-pulse">auto_awesome</span>
-                            <p className="text-sm text-text-primary font-medium">Analysing...</p>
+                            <p className="text-sm text-text-primary font-medium">{phaseLabel || 'Analysing...'}</p>
+                            {phaseDetail && (
+                                <p className="text-[11px] text-primary/80 font-mono text-center">{phaseDetail}</p>
+                            )}
+                            <div className="w-full max-w-xs">
+                                <div className="flex justify-between text-[11px] text-text-muted mb-1.5 font-mono">
+                                    <span>{elapsedSec}s elapsed</span>
+                                    <span>
+                                        {elapsedSec < estimatedSec
+                                            ? `~${estimatedSec - elapsedSec}s left`
+                                            : elapsedSec < estimatedSec * 1.5
+                                            ? 'finishing up...'
+                                            : 'taking longer than expected, still working'}
+                                    </span>
+                                </div>
+                                <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
+                                    <div
+                                        className={`h-full bg-primary transition-all duration-1000 ${
+                                            elapsedSec >= estimatedSec * 1.5 ? 'animate-pulse' : ''
+                                        }`}
+                                        style={{
+                                            width: `${Math.min(95, (elapsedSec / Math.max(1, estimatedSec)) * 100)}%`,
+                                        }}
+                                    />
+                                </div>
+                                <p className="text-[10px] text-text-muted/70 text-center mt-1.5">
+                                    estimated ~{estimatedSec}s
+                                </p>
+                            </div>
                             <p className="text-[11px] text-text-muted text-center max-w-xs">
                                 Gemini is extracting name, bedrooms, prices, rental types, amenities and other details from text, photos, PDF, audio and video.
                             </p>

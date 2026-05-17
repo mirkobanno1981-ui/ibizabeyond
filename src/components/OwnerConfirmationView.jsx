@@ -12,10 +12,12 @@ export default function OwnerConfirmationView() {
     const [photos, setPhotos] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [status, setStatus] = useState('pending'); // pending, confirmed, declined
+    const [status, setStatus] = useState('pending'); // pending, awaiting_price, confirmed, declined
     const [declineReason, setDeclineReason] = useState('');
     const [showDeclineModal, setShowDeclineModal] = useState(false);
     const [processing, setProcessing] = useState(false);
+    const [priceInput, setPriceInput] = useState('');
+    const [priceNotes, setPriceNotes] = useState('');
 
     useEffect(() => {
         if (id) fetchQuoteData();
@@ -69,11 +71,17 @@ export default function OwnerConfirmationView() {
     const handleConfirm = async () => {
         setProcessing(true);
         try {
+            const needsPrice = !quote?.final_price || parseFloat(quote.final_price) === 0;
+            if (needsPrice) {
+                setStatus('awaiting_price');
+                setProcessing(false);
+                return;
+            }
             const { error } = await supabase
                 .from('quotes')
-                .update({ 
+                .update({
                     status: 'sent',
-                    owner_decline_reason: null 
+                    owner_decline_reason: null
                 })
                 .eq('id', id);
 
@@ -81,6 +89,31 @@ export default function OwnerConfirmationView() {
             setStatus('confirmed');
         } catch (err) {
             alert('Error updating availability: ' + err.message);
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    const handleSubmitPrice = async () => {
+        const value = parseFloat(priceInput);
+        if (!value || value <= 0) {
+            alert('Please enter a valid price in €.');
+            return;
+        }
+        setProcessing(true);
+        try {
+            const { error } = await supabase
+                .from('quotes')
+                .update({
+                    status: 'owner_priced',
+                    supplier_base_price: value,
+                    owner_decline_reason: priceNotes || null
+                })
+                .eq('id', id);
+            if (error) throw error;
+            setStatus('confirmed');
+        } catch (err) {
+            alert('Error submitting price: ' + err.message);
         } finally {
             setProcessing(false);
         }
@@ -298,6 +331,36 @@ export default function OwnerConfirmationView() {
                                         </button>
                                     </div>
                                 </>
+                            ) : status === 'awaiting_price' ? (
+                                <div className="space-y-4 text-left">
+                                    <h3 className="text-xl font-bold text-text-primary text-center">Confirm Your Price</h3>
+                                    <p className="text-sm text-text-muted text-center">Availability confirmed. Please quote your total price for this period.</p>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-lg font-black text-primary/40">€</span>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            value={priceInput}
+                                            onChange={e => setPriceInput(e.target.value)}
+                                            placeholder="Total price"
+                                            className="w-full bg-background border border-border rounded-2xl py-3 pl-9 pr-3 text-lg font-black text-primary outline-none focus:border-primary/60"
+                                        />
+                                    </div>
+                                    <textarea
+                                        value={priceNotes}
+                                        onChange={e => setPriceNotes(e.target.value)}
+                                        placeholder="Optional notes (cleaning, deposit, etc.)"
+                                        className="w-full bg-background border border-border rounded-2xl p-3 text-sm text-text-primary outline-none focus:border-primary/50 h-24 resize-none"
+                                    />
+                                    <button
+                                        onClick={handleSubmitPrice}
+                                        disabled={processing}
+                                        className="w-full py-4 rounded-2xl bg-primary text-background-dark font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined notranslate">send</span>
+                                        {processing ? 'Submitting...' : 'Submit Price'}
+                                    </button>
+                                </div>
                             ) : status === 'confirmed' ? (
                                 <div className="space-y-4 py-4">
                                     <div className="size-20 bg-emerald-500/20 border-2 border-emerald-500 rounded-full flex items-center justify-center text-emerald-400 mx-auto animate-in zoom-in duration-500">

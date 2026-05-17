@@ -73,6 +73,37 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const [hasPets, setHasPets] = useState(quote.group_details?.has_pets || false);
 
 
+    async function resolveOwnerOrCapturerContact(ownerId) {
+        if (!ownerId) return null;
+        const { data: owner } = await supabase
+            .from('owners')
+            .select('name, phone_number, agent_id')
+            .eq('id', ownerId)
+            .maybeSingle();
+        if (owner?.phone_number) {
+            return { name: owner.name, phone: owner.phone_number, source: 'owner' };
+        }
+        if (owner?.agent_id) {
+            const { data: cap } = await supabase
+                .from('agents')
+                .select('company_name, email, phone_number')
+                .eq('id', owner.agent_id)
+                .maybeSingle();
+            if (cap?.phone_number) {
+                return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+            }
+        }
+        const { data: agentSelf } = await supabase
+            .from('agents')
+            .select('company_name, email, phone_number')
+            .eq('id', ownerId)
+            .maybeSingle();
+        if (agentSelf?.phone_number) {
+            return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
+        }
+        return null;
+    }
+
     useEffect(() => {
         async function fetchData() {
             const [agentsRes, settingsRes] = await Promise.all([
@@ -97,14 +128,10 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
             const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
             if (ownerId && (role === 'admin' || role === 'super_admin')) {
-                const { data: ownerData } = await supabase
-                    .from('owners')
-                    .select('name, phone_number')
-                    .eq('id', ownerId)
-                    .single();
-                if (ownerData) {
-                    setOwnerPhone(ownerData.phone_number || '');
-                    setOwnerName(ownerData.name || '');
+                const contact = await resolveOwnerOrCapturerContact(ownerId);
+                if (contact) {
+                    setOwnerPhone(contact.phone);
+                    setOwnerName(contact.name);
                 }
             }
         }
@@ -260,7 +287,10 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
 
         const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
         const villaName = quote.properties?.villa_name || quote.boats?.boat_name;
-        const msg = `Hello ${ownerName}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. Please confirm availability here: ${confirmUrl}`;
+        const isOnRequest = !quote.final_price || parseFloat(quote.final_price) === 0;
+        const msg = isOnRequest
+            ? `Hello ${ownerName}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. The price is on request — please confirm availability and quote your price here: ${confirmUrl}`
+            : `Hello ${ownerName}, we have a booking request for ${villaName} from ${new Date(quote.check_in).toLocaleDateString()} to ${new Date(quote.check_out).toLocaleDateString()}. Please confirm availability here: ${confirmUrl}`;
 
         const encodedMsg = encodeURIComponent(msg);
         const waUrl = `https://wa.me/${ownerPhone.replace(/\s+/g, '')}?text=${encodedMsg}`;

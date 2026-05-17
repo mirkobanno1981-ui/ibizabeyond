@@ -208,7 +208,7 @@ export default function VillaView() {
         }
 
         if (isShortStay && villa?.allow_shortstays !== '1' && villa?.allow_shortstays !== 'yes') {
-            errors.push("Short stays (less than 7 nights) are not allowed for this property.");
+            warnings.push("Short stays (<7 nights) require owner approval for this property.");
         }
 
         let promptMsg;
@@ -219,15 +219,30 @@ export default function VillaView() {
         return { valid: errors.length === 0, errors, warnings, isShortStay, diffDays, prompt: promptMsg };
     };
 
+    const isPriceOnRequest = () => {
+        if (!selectionStart || !selectionEnd) return false;
+        const start = new Date(selectionStart);
+        const end = new Date(selectionEnd);
+        const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
+        let accommodation = 0;
+        for (let i = 0; i < diffDays; i++) {
+            const d = new Date(start);
+            d.setDate(start.getDate() + i);
+            const dStr = d.toISOString().split('T')[0];
+            accommodation += getPriceForDate(dStr);
+        }
+        return accommodation === 0;
+    };
+
     const getBasePriceForSelection = () => {
         if (!selectionStart || !selectionEnd) return { total: 0, items: [] };
         const start = new Date(selectionStart);
         const end = new Date(selectionEnd);
         const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
-        
+
         const items = [];
         let subtotal = 0;
-        
+
         for (let i = 0; i < diffDays; i++) {
             const d = new Date(start);
             d.setDate(start.getDate() + i);
@@ -236,8 +251,18 @@ export default function VillaView() {
             subtotal += price;
         }
 
-        items.push({ 
-            label: `Base Accommodation (${diffDays} nights)`, 
+        // Price on request: skip cleaning + short-stay surcharges so total stays €0.
+        if (subtotal === 0) {
+            items.push({
+                label: `Base Accommodation (${diffDays} nights)`,
+                amount: 0,
+                desc: 'Price on request — owner will quote',
+            });
+            return { total: 0, items };
+        }
+
+        items.push({
+            label: `Base Accommodation (${diffDays} nights)`,
             amount: subtotal,
             desc: `Stay from ${new Date(selectionStart).toLocaleDateString()} to ${new Date(selectionEnd).toLocaleDateString()}`
         });
@@ -321,7 +346,7 @@ export default function VillaView() {
         const result = validateBooking();
         if (result.valid && result.isShortStay && selectionEnd) {
             const breakdown = getQuoteBreakdown();
-            if (breakdown.total < 3500) {
+            if (breakdown.total > 0 && breakdown.total < 3500) {
                 result.valid = false;
                 result.errors.push("Short stay total must be over €3,500 for this villa.");
             }
@@ -488,9 +513,10 @@ export default function VillaView() {
         if (!selectionStart || (selectionStart && selectionEnd)) {
             if (isBlocked) return;
         }
-        
+
         const rule = getRuleForDate(dStr);
-        const isStrictlySat = rule.allowed_checkin_days === 'Strictly Saturday-Saturday';
+        const dateIsOnRequest = getPriceForDate(dStr) === 0;
+        const isStrictlySat = rule.allowed_checkin_days === 'Strictly Saturday-Saturday' && !dateIsOnRequest;
 
         if (!selectionStart || (selectionStart && selectionEnd)) {
             // Start new selection
@@ -559,21 +585,10 @@ export default function VillaView() {
                     const ruleObj = getRuleForDate(selectionStart);
                     
                     let isAutoValid = true;
-                    // Check Sat-Sat
                     if (ruleObj.allowed_checkin_days === 'Strictly Saturday-Saturday') {
                         if (!getIsSat(selectionStart) || !getIsSat(dStr)) isAutoValid = false;
-                        // Min stay for strict villas
-                        if (diff < ruleObj.minimum_nights) isAutoValid = false;
-                    } else {
-                        // Regular validation logic
-                        const todayObj = new Date();
-                        todayObj.setHours(0, 0, 0, 0);
-                        const isLastMin = (startObj - todayObj) / (1000 * 60 * 60 * 24) <= 7;
-                        const isLong = diff >= 28;
-                        const bypass = isLong || (isLastMin && diff >= 3);
-                        if (!bypass && diff < ruleObj.minimum_nights) isAutoValid = false;
                     }
-                    
+
                     if (isAutoValid) {
                         setShowQuoteModal(true);
                     }
@@ -648,6 +663,114 @@ export default function VillaView() {
             setCreatedQuoteId(data.id);
         } catch (err) {
             alert('Error creating quote: ' + err.message);
+        } finally {
+            setSavingQuote(false);
+        }
+    }
+
+    async function resolveOwnerOrCapturerContact(villaRow) {
+        if (!villaRow?.owner_id) return null;
+
+        const { data: owner } = await supabase
+            .from('owners')
+            .select('name, phone_number, agent_id')
+            .eq('id', villaRow.owner_id)
+            .maybeSingle();
+
+        if (owner?.phone_number) {
+            return { name: owner.name, phone: owner.phone_number, source: 'owner' };
+        }
+
+        // Fallback 1: owner has no phone -> use captator (owner.agent_id).
+        if (owner?.agent_id) {
+            const { data: cap } = await supabase
+                .from('agents')
+                .select('company_name, email, phone_number')
+                .eq('id', owner.agent_id)
+                .maybeSingle();
+            if (cap?.phone_number) {
+                return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+            }
+        }
+
+        // Fallback 2: villa.owner_id points to agents row (self-managed editor).
+        const { data: agentSelf } = await supabase
+            .from('agents')
+            .select('company_name, email, phone_number')
+            .eq('id', villaRow.owner_id)
+            .maybeSingle();
+        if (agentSelf?.phone_number) {
+            return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
+        }
+
+        return null;
+    }
+
+    async function handleAskOwnerPrice() {
+        if (!selectedClientId || !selectionStart || !selectionEnd) {
+            alert('Please pick dates and a client first.');
+            return;
+        }
+        setSavingQuote(true);
+        try {
+            const { items: breakdown, snapshot } = getQuoteBreakdown();
+
+            const { data: quote, error: quoteErr } = await supabase.from('quotes').insert({
+                v_uuid: villa.v_uuid,
+                client_id: selectedClientId,
+                check_in: selectionStart,
+                check_out: selectionEnd,
+                supplier_base_price: snapshot?.supplier_base_price || 0,
+                editor_share_eur:    snapshot?.editor_share_eur || 0,
+                editor_included:     snapshot?.editor_included || false,
+                extras_total_eur:    snapshot?.extras_total_eur || 0,
+                agency_profit_eur:   snapshot?.agency_profit_eur || 0,
+                platform_profit_eur: snapshot?.platform_profit_eur || 0,
+                editor_iva_eur:      snapshot?.editor_iva_eur || 0,
+                agency_iva_eur:      snapshot?.agency_iva_eur || 0,
+                platform_iva_eur:    snapshot?.platform_iva_eur || 0,
+                iva_amount_eur:      snapshot?.iva_amount_eur || 0,
+                iva_percent:         snapshot?.iva_percent || globalMargins.ivaPercent,
+                stripe_fee_eur:      snapshot?.stripe_fee_eur || 0,
+                upfront_stay_eur:    snapshot?.upfront_stay_eur || 0,
+                final_price:         snapshot?.final_price || 0,
+                admin_markup:    platformMargin,
+                agent_markup:    agentMargin,
+                editor_markup:   parseFloat(editorMargin) || 0,
+                extra_services:  extraServices,
+                price_breakdown: breakdown,
+                is_manual_price: isManualPrice,
+                status:          'waiting_owner',
+                agent_id:        user?.id,
+                group_details: {
+                    type: groupType,
+                    children: groupType === 'family' ? numChildren : 0,
+                    composition: groupType === 'friends' ? friendsComposition : null,
+                    is_couples: groupType === 'friends' ? isCouples : false,
+                    has_pets: hasPets
+                }
+            }).select('id').single();
+
+            if (quoteErr) throw quoteErr;
+            setCreatedQuoteId(quote.id);
+
+            if (role === 'agent' || role === 'agency_admin') {
+                alert('Request recorded. An administrator will contact the owner for price + availability.');
+                return;
+            }
+
+            const contact = await resolveOwnerOrCapturerContact(villa);
+            if (!contact) {
+                alert('No owner or capturer contact found. Quote saved as Waiting Owner.');
+                return;
+            }
+
+            const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
+            const msg = `Hello ${contact.name}, we have a booking request for ${villa.villa_name} from ${new Date(selectionStart).toLocaleDateString()} to ${new Date(selectionEnd).toLocaleDateString()}. The listed price is on request — please confirm availability and quote your price here: ${confirmUrl}`;
+            const waUrl = `https://wa.me/${contact.phone.replace(/\s+/g, '')}?text=${encodeURIComponent(msg)}`;
+            window.open(waUrl, '_blank');
+        } catch (err) {
+            alert('Error sending request: ' + err.message);
         } finally {
             setSavingQuote(false);
         }
@@ -1609,19 +1732,31 @@ export default function VillaView() {
                                 </button>
                             ) : (
                                 <>
-                                    <button 
+                                    <button
                                         onClick={resetQuoteModal}
                                         className="flex-1 py-4 rounded-2xl border border-border text-text-muted font-bold hover:bg-surface-2 transition-all"
                                     >
                                         Cancel
                                     </button>
-                                    <button 
-                                        onClick={handleCreateQuote}
-                                        disabled={!selectedClientId || savingQuote || !bookingStatus.valid}
-                                        className="flex-[2] btn-primary py-4 font-bold shadow-lg shadow-primary/20 disabled:opacity-40"
-                                    >
-                                        {savingQuote ? 'Creating...' : 'Create & Save Quote'}
-                                    </button>
+                                    {calculateQuoteTotal() === 0 ? (
+                                        <button
+                                            onClick={handleAskOwnerPrice}
+                                            disabled={!selectedClientId || savingQuote}
+                                            className="flex-[2] py-4 rounded-2xl bg-[#25D366]/10 border border-[#25D366]/30 text-[#25D366] font-black uppercase tracking-widest text-[11px] flex items-center justify-center gap-2 hover:bg-[#25D366]/20 transition-all disabled:opacity-40"
+                                            title="Price on request — ask owner via WhatsApp"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-base">chat</span>
+                                            {savingQuote ? 'Sending...' : 'Ask Owner Price (WhatsApp)'}
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={handleCreateQuote}
+                                            disabled={!selectedClientId || savingQuote || !bookingStatus.valid}
+                                            className="flex-[2] btn-primary py-4 font-bold shadow-lg shadow-primary/20 disabled:opacity-40"
+                                        >
+                                            {savingQuote ? 'Creating...' : 'Create & Save Quote'}
+                                        </button>
+                                    )}
                                 </>
                             )}
                         </div>

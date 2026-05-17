@@ -111,7 +111,27 @@ export default function VillasTable() {
                 query = query.eq('created_by', user.id);
             }
             if (search) {
-                query = query.or(`villa_name.ilike.%${search}%,areaname.ilike.%${search}%`);
+                const orParts = [
+                    `villa_name.ilike.%${search}%`,
+                    `areaname.ilike.%${search}%`,
+                ];
+                if (role === 'super_admin') {
+                    const [agentsRes, ownersRes] = await Promise.all([
+                        supabase
+                            .from('agents')
+                            .select('id')
+                            .or(`email.ilike.%${search}%,company_name.ilike.%${search}%`),
+                        supabase
+                            .from('owners')
+                            .select('id')
+                            .or(`name.ilike.%${search}%,company_name.ilike.%${search}%`),
+                    ]);
+                    const agentIds = (agentsRes.data || []).map(a => a.id);
+                    const ownerIds = (ownersRes.data || []).map(o => o.id);
+                    if (agentIds.length) orParts.push(`created_by.in.(${agentIds.join(',')})`);
+                    if (ownerIds.length) orParts.push(`owner_id.in.(${ownerIds.join(',')})`);
+                }
+                query = query.or(orParts.join(','));
             }
             if (guestsFilter !== 'Any') {
                 query = query.gte('sleeps', parseInt(guestsFilter));

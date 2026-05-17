@@ -84,6 +84,18 @@ export default function BoatIngestModal({ onClose, onSaved }) {
     const [groundingSources, setGroundingSources] = useState([]);
     const [wantMarketing, setWantMarketing] = useState(true);
     const [seasonalRates, setSeasonalRates] = useState([]);
+    const [estimatedSec, setEstimatedSec] = useState(0);
+    const [elapsedSec, setElapsedSec] = useState(0);
+    const [pdfProgress, setPdfProgress] = useState('');
+    const [phaseLabel, setPhaseLabel] = useState('');
+    const [phaseDetail, setPhaseDetail] = useState('');
+
+    useEffect(() => {
+        if (step !== 'extracting') return;
+        setElapsedSec(0);
+        const t = setInterval(() => setElapsedSec(s => s + 1), 1000);
+        return () => clearInterval(t);
+    }, [step]);
 
     useEffect(() => () => {
         files.forEach(f => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
@@ -112,7 +124,12 @@ export default function BoatIngestModal({ onClose, onSaved }) {
             try {
                 for (const pdf of pdfs) {
                     try {
-                        const photos = await extractPhotosFromPdf(pdf);
+                        const onPdfProgress = (info) => {
+                            if (info.totalPages) {
+                                setPdfProgress(`${pdf.name}: ${info.phase === 'photos' ? 'images' : 'text'} ${info.page}/${info.totalPages}${info.photosFound != null ? ` · ${info.photosFound} found` : ''}`);
+                            }
+                        };
+                        const photos = await extractPhotosFromPdf(pdf, onPdfProgress);
                         if (photos.length) {
                             const extracted = photos.map(p => ({
                                 id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -127,7 +144,11 @@ export default function BoatIngestModal({ onClose, onSaved }) {
                         console.warn('PDF photo extraction failed', e);
                     }
                     try {
-                        const txt = await extractTextFromPdf(pdf);
+                        const txt = await extractTextFromPdf(pdf, (info) => {
+                            if (info.totalPages) {
+                                setPdfProgress(`${pdf.name}: text ${info.page}/${info.totalPages}`);
+                            }
+                        });
                         if (txt.trim()) {
                             setText(prev => {
                                 const header = `\n\n=== ${pdf.name} (extracted text, ${(pdf.size / 1024 / 1024).toFixed(1)} MB) ===\n`;
@@ -141,6 +162,7 @@ export default function BoatIngestModal({ onClose, onSaved }) {
                 }
             } finally {
                 setExtractingPdf(false);
+                setPdfProgress('');
             }
         }
     }, []);
@@ -171,18 +193,37 @@ export default function BoatIngestModal({ onClose, onSaved }) {
         [files],
     );
 
+    const estimateExtractionSec = (entries, txt, withGrounding) => {
+        let s = 10;
+        for (const e of entries) {
+            const mb = (e.file?.size || 0) / 1024 / 1024;
+            if (e.kind === 'image') s += 0.4 + mb * 0.5;
+            else if (e.kind === 'pdf') s += 8 + mb * 1.8;
+            else if (e.kind === 'audio') s += 5 + mb * 0.8;
+            else s += mb * 0.3;
+        }
+        if (txt) s += Math.min(8, txt.length / 800);
+        if (withGrounding) s += 6;
+        return Math.max(10, Math.round(s));
+    };
+
     const handleExtract = async () => {
         setError(null);
         if (!text.trim() && files.length === 0) {
             setError('Provide a description or upload at least one file.');
             return;
         }
+        setEstimatedSec(estimateExtractionSec(files, text, wantMarketing));
+        setPhaseLabel(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}`);
+        setPhaseDetail(`${(files.reduce((s, e) => s + (e.file?.size || 0), 0) / 1024 / 1024).toFixed(1)} MB total`);
         setStep('extracting');
         try {
             const uploadResult = files.length
                 ? await uploadIngestFiles(files.map(f => f.file), { userId: user.id })
                 : { jobId: null, files: [] };
 
+            setPhaseLabel('Running Gemini multimodal');
+            setPhaseDetail(wantMarketing ? 'analysing + web grounding for marketing copy' : 'analysing photos, text, audio');
             const { jobId: extractJobId, extracted: ex, confidence: conf, groundingSources: sources } = await extractBoat({
                 text,
                 files: uploadResult.files.map(f => ({ path: f.path, mime: f.mime, kind: f.kind })),
@@ -388,10 +429,13 @@ export default function BoatIngestModal({ onClose, onSaved }) {
                                 </div>
 
                                 {extractingPdf && (
-                                    <p className="text-[11px] text-primary mt-2 flex items-center gap-2">
+                                    <div className="text-[11px] text-primary mt-2 flex items-center gap-2">
                                         <span className="material-symbols-outlined notranslate text-sm animate-spin">progress_activity</span>
-                                        Extracting photos from PDF…
-                                    </p>
+                                        <span>
+                                            Extracting from PDF…
+                                            {pdfProgress && <span className="ml-2 font-mono text-primary/70">{pdfProgress}</span>}
+                                        </span>
+                                    </div>
                                 )}
 
                                 {files.length > 0 && (
@@ -441,9 +485,37 @@ export default function BoatIngestModal({ onClose, onSaved }) {
                     )}
 
                     {step === 'extracting' && (
-                        <div className="flex flex-col items-center justify-center py-12 gap-3">
+                        <div className="flex flex-col items-center justify-center py-12 gap-4">
                             <span className="material-symbols-outlined notranslate text-5xl text-primary animate-pulse">auto_awesome</span>
-                            <p className="text-sm text-text-primary font-medium">Analysing…</p>
+                            <p className="text-sm text-text-primary font-medium">{phaseLabel || 'Analysing…'}</p>
+                            {phaseDetail && (
+                                <p className="text-[11px] text-primary/80 font-mono text-center">{phaseDetail}</p>
+                            )}
+                            <div className="w-full max-w-xs">
+                                <div className="flex justify-between text-[11px] text-text-muted mb-1.5 font-mono">
+                                    <span>{elapsedSec}s elapsed</span>
+                                    <span>
+                                        {elapsedSec < estimatedSec
+                                            ? `~${estimatedSec - elapsedSec}s left`
+                                            : elapsedSec < estimatedSec * 1.5
+                                            ? 'finishing up…'
+                                            : 'taking longer than expected, still working'}
+                                    </span>
+                                </div>
+                                <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
+                                    <div
+                                        className={`h-full bg-primary transition-all duration-1000 ${
+                                            elapsedSec >= estimatedSec * 1.5 ? 'animate-pulse' : ''
+                                        }`}
+                                        style={{
+                                            width: `${Math.min(95, (elapsedSec / Math.max(1, estimatedSec)) * 100)}%`,
+                                        }}
+                                    />
+                                </div>
+                                <p className="text-[10px] text-text-muted/70 text-center mt-1.5">
+                                    estimated ~{estimatedSec}s
+                                </p>
+                            </div>
                             <p className="text-[11px] text-text-muted text-center max-w-xs">
                                 Gemini is reading specs, dimensions, prices and features.
                             </p>

@@ -64,7 +64,26 @@ export default function BoatsPage() {
                 }
             }
             if (search) {
-                query = query.ilike('boat_name', `%${search}%`);
+                if (role === 'super_admin') {
+                    const orParts = [`boat_name.ilike.%${search}%`];
+                    const [agentsRes, ownersRes] = await Promise.all([
+                        supabase
+                            .from('agents')
+                            .select('id')
+                            .or(`email.ilike.%${search}%,company_name.ilike.%${search}%`),
+                        supabase
+                            .from('owners')
+                            .select('id')
+                            .or(`name.ilike.%${search}%,company_name.ilike.%${search}%`),
+                    ]);
+                    const agentIds = (agentsRes.data || []).map(a => a.id);
+                    const ownerIds = (ownersRes.data || []).map(o => o.id);
+                    if (agentIds.length) orParts.push(`created_by.in.(${agentIds.join(',')})`);
+                    if (ownerIds.length) orParts.push(`owner_id.in.(${ownerIds.join(',')})`);
+                    query = query.or(orParts.join(','));
+                } else {
+                    query = query.ilike('boat_name', `%${search}%`);
+                }
             }
             if (typeFilter !== 'All') {
                 query = query.eq('type', typeFilter);

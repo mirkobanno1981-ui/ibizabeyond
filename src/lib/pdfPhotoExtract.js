@@ -51,46 +51,66 @@ async function renderPageFallback(page, pn, baseName) {
     return new File([blob], `${baseName}_page${pn}.jpg`, { type: 'image/jpeg' });
 }
 
-export async function extractTextFromPdf(file) {
+export async function extractTextFromPdf(file, onProgress) {
     const buf = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjs.getDocument({ data: buf }).promise;
     const chunks = [];
-    for (let pn = 1; pn <= pdf.numPages; pn++) {
-        try {
-            const page = await pdf.getPage(pn);
-            const content = await page.getTextContent();
-            const text = content.items.map(it => it.str).join(' ');
-            if (text.trim()) chunks.push(`--- page ${pn} ---\n${text}`);
-        } catch {
-            // skip page
+    try {
+        for (let pn = 1; pn <= pdf.numPages; pn++) {
+            let page;
+            try {
+                page = await pdf.getPage(pn);
+                const content = await withTimeout(page.getTextContent(), PAGE_TIMEOUT_MS, `page ${pn} text`);
+                const text = content.items.map(it => it.str).join(' ');
+                if (text.trim()) chunks.push(`--- page ${pn} ---\n${text}`);
+            } catch {
+                // skip page
+            } finally {
+                try { page?.cleanup(); } catch { /* noop */ }
+            }
+            onProgress?.({ phase: 'text', page: pn, totalPages: pdf.numPages });
+            await yieldToUi();
         }
+    } finally {
+        try { await pdf.cleanup(); } catch { /* noop */ }
+        try { await pdf.destroy(); } catch { /* noop */ }
     }
     return chunks.join('\n\n');
 }
 
 const MAX_PHOTOS = 20;
+const PAGE_TIMEOUT_MS = 20000;
 
-export async function extractPhotosFromPdf(file) {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const pdf = await pdfjs.getDocument({ data: buf }).promise;
-    const baseName = (file.name || 'pdf').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-    const out = [];
+function withTimeout(promise, ms, label) {
+    return Promise.race([
+        promise,
+        new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timeout ${ms}ms`)), ms)),
+    ]);
+}
 
-    for (let pn = 1; pn <= pdf.numPages && out.length < MAX_PHOTOS; pn++) {
-        const page = await pdf.getPage(pn);
-        const ops = await page.getOperatorList();
+const yieldToUi = () => new Promise(r => setTimeout(r, 0));
+
+async function processPhotosOnPage(pdf, pn, baseName, remaining) {
+    const collected = [];
+    const page = await pdf.getPage(pn);
+    try {
+        const ops = await withTimeout(page.getOperatorList(), PAGE_TIMEOUT_MS, `page ${pn} ops`);
         let pageHadImage = false;
 
-        for (let i = 0; i < ops.fnArray.length && out.length < MAX_PHOTOS; i++) {
+        for (let i = 0; i < ops.fnArray.length && collected.length < remaining; i++) {
             const isImage = ops.fnArray[i] === pdfjs.OPS.paintImageXObject
                 || ops.fnArray[i] === pdfjs.OPS.paintJpegXObject;
             if (!isImage) continue;
             const name = ops.argsArray[i][0];
             if (!name) continue;
             try {
-                const img = await new Promise(resolve => {
-                    try { page.objs.get(name, resolve); } catch { resolve(null); }
-                });
+                const img = await withTimeout(
+                    new Promise(resolve => {
+                        try { page.objs.get(name, resolve); } catch { resolve(null); }
+                    }),
+                    PAGE_TIMEOUT_MS,
+                    `page ${pn} img ${name}`,
+                );
                 const bitmap = await bitmapFromImageObj(img);
                 if (!bitmap) continue;
                 if (bitmap.width < MIN_EDGE || bitmap.height < MIN_EDGE) {
@@ -99,22 +119,53 @@ export async function extractPhotosFromPdf(file) {
                 }
                 const jpeg = await canvasToJpegFile(bitmap, `${baseName}_p${pn}_i${i}.jpg`);
                 bitmap.close?.();
-                out.push(jpeg);
+                collected.push(jpeg);
                 pageHadImage = true;
             } catch {
                 // ignore per-image failures
             }
         }
 
-        if (!pageHadImage && pdf.numPages <= 12) {
-            // Fallback: render the page when no bitmap could be extracted (vector-only brochure).
+        if (!pageHadImage && pdf.numPages <= 12 && collected.length < remaining) {
             try {
-                const rendered = await renderPageFallback(page, pn, baseName);
-                out.push(rendered);
+                const rendered = await withTimeout(
+                    renderPageFallback(page, pn, baseName),
+                    PAGE_TIMEOUT_MS,
+                    `page ${pn} fallback render`,
+                );
+                collected.push(rendered);
             } catch {
                 // ignore
             }
         }
+    } finally {
+        try { page.cleanup(); } catch { /* noop */ }
+    }
+    return collected;
+}
+
+export async function extractPhotosFromPdf(file, onProgress) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const pdf = await pdfjs.getDocument({ data: buf }).promise;
+    const baseName = (file.name || 'pdf').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const out = [];
+
+    onProgress?.({ phase: 'photos', page: 0, totalPages: pdf.numPages, photosFound: 0 });
+
+    try {
+        for (let pn = 1; pn <= pdf.numPages && out.length < MAX_PHOTOS; pn++) {
+            try {
+                const pagePhotos = await processPhotosOnPage(pdf, pn, baseName, MAX_PHOTOS - out.length);
+                out.push(...pagePhotos);
+            } catch (e) {
+                onProgress?.({ phase: 'photos', page: pn, totalPages: pdf.numPages, photosFound: out.length, skipped: true, error: e.message });
+            }
+            onProgress?.({ phase: 'photos', page: pn, totalPages: pdf.numPages, photosFound: out.length });
+            await yieldToUi();
+        }
+    } finally {
+        try { await pdf.cleanup(); } catch { /* noop */ }
+        try { await pdf.destroy(); } catch { /* noop */ }
     }
 
     return out;

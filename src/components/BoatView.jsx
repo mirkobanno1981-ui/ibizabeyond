@@ -139,7 +139,7 @@ export default function BoatView() {
         }
         
         if (diffDays < rule.minimum_nights) {
-            errors.push(`The minimum charter duration is ${rule.minimum_nights} day(s).`);
+            errors.push(`The minimum charter duration is ${rule.minimum_nights} day(s). Use 'Ask Owner Price' if price is on request.`);
         }
         
         return { valid: errors.length === 0, errors, diffDays };
@@ -418,8 +418,7 @@ export default function BoatView() {
                     if (ruleObj.allowed_checkin_days === 'Strictly Saturday-Saturday') {
                         if (!getIsSat(selectionStart)) isAutoValid = false;
                     }
-                    if (diffDays < ruleObj.minimum_nights) isAutoValid = false;
-                    
+
                     if (isAutoValid) {
                         setShowQuoteModal(true);
                     }
@@ -490,6 +489,111 @@ export default function BoatView() {
             setCreatedQuoteId(data.id);
         } catch (err) {
             alert('Error creating quote: ' + err.message);
+        } finally {
+            setSavingQuote(false);
+        }
+    }
+
+    async function resolveOwnerOrCapturerContact(boatRow) {
+        if (!boatRow?.owner_id) return null;
+
+        const { data: owner } = await supabase
+            .from('owners')
+            .select('name, phone_number, agent_id')
+            .eq('id', boatRow.owner_id)
+            .maybeSingle();
+
+        if (owner?.phone_number) {
+            return { name: owner.name, phone: owner.phone_number, source: 'owner' };
+        }
+
+        if (owner?.agent_id) {
+            const { data: cap } = await supabase
+                .from('agents')
+                .select('company_name, email, phone_number')
+                .eq('id', owner.agent_id)
+                .maybeSingle();
+            if (cap?.phone_number) {
+                return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+            }
+        }
+
+        const { data: agentSelf } = await supabase
+            .from('agents')
+            .select('company_name, email, phone_number')
+            .eq('id', boatRow.owner_id)
+            .maybeSingle();
+        if (agentSelf?.phone_number) {
+            return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
+        }
+
+        return null;
+    }
+
+    async function handleAskOwnerPrice() {
+        if (!selectedClientId || !selectionStart || !selectionEnd) {
+            alert('Please pick dates and a client first.');
+            return;
+        }
+        setSavingQuote(true);
+        try {
+            const { items: breakdown, snapshot } = getQuoteBreakdown();
+
+            const { data: quote, error: quoteErr } = await supabase.from('quotes').insert({
+                boat_uuid: boat.v_uuid,
+                client_id: selectedClientId,
+                check_in: selectionStart,
+                check_out: selectionEnd,
+                supplier_base_price: snapshot?.supplier_base_price || 0,
+                editor_share_eur:    snapshot?.editor_share_eur || 0,
+                editor_included:     snapshot?.editor_included || false,
+                extras_total_eur:    snapshot?.extras_total_eur || 0,
+                agency_profit_eur:   snapshot?.agency_profit_eur || 0,
+                platform_profit_eur: snapshot?.platform_profit_eur || 0,
+                editor_iva_eur:      snapshot?.editor_iva_eur || 0,
+                agency_iva_eur:      snapshot?.agency_iva_eur || 0,
+                platform_iva_eur:    snapshot?.platform_iva_eur || 0,
+                iva_amount_eur:      snapshot?.iva_amount_eur || 0,
+                iva_percent:         snapshot?.iva_percent || globalMargins.ivaPercent,
+                stripe_fee_eur:      snapshot?.stripe_fee_eur || 0,
+                upfront_stay_eur:    snapshot?.upfront_stay_eur || 0,
+                final_price:         snapshot?.final_price || 0,
+                admin_markup:    platformMargin,
+                agent_markup:    agentMargin,
+                extra_services:  extraServices,
+                price_breakdown: breakdown,
+                is_manual_price: isManualPrice,
+                status:          'waiting_owner',
+                agent_id:        user?.id,
+                group_details: {
+                    type: groupType,
+                    children: groupType === 'family' ? numChildren : 0,
+                    composition: friendsComposition,
+                    is_couples: isCouples,
+                    has_pets: hasPets
+                }
+            }).select('id').single();
+
+            if (quoteErr) throw quoteErr;
+            setCreatedQuoteId(quote.id);
+
+            if (role === 'agent' || role === 'agency_admin') {
+                alert('Request recorded. An administrator will contact the owner for price + availability.');
+                return;
+            }
+
+            const contact = await resolveOwnerOrCapturerContact(boat);
+            if (!contact) {
+                alert('No owner or capturer contact found. Quote saved as Waiting Owner.');
+                return;
+            }
+
+            const confirmUrl = `${window.location.origin}/confirm-availability/${quote.id}`;
+            const msg = `Hello ${contact.name}, we have a booking request for ${boat.boat_name} from ${new Date(selectionStart).toLocaleDateString()} to ${new Date(selectionEnd).toLocaleDateString()}. The listed price is on request — please confirm availability and quote your price here: ${confirmUrl}`;
+            const waUrl = `https://wa.me/${contact.phone.replace(/\s+/g, '')}?text=${encodeURIComponent(msg)}`;
+            window.open(waUrl, '_blank');
+        } catch (err) {
+            alert('Error sending request: ' + err.message);
         } finally {
             setSavingQuote(false);
         }
@@ -1150,19 +1254,31 @@ export default function BoatView() {
                                 </button>
                             ) : (
                                 <>
-                                    <button 
+                                    <button
                                         onClick={resetQuoteModal}
                                         className="flex-1 py-4 rounded-2xl border border-border text-text-muted font-bold hover:bg-surface-2 transition-all"
                                     >
                                         Cancel
                                     </button>
-                                    <button 
-                                        onClick={handleCreateQuote}
-                                        disabled={!selectedClientId || savingQuote || !bookingStatus.valid}
-                                        className="flex-[2] btn-primary py-4 font-bold shadow-lg shadow-primary/20 disabled:opacity-40"
-                                    >
-                                        {savingQuote ? 'Creating...' : 'Create & Save Quote'}
-                                    </button>
+                                    {calculateQuoteTotal() === 0 ? (
+                                        <button
+                                            onClick={handleAskOwnerPrice}
+                                            disabled={!selectedClientId || savingQuote}
+                                            className="flex-[2] py-4 rounded-2xl bg-[#25D366]/10 border border-[#25D366]/30 text-[#25D366] font-black uppercase tracking-widest text-[11px] flex items-center justify-center gap-2 hover:bg-[#25D366]/20 transition-all disabled:opacity-40"
+                                            title="Price on request — ask owner via WhatsApp"
+                                        >
+                                            <span className="material-symbols-outlined notranslate text-base">chat</span>
+                                            {savingQuote ? 'Sending...' : 'Ask Owner Price (WhatsApp)'}
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={handleCreateQuote}
+                                            disabled={!selectedClientId || savingQuote || !bookingStatus.valid}
+                                            className="flex-[2] btn-primary py-4 font-bold shadow-lg shadow-primary/20 disabled:opacity-40"
+                                        >
+                                            {savingQuote ? 'Creating...' : 'Create & Save Quote'}
+                                        </button>
+                                    )}
                                 </>
                             )}
                         </div>
