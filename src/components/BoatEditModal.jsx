@@ -6,6 +6,8 @@ import EntityVisibilityTab from './EntityVisibilityTab';
 import { resizeImagesIfNeeded } from '../lib/imageResize';
 import { extractPhotosFromPdf } from '../lib/pdfPhotoExtract';
 import SeasonalPricingCalendar from './SeasonalPricingCalendar';
+import AiEditOverlay from './AiEditOverlay';
+import { requestBoatAiPatch } from '../lib/boatAiEditApi';
 
 const PHOTO_ACCEPT = {
     'image/jpeg': [], 'image/png': [], 'image/webp': [], 'application/pdf': [],
@@ -83,6 +85,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     const [pendingPhotos, setPendingPhotos] = useState([]); // [{ id, file, previewUrl, sourcePdf }]
     const [existingPhotos, setExistingPhotos] = useState([]); // [{ id, url, thumbnail_url, sort_order, storage_path }]
     const [extractingPdf, setExtractingPdf] = useState(false);
+    const [showAiEdit, setShowAiEdit] = useState(false);
 
     useEffect(() => {
         if (canAddBoats || role === 'agent') {
@@ -293,6 +296,39 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     }, [owners, form.owner_id]);
 
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+
+    const aiPatchableSnapshot = () => ({
+        boat_name: form.boat_name,
+        manufacturer: form.manufacturer,
+        model: form.model,
+        year: form.year,
+        type: form.type,
+        length_ft: form.length_ft,
+        beam_ft: form.beam_ft,
+        draft_ft: form.draft_ft,
+        guest_capacity_day: form.guest_capacity_day,
+        guest_capacity_overnight: form.guest_capacity_overnight,
+        cabins: form.cabins,
+        bathrooms: form.bathrooms,
+        daily_price: form.daily_price,
+        weekly_price: form.weekly_price,
+        security_deposit: form.security_deposit,
+        cleaning_fee: form.cleaning_fee,
+        fuel_policy: form.fuel_policy,
+        skipper_type: form.skipper_type,
+        tagline: form.tagline,
+        description: form.description,
+        registration_number: form.registration_number,
+        location_base_port: form.location_base_port,
+        features: form.features,
+    });
+
+    const handleAiRequest = async ({ text, audioFile }) =>
+        requestBoatAiPatch({ currentRow: aiPatchableSnapshot(), text, audioFile });
+
+    const handleAiApply = (patch) => {
+        setForm(prev => ({ ...prev, ...patch }));
+    };
 
     const handleSave = async () => {
         setSaving(true);
@@ -773,6 +809,14 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                 {/* Footer */}
                 <div className="p-5 border-t border-border flex justify-end gap-3">
                     <button
+                        onClick={() => setShowAiEdit(true)}
+                        disabled={saving}
+                        className="px-4 py-2.5 rounded-lg border border-primary/30 text-sm text-primary hover:bg-primary/10 transition-all flex items-center gap-2 mr-auto disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined notranslate text-[16px]">auto_awesome</span>
+                        AI edit
+                    </button>
+                    <button
                         onClick={onClose}
                         className="px-5 py-2.5 rounded-lg border border-border text-sm text-text-muted hover:text-text-primary transition-all"
                     >
@@ -788,6 +832,14 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                     </button>
                 </div>
             </div>
+            {showAiEdit && (
+                <AiEditOverlay
+                    currentRow={aiPatchableSnapshot()}
+                    onRequestPatch={handleAiRequest}
+                    onApply={handleAiApply}
+                    onClose={() => setShowAiEdit(false)}
+                />
+            )}
         </div>
     );
 }

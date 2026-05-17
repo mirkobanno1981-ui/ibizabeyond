@@ -28,6 +28,7 @@ import BoatsPage from './components/BoatsPage';
 import BoatView from './components/BoatView';
 import ServicesPage from './components/ServicesPage';
 import PendingListingsPage from './components/PendingListingsPage';
+import FavoritesPage from './components/FavoritesPage';
 
 import GuestPublicFormView from './components/GuestFormPublicView';
 import OwnerConfirmationView from './components/OwnerConfirmationView';
@@ -124,6 +125,7 @@ function App() {
                     <Route path="boats" element={<BoatsPage />} />
                     <Route path="boats/:id" element={<BoatView />} />
                     <Route path="services" element={<ServicesPage />} />
+                    <Route path="favorites" element={<FavoritesPage />} />
                     <Route path="clients" element={<ClientsPage />} />
                     <Route path="quotes" element={<QuotesPage />} />
                     <Route path="bookings" element={<BookingsPage />} />

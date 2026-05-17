@@ -21,6 +21,9 @@ import SeasonalPricingCalendar from './SeasonalPricingCalendar';
 import FeatureCategoryGrid from './FeatureCategoryGrid';
 import CityAreaPicker from './CityAreaPicker';
 import EntityVisibilityTab from './EntityVisibilityTab';
+import AiEditOverlay from './AiEditOverlay';
+import { requestVillaAiPatch } from '../lib/villaAiEditApi';
+import { exportVillaPdf } from '../lib/villaPdfExport';
 
 const Field = ({ label, field, form, handleChange, type = 'text', fullWidth = false }) => (
     <div className={fullWidth ? 'col-span-2' : ''}>
@@ -94,6 +97,25 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(null);
     const [activeTab, setActiveTab] = useState('details');
+    const [showAiEdit, setShowAiEdit] = useState(false);
+    const [pdfExporting, setPdfExporting] = useState(false);
+
+    const handleExportPdf = async () => {
+        if (pdfExporting) return;
+        setPdfExporting(true);
+        try {
+            await exportVillaPdf({
+                villa: { ...villa, ...form },
+                agentId: user?.id,
+                agentBranding: agentData || null,
+            });
+        } catch (err) {
+            console.error('[VillaEditModal] PDF export failed:', err);
+            setError('Failed to export PDF: ' + (err.message || err));
+        } finally {
+            setPdfExporting(false);
+        }
+    };
 
     // Photos state: loaded rows from DB + pending local files added in this session
     const [photos, setPhotos] = useState([]);
@@ -214,6 +236,34 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     };
 
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+
+    const aiPatchableSnapshot = () => ({
+        villa_name: form.villa_name,
+        tagline: form.tagline,
+        description: form.description,
+        property_type: form.property_type,
+        areaname: form.areaname,
+        district: form.district,
+        license: form.license,
+        gps: form.gps,
+        bedrooms: form.bedrooms,
+        bathrooms: form.bathrooms,
+        sleeps: form.sleeps,
+        minimum_nights: form.minimum_nights,
+        minimum_price: form.minimum_price,
+        maximum_price: form.maximum_price,
+        cleaning_charge: form.cleaning_charge,
+        deposit: form.deposit,
+        allow_shortstays: form.allow_shortstays,
+        features: form.features,
+    });
+
+    const handleAiRequest = async ({ text, audioFile }) =>
+        requestVillaAiPatch({ currentRow: aiPatchableSnapshot(), text, audioFile });
+
+    const handleAiApply = (patch) => {
+        setForm(prev => ({ ...prev, ...patch }));
+    };
 
     // Dropzone
     const onDrop = useCallback((accepted, rejected) => {
@@ -664,6 +714,19 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             {isManual && <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-bold uppercase tracking-widest">Manual</span>}
                         </p>
                     </div>
+                    {villa.v_uuid && (
+                        <button
+                            onClick={handleExportPdf}
+                            disabled={pdfExporting}
+                            title="Export branded brochure PDF"
+                            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-widest text-primary border border-primary/40 hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                            <span className="material-symbols-outlined notranslate text-[16px]">
+                                {pdfExporting ? 'hourglass_top' : 'picture_as_pdf'}
+                            </span>
+                            {pdfExporting ? 'Exporting…' : 'PDF'}
+                        </button>
+                    )}
                     <button
                         onClick={onClose}
                         className="p-2 text-text-muted hover:text-text-primary hover:bg-surface-2 rounded-lg transition-colors"
@@ -1438,6 +1501,14 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 {/* Footer */}
                 <div className="p-5 border-t border-border flex justify-end gap-3">
                     <button
+                        onClick={() => setShowAiEdit(true)}
+                        disabled={saving || !!success}
+                        className="px-4 py-2.5 rounded-lg border border-primary/30 text-sm text-primary hover:bg-primary/10 transition-all flex items-center gap-2 mr-auto disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined notranslate text-[16px]">auto_awesome</span>
+                        AI edit
+                    </button>
+                    <button
                         onClick={onClose}
                         className="px-5 py-2.5 rounded-lg border border-border text-sm text-text-muted hover:text-text-primary hover:border-primary/30 transition-all"
                     >
@@ -1453,6 +1524,14 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                     </button>
                 </div>
             </div>
+            {showAiEdit && (
+                <AiEditOverlay
+                    currentRow={aiPatchableSnapshot()}
+                    onRequestPatch={handleAiRequest}
+                    onApply={handleAiApply}
+                    onClose={() => setShowAiEdit(false)}
+                />
+            )}
         </div>
     );
 }

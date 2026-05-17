@@ -7,6 +7,7 @@ import PropertyIngestModal from './PropertyIngestModal';
 // iCal availability is now resolved via the villa_blocked_dates table,
 // populated server-side by the sync-ical edge function (see supabase/functions/sync-ical).
 import VillaMap from './VillaMap';
+import { useFavoriteSet, useToggleFavorite } from '../lib/favorites';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=400&q=60';
 
@@ -27,6 +28,8 @@ export default function VillasTable() {
     const canAddAnyVilla = canAddAny(VILLA_CATS);
     const canViewAnyVilla = canViewAny(VILLA_CATS);
     const queryClient = useQueryClient();
+    const { set: favoriteSet } = useFavoriteSet(user?.id, 'villa');
+    const toggleFavorite = useToggleFavorite();
     const isMounted = useRef(true);
     
     // UI State (Non-data)
@@ -725,6 +728,13 @@ export default function VillasTable() {
                                     canAddCategory={canAdd(villaCategory(villa))}
                                     onEdit={() => setEditVilla(villa)}
                                     isSelected={selectedVillaIds.includes(villa.v_uuid)}
+                                    isFavorite={favoriteSet.has(villa.v_uuid)}
+                                    onToggleFavorite={() => toggleFavorite.mutate({
+                                        userId: user?.id,
+                                        entityType: 'villa',
+                                        entityId: villa.v_uuid,
+                                        isFav: favoriteSet.has(villa.v_uuid),
+                                    })}
                                     onToggleActive={async () => {
                                         const canToggle = role === 'super_admin' || role === 'admin'
                                             || (canAdd(villaCategory(villa)) && villa.created_by === user?.id);
@@ -839,7 +849,7 @@ export default function VillasTable() {
     );
 }
 
-function VillaCard({ villa, role, user, canAddCategory, onEdit, onToggleActive, onHardDelete, isSelected, onSelect }) {
+function VillaCard({ villa, role, user, canAddCategory, onEdit, onToggleActive, onHardDelete, isSelected, onSelect, isFavorite, onToggleFavorite }) {
     const isActive = villa.is_active !== false;
     const isSuperAdmin = role === 'super_admin';
     const isAdminStrict = role === 'admin' || role === 'super_admin';
@@ -853,12 +863,22 @@ function VillaCard({ villa, role, user, canAddCategory, onEdit, onToggleActive, 
             isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'
         } ${!isActive ? 'opacity-60' : ''}`}>
             {/* Selection Checkbox Overlay */}
-            <div 
+            <div
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}
                 className={`absolute top-3 left-3 z-20 size-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'bg-primary border-primary text-black' : 'bg-black/20 border-white/50 hover:border-white text-transparent'}`}
             >
                 <span className="material-symbols-outlined notranslate text-[18px] font-bold">check</span>
             </div>
+
+            {onToggleFavorite && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+                    title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                    className={`absolute top-3 right-3 z-20 size-8 rounded-full flex items-center justify-center transition-all backdrop-blur-md ${isFavorite ? 'bg-red-500/90 text-white' : 'bg-black/30 text-white/80 hover:bg-black/50 hover:text-white'}`}
+                >
+                    <span className="material-symbols-outlined notranslate text-[18px]" style={{ fontVariationSettings: isFavorite ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
+                </button>
+            )}
 
             <div className="relative aspect-[4/3] overflow-hidden bg-surface-2">
                 <img
@@ -894,14 +914,14 @@ function VillaCard({ villa, role, user, canAddCategory, onEdit, onToggleActive, 
                     </div>
                 </div>
                 {villa.allow_shortstays === 'yes' && isActive && (
-                    <div className="absolute top-3 right-3 bg-primary/90 text-background-dark text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                    <div className="absolute top-3 right-14 bg-primary/90 text-background-dark text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
                         Short Stay
                     </div>
                 )}
                 {villa.minStayWarning && isActive && (
                     <div
                         title={`Minimum stay for this period: ${villa.minStayWarning} nights (you selected ${villa.requestedNights}).`}
-                        className="absolute top-3 right-3 flex items-center gap-1 bg-amber-500/95 text-black text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide shadow-lg"
+                        className="absolute top-3 right-14 flex items-center gap-1 bg-amber-500/95 text-black text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide shadow-lg"
                     >
                         <span className="material-symbols-outlined notranslate text-[11px]">warning</span>
                         Min {villa.minStayWarning}n

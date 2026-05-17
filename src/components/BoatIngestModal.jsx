@@ -9,6 +9,7 @@ import {
 } from '../lib/boatIngestApi';
 import { extractPhotosFromPdf, extractTextFromPdf } from '../lib/pdfPhotoExtract';
 import SeasonalPricingCalendar from './SeasonalPricingCalendar';
+import VoiceCapture from './VoiceCapture';
 
 const KIND_ICON = {
     image: 'image',
@@ -370,6 +371,20 @@ export default function BoatIngestModal({ onClose, onSaved }) {
                                     <p className="text-[10px] text-text-muted mt-1">
                                         Photos (JPG/PNG/WEBP), PDF brochures, audio (MP3/WAV/M4A), text · 18 MB total
                                     </p>
+                                </div>
+
+                                <div className="mt-3 flex items-center gap-3 flex-wrap">
+                                    <span className="text-[10px] text-text-muted uppercase tracking-widest">Or record a voice note:</span>
+                                    <VoiceCapture
+                                        onRecorded={(audioFile) => {
+                                            setFiles(prev => [...prev, {
+                                                id: `mic_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                                                file: audioFile,
+                                                kind: 'audio',
+                                                previewUrl: null,
+                                            }]);
+                                        }}
+                                    />
                                 </div>
 
                                 {extractingPdf && (

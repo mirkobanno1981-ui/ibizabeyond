@@ -6,6 +6,7 @@ import BoatEditModal from './BoatEditModal';
 import BoatIngestModal from './BoatIngestModal';
 import BoatQuoteModal from './BoatQuoteModal';
 import { getStartingFromPrice, getTotalForRange } from '../lib/boatPricing';
+import { useFavoriteSet, useToggleFavorite } from '../lib/favorites';
 
 const FALLBACK_BOAT_IMG = 'https://images.unsplash.com/photo-1567899534071-723d01397ad0?auto=format&fit=crop&w=800&q=80';
 
@@ -17,6 +18,8 @@ export default function BoatsPage() {
     const canAddBoats = isAdmin || canAdd('boat');
     const canViewBoats = isAdmin || canView('boat');
     const queryClient = useQueryClient();
+    const { set: favoriteSet } = useFavoriteSet(user?.id, 'boat');
+    const toggleFavorite = useToggleFavorite();
     
     // UI State
     const [search, setSearch] = useState('');
@@ -154,6 +157,7 @@ export default function BoatsPage() {
 
     const canManageBoat = (boat) =>
         isAdmin
+        || role === 'agent'
         || (canAddBoats && boat.created_by === user?.id)
         || (role === 'owner' && boat.owner_id === user?.id);
 
@@ -368,6 +372,13 @@ export default function BoatsPage() {
                             canManage={canManageBoat(boat)}
                             onToggleActive={() => handleToggleActive(boat)}
                             onHardDelete={() => handleHardDelete(boat)}
+                            isFavorite={favoriteSet.has(boat.v_uuid)}
+                            onToggleFavorite={() => toggleFavorite.mutate({
+                                userId: user?.id,
+                                entityType: 'boat',
+                                entityId: boat.v_uuid,
+                                isFav: favoriteSet.has(boat.v_uuid),
+                            })}
                             isSelected={selectedBoatIds.includes(boat.v_uuid)}
                             onSelect={() => {
                                 setSelectedBoatIds(prev =>
@@ -416,7 +427,7 @@ export default function BoatsPage() {
     );
 }
 
-function BoatCard({ boat, onEdit, role, canAddBoats, isSelected, onSelect, canManage, onToggleActive, onHardDelete }) {
+function BoatCard({ boat, onEdit, role, canAddBoats, isSelected, onSelect, canManage, onToggleActive, onHardDelete, isFavorite, onToggleFavorite }) {
     const isActive = boat.is_active !== false;
     return (
         <div className={`glass-card overflow-hidden group transition-all flex flex-col relative ${isSelected ? 'border-primary shadow-lg shadow-primary/10 scale-[1.01]' : 'hover:border-primary/30'} ${!isActive ? 'opacity-60' : ''}`}>
@@ -441,6 +452,15 @@ function BoatCard({ boat, onEdit, role, canAddBoats, isSelected, onSelect, canMa
                     <span className="bg-black/60 backdrop-blur-md px-2 py-1 rounded text-[10px] font-bold text-white uppercase tracking-wider">
                         {boat.type}
                     </span>
+                    {onToggleFavorite && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+                            title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                            className={`size-7 rounded-full flex items-center justify-center transition-all backdrop-blur-md ${isFavorite ? 'bg-red-500/90 text-white' : 'bg-black/40 text-white/80 hover:bg-black/60 hover:text-white'}`}
+                        >
+                            <span className="material-symbols-outlined notranslate text-[16px]" style={{ fontVariationSettings: isFavorite ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
+                        </button>
+                    )}
                 </div>
                 {boat.startingFromPrice != null && (
                     <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-md border border-border px-2.5 py-1 rounded-lg">

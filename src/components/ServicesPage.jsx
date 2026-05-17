@@ -3,12 +3,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import ServiceEditModal from './ServiceEditModal';
+import { useFavoriteSet, useToggleFavorite } from '../lib/favorites';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1521334884684-d80222895322?auto=format&fit=crop&w=800&q=80';
 
 export default function ServicesPage() {
-    const { role, canView, canAdd } = useAuth();
+    const { role, user, canView, canAdd } = useAuth();
     const queryClient = useQueryClient();
+    const { set: favoriteSet } = useFavoriteSet(user?.id, 'service');
+    const toggleFavorite = useToggleFavorite();
 
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('All');
@@ -167,7 +170,24 @@ export default function ServicesPage() {
                                     </div>
                                 )}
                                 {!svc.is_active && (
-                                    <div className="absolute top-3 right-3 bg-red-500/90 text-white text-[10px] px-2 py-0.5 rounded-full font-bold uppercase">Inactive</div>
+                                    <div className="absolute top-3 right-14 bg-red-500/90 text-white text-[10px] px-2 py-0.5 rounded-full font-bold uppercase">Inactive</div>
+                                )}
+                                {user?.id && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleFavorite.mutate({
+                                                userId: user.id,
+                                                entityType: 'service',
+                                                entityId: svc.id,
+                                                isFav: favoriteSet.has(svc.id),
+                                            });
+                                        }}
+                                        title={favoriteSet.has(svc.id) ? 'Remove from favorites' : 'Add to favorites'}
+                                        className={`absolute top-3 right-3 size-8 rounded-full flex items-center justify-center transition-all backdrop-blur-md ${favoriteSet.has(svc.id) ? 'bg-red-500/90 text-white' : 'bg-black/30 text-white hover:bg-black/50'}`}
+                                    >
+                                        <span className="material-symbols-outlined notranslate text-[18px]" style={{ fontVariationSettings: favoriteSet.has(svc.id) ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
+                                    </button>
                                 )}
                             </div>
 

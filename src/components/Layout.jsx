@@ -211,6 +211,7 @@ export default function Layout() {
                 {villas_enabled && showVillas && <NavItem to="/villas" icon="villa" label="Villa Inventory" />}
                 {boats_enabled && showBoats && <NavItem to="/boats" icon="directions_boat" label="Boat Charter" />}
                 {services_enabled && showServices && <NavItem to="/services" icon="concierge" label="Services" />}
+                <NavItem to="/favorites" icon="favorite" label="Favorites" />
 
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-semibold px-3 pt-4 pb-1">Business</p>
                 <NavItem to="/clients" icon="group" label="Clients" />
