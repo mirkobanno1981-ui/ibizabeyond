@@ -18,6 +18,9 @@ export default function OwnerConfirmationView() {
     const [processing, setProcessing] = useState(false);
     const [priceInput, setPriceInput] = useState('');
     const [priceNotes, setPriceNotes] = useState('');
+    const [commissionIncluded, setCommissionIncluded] = useState(null); // null | true | false
+    const [commissionPct, setCommissionPct] = useState('');
+    const [showPriceReview, setShowPriceReview] = useState(false);
 
     useEffect(() => {
         if (id) fetchQuoteData();
@@ -108,6 +111,26 @@ export default function OwnerConfirmationView() {
         }
     };
 
+    const proceedToReview = () => {
+        const value = parseFloat(priceInput);
+        if (!value || value <= 0) {
+            alert('Please enter a valid price in €.');
+            return;
+        }
+        if (commissionIncluded === null) {
+            alert('Please indicate whether the price already includes a commission.');
+            return;
+        }
+        if (commissionIncluded === true) {
+            const pct = parseFloat(commissionPct);
+            if (!pct || pct <= 0 || pct >= 100) {
+                alert('Enter the commission percentage included in the price (e.g. 15).');
+                return;
+            }
+        }
+        setShowPriceReview(true);
+    };
+
     const handleSubmitPrice = async () => {
         const value = parseFloat(priceInput);
         if (!value || value <= 0) {
@@ -116,12 +139,19 @@ export default function OwnerConfirmationView() {
         }
         setProcessing(true);
         try {
+            const inclPct = commissionIncluded === true ? parseFloat(commissionPct) || 0 : 0;
+            const commissionLine = commissionIncluded === true
+                ? `Commission included: ${inclPct}%.`
+                : 'No commission included.';
+            const combinedNotes = [commissionLine, priceNotes].filter(Boolean).join(' ');
             const { error } = await supabase
                 .from('quotes')
                 .update({
                     status: 'owner_priced',
                     supplier_base_price: value,
-                    owner_decline_reason: priceNotes || null
+                    editor_markup: inclPct,
+                    editor_included: commissionIncluded === true,
+                    owner_decline_reason: combinedNotes || null
                 })
                 .eq('id', id);
             if (error) throw error;
@@ -144,11 +174,19 @@ export default function OwnerConfirmationView() {
             // Notify quote creator (agent) in-app.
             if (quote.agent_id) {
                 const propName = villa?.villa_name || boat?.boat_name || 'property';
+                const commissionMsg = commissionIncluded === true
+                    ? `Commission included: ${inclPct}%.`
+                    : 'No commission included.';
+                const bodyLines = [
+                    `Dates ${new Date(checkIn).toLocaleDateString()} → ${new Date(checkOut).toLocaleDateString()}.`,
+                    commissionMsg,
+                    priceNotes ? `Notes: ${priceNotes}` : null,
+                ].filter(Boolean).join(' ');
                 await supabase.from('notifications').insert({
                     user_id: quote.agent_id,
                     type: 'owner_priced',
                     title: `Owner quoted €${value.toLocaleString()} for ${propName}`,
-                    body: priceNotes ? `Notes: ${priceNotes}` : `Dates ${new Date(checkIn).toLocaleDateString()} → ${new Date(checkOut).toLocaleDateString()}.`,
+                    body: bodyLines,
                     quote_id: id,
                     v_uuid: quote.v_uuid || null,
                     boat_uuid: quote.boat_uuid || null,
@@ -390,35 +428,113 @@ export default function OwnerConfirmationView() {
                                     </div>
                                 </>
                             ) : status === 'awaiting_price' ? (
-                                <div className="space-y-4 text-left">
-                                    <h3 className="text-xl font-bold text-text-primary text-center">Confirm Your Price</h3>
-                                    <p className="text-sm text-text-muted text-center">Availability confirmed. Please quote your total price for this period.</p>
-                                    <div className="relative">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-lg font-black text-primary/40">€</span>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            value={priceInput}
-                                            onChange={e => setPriceInput(e.target.value)}
-                                            placeholder="Total price"
-                                            className="w-full bg-background border border-border rounded-2xl py-3 pl-9 pr-3 text-lg font-black text-primary outline-none focus:border-primary/60"
-                                        />
+                                showPriceReview ? (
+                                    <div className="space-y-4 text-left">
+                                        <h3 className="text-xl font-bold text-text-primary text-center">Review &amp; Confirm</h3>
+                                        <p className="text-sm text-text-muted text-center">Please double-check these details before submitting.</p>
+                                        <div className="bg-background/60 border border-border rounded-2xl p-4 space-y-2">
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-text-muted">Total stay price</span>
+                                                <span className="text-text-primary font-black">€{parseFloat(priceInput || 0).toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-text-muted">Commission included</span>
+                                                <span className="text-text-primary font-bold">
+                                                    {commissionIncluded === true ? `Yes — ${commissionPct}%` : 'No'}
+                                                </span>
+                                            </div>
+                                            {priceNotes && (
+                                                <div className="pt-2 border-t border-border text-xs">
+                                                    <p className="text-text-muted">Notes</p>
+                                                    <p className="text-text-primary mt-1 whitespace-pre-wrap">{priceNotes}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <button
+                                                onClick={() => setShowPriceReview(false)}
+                                                disabled={processing}
+                                                className="flex-1 py-3 rounded-2xl border border-border text-text-muted font-bold uppercase tracking-widest hover:bg-surface-2 transition-all disabled:opacity-50"
+                                            >
+                                                Back
+                                            </button>
+                                            <button
+                                                onClick={handleSubmitPrice}
+                                                disabled={processing}
+                                                className="flex-[2] py-3 rounded-2xl bg-primary text-background-dark font-black uppercase tracking-widest shadow-xl shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                                            >
+                                                <span className="material-symbols-outlined notranslate">check</span>
+                                                {processing ? 'Submitting...' : 'Confirm & Send'}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <textarea
-                                        value={priceNotes}
-                                        onChange={e => setPriceNotes(e.target.value)}
-                                        placeholder="Optional notes (cleaning, deposit, etc.)"
-                                        className="w-full bg-background border border-border rounded-2xl p-3 text-sm text-text-primary outline-none focus:border-primary/50 h-24 resize-none"
-                                    />
-                                    <button
-                                        onClick={handleSubmitPrice}
-                                        disabled={processing}
-                                        className="w-full py-4 rounded-2xl bg-primary text-background-dark font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                                    >
-                                        <span className="material-symbols-outlined notranslate">send</span>
-                                        {processing ? 'Submitting...' : 'Submit Price'}
-                                    </button>
-                                </div>
+                                ) : (
+                                    <div className="space-y-4 text-left">
+                                        <h3 className="text-xl font-bold text-text-primary text-center">Confirm Your Price</h3>
+                                        <p className="text-sm text-text-muted text-center">Availability confirmed. Please quote your total price for this period.</p>
+                                        <div>
+                                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Total stay price (€)</label>
+                                            <div className="relative mt-1">
+                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-lg font-black text-primary/40">€</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={priceInput}
+                                                    onChange={e => setPriceInput(e.target.value)}
+                                                    placeholder="Total price"
+                                                    className="w-full bg-background border border-border rounded-2xl py-3 pl-9 pr-3 text-lg font-black text-primary outline-none focus:border-primary/60"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1 block">Does this price already include a commission?</label>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setCommissionIncluded(true); }}
+                                                    className={`py-3 px-3 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${commissionIncluded === true ? 'bg-primary text-background-dark border-primary' : 'bg-surface border-border text-text-muted hover:border-primary/50'}`}
+                                                >
+                                                    Yes
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setCommissionIncluded(false); setCommissionPct(''); }}
+                                                    className={`py-3 px-3 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${commissionIncluded === false ? 'bg-primary text-background-dark border-primary' : 'bg-surface border-border text-text-muted hover:border-primary/50'}`}
+                                                >
+                                                    No
+                                                </button>
+                                            </div>
+                                            {commissionIncluded === true && (
+                                                <div className="relative mt-2 animate-in slide-in-from-top-2 duration-200">
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        max="99"
+                                                        step="0.5"
+                                                        value={commissionPct}
+                                                        onChange={e => setCommissionPct(e.target.value)}
+                                                        placeholder="Commission % included (e.g. 15)"
+                                                        className="w-full bg-background border border-primary/40 rounded-2xl py-3 pl-3 pr-9 text-sm font-bold text-primary outline-none focus:border-primary/60"
+                                                    />
+                                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-lg font-black text-primary/40">%</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <textarea
+                                            value={priceNotes}
+                                            onChange={e => setPriceNotes(e.target.value)}
+                                            placeholder="Optional notes (cleaning, deposit, etc.)"
+                                            className="w-full bg-background border border-border rounded-2xl p-3 text-sm text-text-primary outline-none focus:border-primary/50 h-24 resize-none"
+                                        />
+                                        <button
+                                            onClick={proceedToReview}
+                                            className="w-full py-4 rounded-2xl bg-primary text-background-dark font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                                        >
+                                            <span className="material-symbols-outlined notranslate">arrow_forward</span>
+                                            Review &amp; Confirm
+                                        </button>
+                                    </div>
+                                )
                             ) : status === 'confirmed' ? (
                                 <div className="space-y-4 py-4">
                                     <div className="size-20 bg-emerald-500/20 border-2 border-emerald-500 rounded-full flex items-center justify-center text-emerald-400 mx-auto animate-in zoom-in duration-500">
