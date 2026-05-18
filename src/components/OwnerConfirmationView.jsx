@@ -72,43 +72,11 @@ export default function OwnerConfirmationView() {
     }
 
     const handleConfirm = async () => {
-        setProcessing(true);
-        try {
-            const needsPrice = !quote?.final_price || parseFloat(quote.final_price) === 0;
-            if (needsPrice) {
-                setStatus('awaiting_price');
-                setProcessing(false);
-                return;
-            }
-            const { error } = await supabase
-                .from('quotes')
-                .update({
-                    status: 'sent',
-                    owner_decline_reason: null
-                })
-                .eq('id', id);
-
-            if (error) throw error;
-
-            if (quote?.agent_id) {
-                const propName = villa?.villa_name || boat?.boat_name || 'property';
-                await supabase.from('notifications').insert({
-                    user_id: quote.agent_id,
-                    type: 'owner_confirmed',
-                    title: `Availability confirmed for ${propName}`,
-                    body: `Dates ${new Date(quote.check_in).toLocaleDateString()} → ${new Date(quote.check_out).toLocaleDateString()} approved by owner.`,
-                    quote_id: id,
-                    v_uuid: quote.v_uuid || null,
-                    boat_uuid: quote.boat_uuid || null,
-                });
-            }
-
-            setStatus('confirmed');
-        } catch (err) {
-            alert('Error updating availability: ' + err.message);
-        } finally {
-            setProcessing(false);
+        // Always ask for price confirmation + commission disclosure after availability OK.
+        if (quote?.final_price && parseFloat(quote.final_price) > 0 && !priceInput) {
+            setPriceInput(String(quote.final_price));
         }
+        setStatus('awaiting_price');
     };
 
     const proceedToReview = () => {
@@ -129,6 +97,19 @@ export default function OwnerConfirmationView() {
             }
         }
         setShowPriceReview(true);
+    };
+
+    const notifyTargets = async (rowFactory) => {
+        const targets = new Set();
+        if (quote?.agent_id) targets.add(quote.agent_id);
+        const { data: admins } = await supabase
+            .from('user_roles')
+            .select('user_id')
+            .in('role', ['admin', 'super_admin']);
+        for (const r of (admins || [])) if (r.user_id) targets.add(r.user_id);
+        if (targets.size === 0) return;
+        const rows = Array.from(targets).map(uid => rowFactory(uid));
+        await supabase.from('notifications').insert(rows);
     };
 
     const handleSubmitPrice = async () => {
@@ -189,15 +170,15 @@ export default function OwnerConfirmationView() {
                     commissionMsg,
                     priceNotes ? `Notes: ${priceNotes}` : null,
                 ].filter(Boolean).join(' ');
-                await supabase.from('notifications').insert({
-                    user_id: quote.agent_id,
+                await notifyTargets((uid) => ({
+                    user_id: uid,
                     type: 'owner_priced',
                     title: `Owner quoted €${value.toLocaleString()} for ${propName}`,
                     body: bodyLines,
                     quote_id: id,
                     v_uuid: quote.v_uuid || null,
                     boat_uuid: quote.boat_uuid || null,
-                });
+                }));
             }
 
             setStatus('confirmed');
@@ -221,17 +202,17 @@ export default function OwnerConfirmationView() {
 
             if (error) throw error;
 
-            if (quote?.agent_id) {
+            {
                 const propName = villa?.villa_name || boat?.boat_name || 'property';
-                await supabase.from('notifications').insert({
-                    user_id: quote.agent_id,
+                await notifyTargets((uid) => ({
+                    user_id: uid,
                     type: 'owner_declined',
                     title: `Owner declined ${propName}`,
                     body: declineReason || 'No reason provided.',
                     quote_id: id,
                     v_uuid: quote.v_uuid || null,
                     boat_uuid: quote.boat_uuid || null,
-                });
+                }));
             }
 
             setStatus('declined');
