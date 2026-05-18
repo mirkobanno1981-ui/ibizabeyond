@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -292,6 +293,7 @@ function PaymentFlowDiagram({ quote, villaOwnerInfo, colSpan }) {
 export default function QuotesPage() {
     const { user, role, agentData } = useAuth();
     const queryClient = useQueryClient();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [editQuote, setEditQuote] = useState(null);
     const [assignQuote, setAssignQuote] = useState(null);
     const [bulkEditOpen, setBulkEditOpen] = useState(false);
@@ -412,6 +414,19 @@ export default function QuotesPage() {
     const refreshData = () => {
         queryClient.invalidateQueries({ queryKey: ['quotes'] });
     };
+
+    // Open a quote modal when arriving with ?openQuote=<id> (used by notifications).
+    useEffect(() => {
+        const targetId = searchParams.get('openQuote');
+        if (!targetId || quotes.length === 0 || editQuote?.id === targetId) return;
+        const target = quotes.find(q => q.id === targetId);
+        if (target) {
+            setEditQuote(target);
+            const next = new URLSearchParams(searchParams);
+            next.delete('openQuote');
+            setSearchParams(next, { replace: true });
+        }
+    }, [searchParams, quotes, editQuote?.id, setSearchParams]);
 
     const toggleGroup = (clientId) => {
         setExpandedGroups(prev => ({ ...prev, [clientId]: !prev[clientId] }));

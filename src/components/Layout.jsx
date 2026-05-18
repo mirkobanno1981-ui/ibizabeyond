@@ -115,7 +115,7 @@ export default function Layout() {
             setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, is_read: true } : x));
         }
         setShowNotifPanel(false);
-        if (n.quote_id) navigate('/quotes');
+        if (n.quote_id) navigate(`/quotes?openQuote=${n.quote_id}`);
     };
 
     useEffect(() => {
