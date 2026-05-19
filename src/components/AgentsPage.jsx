@@ -12,7 +12,7 @@ export default function AgentsPage() {
     const [message, setMessage] = useState(null);
     const [globalMargins, setGlobalMargins] = useState({ supplierToAdmin: 0, ivaPercent: 10 });
     const [showAddModal, setShowAddModal] = useState(false);
-    const [newAgent, setNewAgent] = useState({ email: '', password: '', firstName: '', lastName: '', company_name: '', agent_type: 'individual' });
+    const [newAgent, setNewAgent] = useState({ email: '', password: '', firstName: '', lastName: '', company_name: '', phone_number: '', agent_type: 'individual' });
     const [editAgent, setEditAgent] = useState(null);
     const [viewHistory, setViewHistory] = useState(null);
     const [agentQuotes, setAgentQuotes] = useState([]);
@@ -157,6 +157,7 @@ export default function AgentsPage() {
                     id: newId,
                     company_name: newAgent.agent_type === 'agency' ? newAgent.company_name : fullName,
                     email: newAgent.email,
+                    phone_number: newAgent.phone_number || null,
                     agent_type: newAgent.agent_type,
                     status: 'approved',
                     is_active: true,
@@ -168,7 +169,7 @@ export default function AgentsPage() {
 
             setMessage({ type: 'success', text: `${newAgent.agent_type === 'agency' ? 'Agency' : 'Agent'} created successfully!` });
             setShowAddModal(false);
-            setNewAgent({ email: '', password: '', firstName: '', lastName: '', company_name: '', agent_type: 'individual', stripe_account_id: '' });
+            setNewAgent({ email: '', password: '', firstName: '', lastName: '', company_name: '', phone_number: '', agent_type: 'individual', stripe_account_id: '' });
             fetchAll();
         } catch (err) {
             console.error("Creation error:", err);
@@ -1187,13 +1188,24 @@ export default function AgentsPage() {
 
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Email Address</label>
-                                    <input 
+                                    <input
                                         required
                                         type="email"
-                                        className="input-theme w-full h-12" 
-                                        value={newAgent.email} 
-                                        onChange={e => setNewAgent({...newAgent, email: e.target.value})} 
+                                        className="input-theme w-full h-12"
+                                        value={newAgent.email}
+                                        onChange={e => setNewAgent({...newAgent, email: e.target.value})}
                                         placeholder="agent@example.com"
+                                    />
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-text-muted uppercase tracking-widest px-1">Phone Number (WhatsApp)</label>
+                                    <input
+                                        type="tel"
+                                        className="input-theme w-full h-12"
+                                        value={newAgent.phone_number}
+                                        onChange={e => setNewAgent({...newAgent, phone_number: e.target.value})}
+                                        placeholder="+34 600 000 000"
                                     />
                                 </div>
 

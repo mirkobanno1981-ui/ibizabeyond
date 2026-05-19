@@ -366,7 +366,7 @@ export default function VillaView() {
             // 1. Fetch Villa Info
             const { data: villaData, error: villaErr } = await supabase
                 .from('properties')
-                .select('*')
+                .select('*, cities(centroid_gps), areas(centroid_gps)')
                 .eq('v_uuid', id)
                 .single();
             if (villaErr) throw villaErr;
@@ -701,38 +701,50 @@ export default function VillaView() {
     }
 
     async function resolveOwnerOrCapturerContact(villaRow) {
-        if (!villaRow?.owner_id) return null;
+        if (villaRow?.owner_id) {
+            const { data: owner } = await supabase
+                .from('owners')
+                .select('name, phone_number, agent_id')
+                .eq('id', villaRow.owner_id)
+                .maybeSingle();
 
-        const { data: owner } = await supabase
-            .from('owners')
-            .select('name, phone_number, agent_id')
-            .eq('id', villaRow.owner_id)
-            .maybeSingle();
+            if (owner?.phone_number) {
+                return { name: owner.name, phone: owner.phone_number, source: 'owner' };
+            }
 
-        if (owner?.phone_number) {
-            return { name: owner.name, phone: owner.phone_number, source: 'owner' };
-        }
+            // Fallback 1: owner has no phone -> use captator (owner.agent_id).
+            if (owner?.agent_id) {
+                const { data: cap } = await supabase
+                    .from('agents')
+                    .select('company_name, email, phone_number')
+                    .eq('id', owner.agent_id)
+                    .maybeSingle();
+                if (cap?.phone_number) {
+                    return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+                }
+            }
 
-        // Fallback 1: owner has no phone -> use captator (owner.agent_id).
-        if (owner?.agent_id) {
-            const { data: cap } = await supabase
+            // Fallback 2: villa.owner_id points to agents row (self-managed editor).
+            const { data: agentSelf } = await supabase
                 .from('agents')
                 .select('company_name, email, phone_number')
-                .eq('id', owner.agent_id)
+                .eq('id', villaRow.owner_id)
                 .maybeSingle();
-            if (cap?.phone_number) {
-                return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+            if (agentSelf?.phone_number) {
+                return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
             }
         }
 
-        // Fallback 2: villa.owner_id points to agents row (self-managed editor).
-        const { data: agentSelf } = await supabase
-            .from('agents')
-            .select('company_name, email, phone_number')
-            .eq('id', villaRow.owner_id)
-            .maybeSingle();
-        if (agentSelf?.phone_number) {
-            return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
+        // Fallback 3: villa has no owner_id — use captator from villaRow.created_by (agent that captured/created villa).
+        if (villaRow?.created_by) {
+            const { data: creator } = await supabase
+                .from('agents')
+                .select('company_name, email, phone_number')
+                .eq('id', villaRow.created_by)
+                .maybeSingle();
+            if (creator?.phone_number) {
+                return { name: creator.company_name || creator.email || 'Capturer', phone: creator.phone_number, source: 'capturer' };
+            }
         }
 
         return null;
@@ -1017,19 +1029,28 @@ export default function VillaView() {
                     </div>
 
                     {/* Map / Location Section */}
-                    {villa.gps && (
+                    {(() => {
+                        const effectiveGps = villa.gps
+                            || villa.indicative_gps
+                            || villa.areas?.centroid_gps
+                            || villa.cities?.centroid_gps;
+                        if (!effectiveGps) return null;
+                        const isPrecise = !!villa.gps;
+                        const isVillaIndicative = !isPrecise && !!villa.indicative_gps;
+                        const radius = isPrecise ? 2000 : (isVillaIndicative ? 800 : 1500);
+                        return (
                         <div className="glass-card p-6 md:p-8">
                             <h2 className="text-xl font-bold text-text-primary mb-6 flex items-center gap-2">
                                 <span className="material-symbols-outlined notranslate text-primary text-[24px]">map</span>
-                                Indicative Location
+                                {isPrecise ? 'Indicative Location' : 'Indicative Area'}
                             </h2>
                             <div className="rounded-2xl overflow-hidden h-[500px] border border-primary/20 relative group shadow-xl">
-                                <VillaMap 
-                                    locations={[{ 
-                                        gps: villa.gps, 
-                                        name: villa.villa_name 
-                                    }]} 
-                                    radius={2000}
+                                <VillaMap
+                                    locations={[{
+                                        gps: effectiveGps,
+                                        name: villa.villa_name
+                                    }]}
+                                    radius={radius}
                                 />
                             </div>
                             <div className="mt-4 flex items-start gap-3 p-4 bg-background/50 rounded-xl border border-border">
@@ -1040,7 +1061,8 @@ export default function VillaView() {
                                 </p>
                             </div>
                         </div>
-                    )}
+                        );
+                    })()}
 
                     {/* Calendar / Availability */}
                     <div className="glass-card p-6 md:p-8">

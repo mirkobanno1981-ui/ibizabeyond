@@ -73,33 +73,45 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
     const [hasPets, setHasPets] = useState(quote.group_details?.has_pets || false);
 
 
-    async function resolveOwnerOrCapturerContact(ownerId) {
-        if (!ownerId) return null;
-        const { data: owner } = await supabase
-            .from('owners')
-            .select('name, phone_number, agent_id')
-            .eq('id', ownerId)
-            .maybeSingle();
-        if (owner?.phone_number) {
-            return { name: owner.name, phone: owner.phone_number, source: 'owner' };
-        }
-        if (owner?.agent_id) {
-            const { data: cap } = await supabase
+    async function resolveOwnerOrCapturerContact(ownerId, createdById) {
+        if (ownerId) {
+            const { data: owner } = await supabase
+                .from('owners')
+                .select('name, phone_number, agent_id')
+                .eq('id', ownerId)
+                .maybeSingle();
+            if (owner?.phone_number) {
+                return { name: owner.name, phone: owner.phone_number, source: 'owner' };
+            }
+            if (owner?.agent_id) {
+                const { data: cap } = await supabase
+                    .from('agents')
+                    .select('company_name, email, phone_number')
+                    .eq('id', owner.agent_id)
+                    .maybeSingle();
+                if (cap?.phone_number) {
+                    return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+                }
+            }
+            const { data: agentSelf } = await supabase
                 .from('agents')
                 .select('company_name, email, phone_number')
-                .eq('id', owner.agent_id)
+                .eq('id', ownerId)
                 .maybeSingle();
-            if (cap?.phone_number) {
-                return { name: cap.company_name || cap.email || 'Capturer', phone: cap.phone_number, source: 'capturer' };
+            if (agentSelf?.phone_number) {
+                return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
             }
         }
-        const { data: agentSelf } = await supabase
-            .from('agents')
-            .select('company_name, email, phone_number')
-            .eq('id', ownerId)
-            .maybeSingle();
-        if (agentSelf?.phone_number) {
-            return { name: agentSelf.company_name || agentSelf.email || 'Editor', phone: agentSelf.phone_number, source: 'editor' };
+        // Fallback: no owner_id — use creator (captator) of villa/boat.
+        if (createdById) {
+            const { data: creator } = await supabase
+                .from('agents')
+                .select('company_name, email, phone_number')
+                .eq('id', createdById)
+                .maybeSingle();
+            if (creator?.phone_number) {
+                return { name: creator.company_name || creator.email || 'Capturer', phone: creator.phone_number, source: 'capturer' };
+            }
         }
         return null;
     }
@@ -127,8 +139,9 @@ const EditQuoteModal = ({ quote, onClose, onSaved }) => {
             }
 
             const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
-            if (ownerId && (role === 'admin' || role === 'super_admin')) {
-                const contact = await resolveOwnerOrCapturerContact(ownerId);
+            const createdById = quote.properties?.created_by || quote.boats?.created_by;
+            if ((ownerId || createdById) && (role === 'admin' || role === 'super_admin')) {
+                const contact = await resolveOwnerOrCapturerContact(ownerId, createdById);
                 if (contact) {
                     setOwnerPhone(contact.phone);
                     setOwnerName(contact.name);

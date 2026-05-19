@@ -100,7 +100,9 @@ export default function VillasTable() {
         queryKey: ['villas', role, user?.id, search, guestsFilter, budgetFilter, checkIn, checkOut, selectedFeatures, bedroomsFilter, bathroomsFilter, checkInRule, minStayFilter, destinationFilter, propertyTypeFilter, sortBy, myVillasOnly],
         queryFn: async () => {
             // 1. Fetch Villas (All matching base filters)
-            let query = supabase.from('properties').select('*');
+            let query = supabase
+                .from('properties')
+                .select('*, cities(centroid_gps), areas(centroid_gps)');
 
             if (role === 'owner' && user?.id) {
                 query = query.eq('owner_id', user.id);
@@ -301,17 +303,18 @@ export default function VillasTable() {
                         if (!allowBypass && diffDays < stayRule.minimum_nights) minStayWarning = stayRule.minimum_nights;
                     } else if (isValid && diffDays < 3) isValid = false;
 
-                    if (isValid && isShortStay && (villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes')) {
+                    if (isValid && isShortStay) {
                         let factor = { 3: 0.5, 4: 0.25, 5: 0.2, 6: 0.1 }[diffDays] || 0;
                         if (factor > 0) totalBase = (totalBase * (1 + factor)) + 200;
-                    } else if (isValid && isShortStay) isValid = false;
+                    }
                 } else {
                     totalBase = parseFloat(villa.minimum_price || villa.maximum_price) || 0;
                 }
 
                 if (!isValid) continue;
+                const hasRealPrice = parseFloat(villa.minimum_price) > 0 || parseFloat(villa.maximum_price) > 0;
                 const displayPrice = totalBase * (1 + margins.supplierToAdmin / 100);
-                if (isShortStay && checkIn && checkOut && displayPrice < 3500) continue;
+                if (isShortStay && checkIn && checkOut && hasRealPrice && displayPrice < 3500) continue;
 
                 formatted.push({
                     ...villa,
@@ -803,19 +806,29 @@ export default function VillasTable() {
                         </div>
                     ) : (
                         <div className="glass-card p-2 border-border h-[650px] relative overflow-hidden">
-                            <VillaMap 
-                                locations={villas.map(v => ({
-                                    gps: v.gps,
-                                    name: v.villa_name,
-                                    id: v.v_uuid,
-                                    image: v.thumbnail
-                                })).filter(l => l.gps)} 
-                                radius={500} 
-                                zoom={11} 
+                            <VillaMap
+                                locations={villas.map(v => {
+                                    const effective = v.gps
+                                        || v.indicative_gps
+                                        || v.areas?.centroid_gps
+                                        || v.cities?.centroid_gps;
+                                    if (!effective) return null;
+                                    const isPrecise = !!v.gps;
+                                    const isVillaIndicative = !isPrecise && !!v.indicative_gps;
+                                    return {
+                                        gps: effective,
+                                        name: v.villa_name,
+                                        id: v.v_uuid,
+                                        image: v.thumbnail,
+                                        radius: isPrecise ? 0 : (isVillaIndicative ? 500 : 1000),
+                                    };
+                                }).filter(Boolean)}
+                                radius={1000}
+                                zoom={11}
                             />
                             <div className="absolute top-6 left-6 z-[1000] px-3 py-1.5 bg-background/80 backdrop-blur-md border border-border rounded-lg shadow-2xl">
                                 <p className="text-[10px] text-primary font-black uppercase tracking-widest">
-                                    {villas.filter(v => v.gps).length} Properties Filtered
+                                    {villas.filter(v => v.gps || v.indicative_gps || v.areas?.centroid_gps || v.cities?.centroid_gps).length} Properties Filtered
                                 </p>
                             </div>
                         </div>
@@ -1140,7 +1153,7 @@ function BulkQuoteModal({ selectedVillas, checkIn, checkOut, margins, onClose, o
                 const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24));
                 const isShortStay = diffDays <= 6;
 
-                if (isShortStay && (villa.allow_shortstays === '1' || villa.allow_shortstays === 'yes' || villa.allow_shortstays === true)) {
+                if (isShortStay) {
                     let factor = 0;
                     if (diffDays === 3) factor = 0.50;
                     else if (diffDays === 4) factor = 0.25;
