@@ -26,7 +26,7 @@ serve(async (req) => {
         status,
         final_price,
         agent_id,
-        properties (villa_name, owner_id),
+        properties (villa_name, owner_id, created_by),
         boats (boat_name, owner_id),
         clients (full_name)
       `)
@@ -35,7 +35,10 @@ serve(async (req) => {
 
     if (quoteError || !quote) throw quoteError || new Error('Quote not found');
 
-    const ownerId = quote.properties?.owner_id || quote.boats?.owner_id;
+    // Owner-as-Captatore fallback: villa with no owner_id → capturer agent.
+    const ownerId = quote.properties?.owner_id
+      || quote.properties?.created_by
+      || quote.boats?.owner_id;
     const assetName = quote.properties?.villa_name || quote.boats?.boat_name;
     const clientName = quote.clients?.full_name;
 

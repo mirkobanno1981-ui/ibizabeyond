@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import GeocodeBackfill from './admin/GeocodeBackfill';
 
 export default function AdminSettings() {
     const [supplierToAdmin, setSupplierToAdmin] = useState('');
@@ -218,6 +219,13 @@ export default function AdminSettings() {
                         </p>
                     </div>
                 </div>
+            </section>
+
+            <section className="space-y-4 pt-8">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-text-primary">Location Geocoding</h3>
+                </div>
+                <GeocodeBackfill />
             </section>
 
             {role === 'super_admin' && (

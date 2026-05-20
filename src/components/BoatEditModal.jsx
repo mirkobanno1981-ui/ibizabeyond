@@ -41,6 +41,7 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
     const isAdmin = role === 'admin' || role === 'super_admin';
     const canAddBoats = isAdmin || canAdd('boat');
     const [owners, setOwners] = useState([]);
+    const [editors, setEditors] = useState([]);
     const [captatorAgent, setCaptatorAgent] = useState(null);
     const [form, setForm] = useState({
         boat_name: boat.boat_name || '',
@@ -284,16 +285,47 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             if (!error && data) {
                 setOwners(data);
             }
+
+            // Admins: also fetch agents with boat add permission as assignable captators.
+            if (isAdmin) {
+                const { data: permRows } = await supabase
+                    .from('user_category_permissions')
+                    .select('user_id')
+                    .eq('category', 'boat')
+                    .eq('can_add', true);
+                const editorIds = [...new Set((permRows || []).map(r => r.user_id))];
+                if (editorIds.length > 0) {
+                    const { data: editorAgents } = await supabase
+                        .from('agents')
+                        .select('id, company_name, email')
+                        .in('id', editorIds);
+                    const sorted = (editorAgents || []).sort((a, b) =>
+                        (a.company_name || a.email || '').localeCompare(b.company_name || b.email || '')
+                    );
+                    setEditors(sorted);
+                    if (!boat.owner_id && boat.created_by) {
+                        const match = sorted.find(ed => ed.id === boat.created_by);
+                        if (match) {
+                            setForm(prev => (prev.owner_id ? prev : { ...prev, owner_id: match.id }));
+                        }
+                    }
+                }
+            }
         } catch (err) {
             console.error("Fetch owners info error:", err);
         }
     };
 
-    // Resolve the captator (the agent on owners.agent_id of the boat's owner).
+    // Resolve the captator: either an owners.agent_id, or the selected agent directly.
     useEffect(() => {
+        const editor = editors.find(ed => ed.id === form.owner_id);
+        if (editor) {
+            setCaptatorAgent({ id: editor.id, company_name: editor.company_name || editor.email });
+            return;
+        }
         const own = owners.find(o => o.id === form.owner_id);
         setCaptatorAgent(own?.agents || null);
-    }, [owners, form.owner_id]);
+    }, [owners, editors, form.owner_id]);
 
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
 
@@ -337,6 +369,22 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
             // Captator commission floor: 5%. Default + clamp so the locked-price
             // 5+5+10 model holds even if someone edits the form down.
             const captatorPct = Math.max(5, parseFloat(form.editor_commission_pct) || 5);
+
+            // Owner-as-Captatore: admin may pick an agent (Captatore) instead of a real owner.
+            // Store the boat as created_by=agent and clear owner_id (it would reference no owners row).
+            let resolvedOwnerId = role === 'owner' ? user.id : (form.owner_id || null);
+            let attributedAgentId = null;
+            if (form.owner_id) {
+                const selectedEditor = editors.find(ed => ed.id === form.owner_id);
+                if (selectedEditor) {
+                    resolvedOwnerId = null;
+                    attributedAgentId = selectedEditor.id;
+                } else {
+                    const selectedOwner = owners.find(o => o.id === form.owner_id);
+                    if (selectedOwner?.agent_id) attributedAgentId = selectedOwner.agent_id;
+                }
+            }
+
             const boatData = {
                 ...form,
                 year: parseInt(form.year) || 0,
@@ -355,8 +403,10 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                 ical_url: form.ical_url?.trim() || null,
                 editor_commission_pct: captatorPct,
                 editor_commission_included: !!form.editor_commission_included,
-                owner_id: role === 'owner' ? user.id : (form.owner_id || null),
-                created_by: boat.v_uuid ? (boat.created_by || user.id) : user.id,
+                owner_id: resolvedOwnerId,
+                created_by: boat.v_uuid
+                    ? (attributedAgentId || boat.created_by || user.id)
+                    : (attributedAgentId || user.id),
                 // New boats need super_admin approval before going live
                 ...(boat.v_uuid ? {} : { is_active: (role === 'admin' || role === 'super_admin') ? true : false })
             };
@@ -709,9 +759,22 @@ export default function BoatEditModal({ boat, onClose, onSaved }) {
                                         required={role === 'agent'}
                                     >
                                         <option value="">Select Owner...</option>
-                                        {owners.map(o => (
-                                            <option key={o.id} value={o.id}>{o.name}</option>
-                                        ))}
+                                        {owners.length > 0 && (
+                                            <optgroup label="Proprietari">
+                                                {owners.map(o => (
+                                                    <option key={`o-${o.id}`} value={o.id}>{o.name}</option>
+                                                ))}
+                                            </optgroup>
+                                        )}
+                                        {isAdmin && editors.length > 0 && (
+                                            <optgroup label="Captatori">
+                                                {editors.map(ed => (
+                                                    <option key={`e-${ed.id}`} value={ed.id}>
+                                                        {ed.company_name || ed.email || ed.id.slice(0, 8)} — Captatore
+                                                    </option>
+                                                ))}
+                                            </optgroup>
+                                        )}
                                     </select>
                                     <p className="text-[10px] text-text-muted mt-1 italic">
                                         {role === 'agent'

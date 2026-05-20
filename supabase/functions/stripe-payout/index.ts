@@ -37,6 +37,7 @@ serve(async (req) => {
         *,
         properties (
           owner_id,
+          created_by,
           owners (stripe_account_id)
         ),
         agents (stripe_account_id)
@@ -51,7 +52,7 @@ serve(async (req) => {
 
     if (targetType === 'owner') {
       destinationAccount = quote.properties?.owners?.stripe_account_id || null;
-      // Fallback: editor (agents row) acting as self-managed owner
+      // Fallback 1: editor (agents row) acting as self-managed owner
       if (!destinationAccount && quote.properties?.owner_id) {
         const { data: agt } = await supabase
           .from('agents')
@@ -60,7 +61,17 @@ serve(async (req) => {
           .single();
         destinationAccount = agt?.stripe_account_id || null;
       }
-      description = `Payout to Owner for Quote ${quoteId}`;
+      // Fallback 2: no owner_id at all → route owner share to capturer agent (created_by)
+      if (!destinationAccount && !quote.properties?.owner_id && quote.properties?.created_by) {
+        const { data: capAgt } = await supabase
+          .from('agents')
+          .select('stripe_account_id')
+          .eq('id', quote.properties.created_by)
+          .single();
+        destinationAccount = capAgt?.stripe_account_id || null;
+        description = `Payout to Capturer (no owner) for Quote ${quoteId}`;
+      }
+      if (!description) description = `Payout to Owner for Quote ${quoteId}`;
     } else if (targetType === 'collaborator') {
       destinationAccount = quote.agents?.stripe_account_id;
       description = `Commission to Collaborator for Quote ${quoteId}`;

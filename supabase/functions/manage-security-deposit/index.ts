@@ -38,6 +38,7 @@ serve(async (req) => {
         security_deposit_intent_id,
         properties (
           owner_id,
+          created_by,
           deposit
         )
       `)
@@ -52,7 +53,9 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
     if (authError || !user) throw new Error('Unauthorized');
 
-    const isOwner = quote.properties?.owner_id === user.id;
+    // Owner-as-Captatore: villa with no owner_id → capturer agent (created_by) acts as owner.
+    const effectiveOwnerId = quote.properties?.owner_id || quote.properties?.created_by;
+    const isOwner = effectiveOwnerId === user.id;
     
     // Check role from user_roles table
     const { data: roleData } = await supabase.from('user_roles').select('role').eq('user_id', user.id).single();

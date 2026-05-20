@@ -93,7 +93,7 @@ serve(async (req) => {
         check_in,
         check_out,
         clients ( full_name, email ),
-        properties ( villa_name, deposit, owner_id ),
+        properties ( villa_name, deposit, owner_id, created_by ),
         boats ( boat_name, security_deposit, owner_id ),
         agents!quotes_agent_id_fkey (
           id,
@@ -145,6 +145,20 @@ serve(async (req) => {
         .maybeSingle();
       if (agt?.stripe_account_id) {
         ownerStripeAccount = agt.stripe_account_id;
+        selfManagedEditor = true;
+      }
+    }
+
+    // Owner-as-Captatore: villa has no owner_id at all — route owner share
+    // to the capturer agent (properties.created_by).
+    if (isVilla && !ownerStripeAccount && !propertyOwnerId && quote.properties?.created_by) {
+      const { data: capAgt } = await supabase
+        .from('agents')
+        .select('id, company_name, stripe_account_id')
+        .eq('id', quote.properties.created_by)
+        .maybeSingle();
+      if (capAgt?.stripe_account_id) {
+        ownerStripeAccount = capAgt.stripe_account_id;
         selfManagedEditor = true;
       }
     }

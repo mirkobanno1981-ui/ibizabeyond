@@ -66,7 +66,14 @@ export default function VillaMap({ locations, zoom = 14, center, radius = 1000, 
             const points = locations.map(loc => {
                 if (!loc.gps) return null;
                 const [lat, lng] = loc.gps.split(',').map(n => parseFloat(n.trim()));
-                return { lat, lng, name: loc.name, id: loc.id, image: loc.image };
+                return {
+                    lat,
+                    lng,
+                    name: loc.name,
+                    id: loc.id,
+                    image: loc.image,
+                    radius: typeof loc.radius === 'number' ? loc.radius : undefined,
+                };
             }).filter(Boolean);
 
             if (points.length === 0) return;
@@ -100,7 +107,8 @@ export default function VillaMap({ locations, zoom = 14, center, radius = 1000, 
             }).addTo(map);
 
             points.forEach(p => {
-                const isPrecise = radius === 0;
+                const effRadius = p.radius !== undefined ? p.radius : radius;
+                const isPrecise = effRadius === 0;
 
                 // Villa preview popup — shared by both modes
                 const popupContent = `
@@ -153,7 +161,7 @@ export default function VillaMap({ locations, zoom = 14, center, radius = 1000, 
                         fillOpacity: 0.12,
                         weight: 2,
                         dashArray: '6, 10',
-                        radius: radius
+                        radius: effRadius
                     }).addTo(map);
 
                     circle.bindPopup(popupContent, {

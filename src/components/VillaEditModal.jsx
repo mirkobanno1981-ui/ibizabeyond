@@ -80,6 +80,7 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
         license: villa.license || '',
         property_type: villa.property_type || 'villa',
         gps: villa.gps || '',
+        indicative_gps: villa.indicative_gps || '',
         deposit: villa.deposit || 0,
         features: villa.features || [],
         owner_id: villa.owner_id || '',
@@ -99,6 +100,35 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
     const [activeTab, setActiveTab] = useState('details');
     const [showAiEdit, setShowAiEdit] = useState(false);
     const [pdfExporting, setPdfExporting] = useState(false);
+    const [geocoding, setGeocoding] = useState(false);
+    const [geocodeMsg, setGeocodeMsg] = useState(null);
+
+    const handleAutoLocate = async () => {
+        if (geocoding) return;
+        const queryParts = [form.areaname, form.district].map(s => (s || '').trim()).filter(Boolean);
+        if (queryParts.length === 0) {
+            setGeocodeMsg({ kind: 'err', text: 'Set area or district text first.' });
+            return;
+        }
+        setGeocoding(true);
+        setGeocodeMsg(null);
+        try {
+            const { data, error: geoErr } = await supabase.functions.invoke('geocode-location', {
+                body: { query: queryParts.join(', ') },
+            });
+            if (geoErr) throw geoErr;
+            if (!data?.gps) throw new Error(data?.error || 'No result');
+            setForm(prev => ({ ...prev, indicative_gps: data.gps }));
+            setGeocodeMsg({
+                kind: 'ok',
+                text: `Indicative position set (${data.provider}${data.cached ? ', cached' : ''}).`,
+            });
+        } catch (err) {
+            setGeocodeMsg({ kind: 'err', text: err?.message || 'Geocoding failed' });
+        } finally {
+            setGeocoding(false);
+        }
+    };
 
     const handleExportPdf = async () => {
         if (pdfExporting) return;
@@ -198,9 +228,17 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                         .from('agents')
                         .select('id, company_name, email')
                         .in('id', editorIds);
-                    setEditors((editorAgents || []).sort((a, b) =>
+                    const sortedEditors = (editorAgents || []).sort((a, b) =>
                         (a.company_name || a.email || '').localeCompare(b.company_name || b.email || '')
-                    ));
+                    );
+                    setEditors(sortedEditors);
+                    // If villa has no owner_id but created_by matches a Captatore, preselect it.
+                    if (!villa.owner_id && villa.created_by) {
+                        const match = sortedEditors.find(ed => ed.id === villa.created_by);
+                        if (match) {
+                            setForm(prev => (prev.owner_id ? prev : { ...prev, owner_id: match.id }));
+                        }
+                    }
                 }
             }
         } catch (err) {
@@ -448,6 +486,24 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 derivedThumbnail = photos[0].url;
             }
 
+            // Auto-geocode: if no precise gps AND no indicative_gps yet, try to derive
+            // an indicative position from the area/district text. Silent failure — the
+            // resolver will fall back to area/city centroid at render time.
+            let resolvedIndicativeGps = form.indicative_gps || '';
+            if (!form.gps && !resolvedIndicativeGps) {
+                const queryParts = [form.areaname, form.district].map(s => (s || '').trim()).filter(Boolean);
+                if (queryParts.length > 0) {
+                    try {
+                        const { data: geo } = await supabase.functions.invoke('geocode-location', {
+                            body: { query: queryParts.join(', ') },
+                        });
+                        if (geo?.gps) resolvedIndicativeGps = geo.gps;
+                    } catch (geoErr) {
+                        console.warn('[VillaEditModal] auto-geocode failed:', geoErr?.message || geoErr);
+                    }
+                }
+            }
+
             // Owner-as-Captatore: if admin picked a Captatore (agent) as Villa Owner,
             // store the villa as that agent's insertion (created_by=agent) and clear owner_id
             // (it would otherwise reference a non-existent owners row). When a real Owner is
@@ -485,6 +541,10 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                 license: form.license || null,
                 property_type: form.property_type || 'villa',
                 gps: form.gps,
+                indicative_gps: resolvedIndicativeGps || null,
+                indicative_gps_source: resolvedIndicativeGps && resolvedIndicativeGps !== form.indicative_gps
+                    ? 'villa_text'
+                    : (form.indicative_gps ? (villa.indicative_gps_source || 'manual') : null),
                 deposit: parseFloat(form.deposit) || 0,
                 features: form.features,
                 owner_id: resolvedOwnerId,
@@ -791,6 +851,33 @@ export default function VillaEditModal({ villa, onClose, onSaved }) {
                             <div className="col-span-2">
                                 <label className="block text-xs text-text-muted mb-1.5 font-medium">GPS Coordinates</label>
                                 <GpsMapPicker value={form.gps} onChange={v => handleChange('gps', v)} />
+                                {!form.gps && (
+                                    <div className="mt-2 p-3 rounded-lg border border-border bg-surface-2 space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-[11px] text-text-muted">
+                                                No precise GPS. Indicative position derived from area text will be used on the map.
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleAutoLocate}
+                                                disabled={geocoding}
+                                                className="btn-secondary text-xs px-3 py-1.5 whitespace-nowrap disabled:opacity-50"
+                                            >
+                                                {geocoding ? 'Locating…' : 'Auto-locate from text'}
+                                            </button>
+                                        </div>
+                                        {form.indicative_gps && (
+                                            <div className="font-mono text-[10px] text-amber-400">
+                                                Indicative: {form.indicative_gps}
+                                            </div>
+                                        )}
+                                        {geocodeMsg && (
+                                            <div className={`text-[10px] ${geocodeMsg.kind === 'ok' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                                {geocodeMsg.text}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             {canAddAnyVilla && (
                                 <div className="col-span-2">

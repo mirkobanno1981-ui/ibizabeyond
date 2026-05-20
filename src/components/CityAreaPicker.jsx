@@ -155,6 +155,10 @@ export default function CityAreaPicker({
         if (error) { setError(error.message); return; }
         setCities(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
         onChange({ cityId: data.id, cityName: data.name, areaId: null, areaName: '' });
+        // Fire-and-forget geocode of the new city centroid.
+        supabase.functions.invoke('geocode-location', {
+            body: { query: name, target: { kind: 'city', id: data.id } },
+        }).catch(err => console.warn('[CityAreaPicker] city geocode failed:', err?.message || err));
     };
 
     const handlePickCity = (city) => {
@@ -172,6 +176,11 @@ export default function CityAreaPicker({
         if (error) { setError(error.message); return; }
         setAreas(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
         onChange({ cityId, cityName: cityObj?.name || '', areaId: data.id, areaName: data.name });
+        // Fire-and-forget geocode of the new area centroid. Disambiguate with city name.
+        const query = cityObj?.name ? `${name}, ${cityObj.name}` : name;
+        supabase.functions.invoke('geocode-location', {
+            body: { query, target: { kind: 'area', id: data.id } },
+        }).catch(err => console.warn('[CityAreaPicker] area geocode failed:', err?.message || err));
     };
 
     const handlePickArea = (area) => {
