@@ -289,6 +289,7 @@ export default function Layout() {
 
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-semibold px-3 pt-4 pb-1">Business</p>
                 <NavItem to="/clients" icon="group" label="Clients" />
+                <NavItem to="/requests" icon="forum" label="Request" />
                 <NavItem to="/quotes" icon="request_quote" label="Quotes" />
                 <NavItem to="/bookings" icon="calendar_month" label="Bookings" />
                 <NavItem to="/profile" icon={role === 'owner' ? 'person' : 'badge'} label={role === 'owner' ? 'Owner Settings' : 'Branding Settings'} />

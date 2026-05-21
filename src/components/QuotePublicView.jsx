@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import VillaMap from './VillaMap';
@@ -104,6 +104,7 @@ export default function QuotePublicView() {
     const [multiQuotes, setMultiQuotes] = useState([]);
     const [viewMode, setViewMode] = useState('detail'); // 'gallery' or 'detail'
     const [activeQuoteIndex, setActiveQuoteIndex] = useState(0);
+    const initialViewSetRef = useRef(false);
     const [agent, setAgent] = useState(null);
     const [owner, setOwner] = useState(null);
     const [processingPayment, setProcessingPayment] = useState(false);
@@ -317,11 +318,13 @@ export default function QuotePublicView() {
             const allQuotes = Array.isArray(quotesData) ? quotesData : [quotesData];
             setMultiQuotes(allQuotes);
             
-            // If comma-separated IDs, initialize gallery mode
-            if (allQuotes.length > 1) {
-                setViewMode('gallery');
-            } else {
-                setViewMode('detail');
+            // Initialize view mode only on first fetch — subsequent re-fetches (e.g. when
+            // user clicks into a card and activeQuoteIndex changes) must not clobber the
+            // user's current viewMode, otherwise navigation snaps back to the gallery.
+            if (!initialViewSetRef.current) {
+                if (allQuotes.length > 1) setViewMode('gallery');
+                else setViewMode('detail');
+                initialViewSetRef.current = true;
             }
             
             const currentQuote = allQuotes[activeQuoteIndex] || allQuotes[0];
@@ -1039,15 +1042,20 @@ export default function QuotePublicView() {
                 {/* Detail View (Tier 2) */}
                 {viewMode === 'detail' && (
                     <>
-                        {/* Back Button for Multi-Quotes */}
+                        {/* Back Button for Multi-Quotes — sticky so it stays visible while scrolling */}
                         {multiQuotes.length > 1 && (
-                            <button 
-                                onClick={() => setViewMode('gallery')}
-                                className="flex items-center gap-2 text-primary font-bold text-xs uppercase tracking-widest hover:gap-4 transition-all group mb-4"
-                            >
-                                <span className="material-symbols-outlined notranslate text-sm">arrow_back</span>
-                                Back to all Proposals
-                            </button>
+                            <div className="sticky top-4 z-30 -mx-2 md:mx-0 mb-6 flex justify-start">
+                                <button
+                                    onClick={() => { setViewMode('gallery'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                                    className="flex items-center gap-3 bg-primary text-background-dark px-5 py-3 md:px-6 md:py-4 rounded-2xl shadow-2xl border border-primary/40 font-black uppercase tracking-widest text-xs md:text-sm hover:scale-[1.03] active:scale-95 transition-all"
+                                >
+                                    <span className="material-symbols-outlined notranslate">arrow_back</span>
+                                    Back to all Proposals
+                                    <span className="hidden md:inline-flex items-center justify-center min-w-6 h-6 px-2 rounded-full bg-background-dark/20 text-[10px] font-black">
+                                        {multiQuotes.length}
+                                    </span>
+                                </button>
+                            </div>
                         )}
 
                 {/* Hero Section */}
@@ -1534,6 +1542,19 @@ export default function QuotePublicView() {
                         </div>
                     </aside>
                 </div>
+
+                {/* Bottom Back-to-Proposals button (multi-quote) */}
+                {multiQuotes.length > 1 && (
+                    <div className="mt-12 flex justify-center">
+                        <button
+                            onClick={() => { setViewMode('gallery'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                            className="flex items-center gap-3 bg-primary text-background-dark px-8 py-5 rounded-2xl shadow-2xl border border-primary/40 font-black uppercase tracking-widest text-sm hover:scale-[1.03] active:scale-95 transition-all"
+                        >
+                            <span className="material-symbols-outlined notranslate">arrow_back</span>
+                            Back to all {multiQuotes.length} Proposals
+                        </button>
+                    </div>
+                )}
             </>
         )}
     </main>
